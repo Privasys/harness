@@ -89,6 +89,8 @@ func forwardConnect(w http.ResponseWriter, r *http.Request, store *policy.Store)
 	eff := actingEffective(store)
 	if ok, why := eff.PermitsEgress(host, port); !ok {
 		log.Printf("[egress-forward] REFUSED CONNECT %s:%s -> %s", host, port, why)
+		audit.Record(EgressRecord{At: time.Now().UTC(), Host: host, Port: port,
+			Method: http.MethodConnect, Allowed: false, Reason: why})
 		// 403 with the reason in the body. NOTE (verified 2026-09-06): curl
 		// DISCARDS the body of a failed CONNECT and prints only "CONNECT
 		// tunnel failed, response 403", so on HTTPS the agent learns that a
@@ -127,6 +129,8 @@ func forwardConnect(w http.ResponseWriter, r *http.Request, store *policy.Store)
 	// per-step assurance reconstructable after the fact (D10).
 	log.Printf("[egress-forward] ALLOW CONNECT %s:%s (mode=%s assurance=%s)",
 		host, port, eff.Mode(), eff.AssuranceFor(host))
+	audit.Record(EgressRecord{At: time.Now().UTC(), Host: host, Port: port,
+		Method: http.MethodConnect, Allowed: true, Assurance: eff.AssuranceFor(host)})
 
 	// Splice both directions; the first side to end closes the tunnel.
 	done := make(chan struct{}, 2)
@@ -152,6 +156,8 @@ func forwardPlain(w http.ResponseWriter, r *http.Request, store *policy.Store) {
 	eff := actingEffective(store)
 	if ok, why := eff.PermitsEgress(host, port); !ok {
 		log.Printf("[egress-forward] REFUSED %s %s -> %s", r.Method, r.URL.Host, why)
+		audit.Record(EgressRecord{At: time.Now().UTC(), Host: host, Port: port,
+			Method: r.Method, Allowed: false, Reason: why})
 		http.Error(w, "egress refused by policy: "+why, http.StatusForbidden)
 		return
 	}
@@ -181,6 +187,8 @@ func forwardPlain(w http.ResponseWriter, r *http.Request, store *policy.Store) {
 	defer resp.Body.Close()
 	log.Printf("[egress-forward] ALLOW %s %s -> %d (mode=%s assurance=%s)",
 		r.Method, r.URL.Host, resp.StatusCode, eff.Mode(), eff.AssuranceFor(host))
+	audit.Record(EgressRecord{At: time.Now().UTC(), Host: host, Port: port,
+		Method: r.Method, Allowed: true, Assurance: eff.AssuranceFor(host)})
 	for k, vs := range resp.Header {
 		for _, v := range vs {
 			w.Header().Add(k, v)

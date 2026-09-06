@@ -99,6 +99,24 @@ func registerPolicyAPI(mux *http.ServeMux, store *policy.Store, stamp *stamper) 
 		})
 	})
 
+	// What this harness ACTUALLY reached, as distinct from what it permits.
+	// The panel shows both lines; showing the posture alone is how an honest
+	// product acquires a false badge, in either direction.
+	//
+	// Gated on the subject, unlike the ceiling: which hosts an agent fetched
+	// is a record of what its user was doing, and this mux answers the public
+	// internet. The posture is public because it is a property of the product;
+	// the behaviour is not.
+	mux.HandleFunc("GET /privasys/egress-log", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Privasys-Sub") == "" {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{
+				"error": "a signed-in session is required to read this harness's egress record",
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, audit.Snapshot(50))
+	})
+
 	// The service ceiling. This is the app OWNER's tier — Privasys, or an
 	// enterprise's admins — and it is authorised by the platform's configure
 	// surface (manager authorizeConfigure: a bearer carrying
