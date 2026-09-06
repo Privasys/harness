@@ -116,6 +116,13 @@ COPY --from=dsh-builder /dsh /dsh
 COPY --from=dsh-builder /dsh-home /dsh-home
 COPY --from=proxy-builder /egress-proxy /usr/local/bin/egress-proxy
 COPY app/profile.cordis.yml /app/profile.cordis.yml
+# The service ceiling, IN THE IMAGE and therefore in the measurement. The
+# proxy also publishes its digest at OID 5.4.9, but baking it here gives the
+# stronger property: the code hash already commits to this posture, so a
+# verifier who checks the measurement has checked the policy too. An
+# enterprise-owned harness sets its own ceiling on the volume instead (see
+# policy.Store.LoadCeiling).
+COPY app/ceiling.json /app/ceiling.json
 COPY app/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 # The measured web profile (plugins + frontend) is baked at /dsh-home. Only

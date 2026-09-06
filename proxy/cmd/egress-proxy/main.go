@@ -248,6 +248,7 @@ func main() {
 	stamp := newStamper()
 	store.OnCeilingChange = stamp.Stamp
 	ceiling, err := store.LoadCeiling(
+		envOr("HARNESS_CEILING_FILE", "/app/ceiling.json"),
 		policy.Mode(envOr("HARNESS_EGRESS_MODE", string(policy.ModeTeeOnly))),
 		splitList(os.Getenv("HARNESS_EGRESS_ALLOWLIST")),
 		os.Getenv("HARNESS_APP_ID"),

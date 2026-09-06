@@ -1,0 +1,44 @@
+{
+  "policy": "privasys.harness/v1",
+  "scope": "ceiling",
+  "issued_at": "2026-09-06",
+
+  "execution": {
+    "tools": {
+      "bash": { "enabled": true, "sandbox": "workspace-write" },
+      "web_fetch": { "enabled": false }
+    },
+    "subagents": { "enabled": true }
+  },
+
+  "inference": {
+    "default": "privasys/qwen36",
+    "providers": [
+      { "id": "privasys/qwen36", "assurance": "attested", "app_id": "3a545cb7740e4d31839b7341359631a2" }
+    ],
+    "allow_open_providers": false,
+    "no_silent_fallback": true
+  },
+
+  "tools": {
+    "attested": [
+      { "name": "web_search", "app_id": "cf7a0d585468416884c341ebe0ce4025" },
+      { "name": "web_reader", "app_id": "09965ab93f2e480ea0417cce438f0696" },
+      { "name": "drive",      "app_id": "82cb3965811d4ad298cac29e4837fd45" }
+    ]
+  },
+
+  "egress": {
+    "mode": "open"
+  },
+
+  "data": {
+    "sessions": "drive_personal",
+    "workspace": "drive"
+  },
+
+  "audit": {
+    "egress_log": true,
+    "per_step_assurance": true
+  }
+}

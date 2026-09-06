@@ -59,8 +59,39 @@ func (s *Store) tenantPath(sub string) string {
 // document synthesised from the measured image environment when none has been
 // written. A harness that predates the policy work therefore keeps behaving
 // exactly as its image says instead of failing closed on an absent file.
-func (s *Store) LoadCeiling(fallbackMode Mode, fallbackAllowlist []string, harnessAppID string) (*Document, error) {
+// Resolution order:
+//
+//  1. An owner-set document on the encrypted volume. Reserved for the
+//     enterprise shape, where admins set a ceiling without a rebuild.
+//     ⚠ NOTHING WRITES THIS YET. The platform's configure surface is the
+//     correct authorisation (owner/admin via authorizeConfigure), and
+//     declaring a configure endpoint today is unsafe BOTH ways: marking it
+//     required arms the freeze gate (503 until configured — an outage on a
+//     running deployment), and marking it optional SKIPS the authz gate, a
+//     known live defect. So the app's ceiling-write endpoint stays 501 and
+//     this path only ever reads.
+//  2. A document baked into the IMAGE. The right home for a Privasys-owned
+//     harness: the ceiling is ours, and putting it in the image makes it
+//     MEASURED rather than merely digest-attested — the code hash already
+//     commits to it, so a verifier gets the stronger property for free.
+//  3. A bootstrap from the image environment, so a deployment predating all of
+//     this behaves exactly as its image says rather than failing closed.
+func (s *Store) LoadCeiling(imagePath string, fallbackMode Mode, fallbackAllowlist []string, harnessAppID string) (*Document, error) {
 	raw, err := os.ReadFile(s.ceilingPath())
+	if errors.Is(err, os.ErrNotExist) && imagePath != "" {
+		if baked, bakedErr := os.ReadFile(imagePath); bakedErr == nil {
+			d, parseErr := Parse(baked, ScopeCeiling)
+			if parseErr != nil {
+				// A malformed baked ceiling is a BUILD error. Falling back to
+				// the environment would silently ship a posture nobody wrote.
+				return nil, fmt.Errorf("policy: image ceiling %s is unusable: %w", imagePath, parseErr)
+			}
+			s.setCeiling(d)
+			log.Printf("[policy] ceiling loaded from the image, measured (mode=%s digest=%.16s…)",
+				d.Egress.Mode, d.Digest())
+			return d, nil
+		}
+	}
 	if errors.Is(err, os.ErrNotExist) {
 		d := Bootstrap(fallbackMode, fallbackAllowlist, harnessAppID)
 		s.setCeiling(d)
