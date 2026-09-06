@@ -120,10 +120,14 @@ export no_proxy="${NO_PROXY}"
     # says WHICH namespace the kernel refused rather than only that one did.
     BW_U=$(bwrap --unshare-user --ro-bind / / --dev /dev --unshare-pid --proc /proc --die-with-parent -- true 2>&1)
     echo "[harness] sandbox: bwrap +unshare-user exit=$? err=${BW_U:0:200}"
-    BW_P=$(bwrap --ro-bind / / --unshare-pid -- true 2>&1)
-    echo "[harness] sandbox: bwrap pid-ns only exit=$? err=${BW_P:0:200}"
-    BW_N=$(bwrap --ro-bind / / -- true 2>&1)
-    echo "[harness] sandbox: bwrap no-ns exit=$? err=${BW_N:0:200}"
+    # The patched profile (overlay 2e1): user namespace, no PID namespace, no
+    # procfs mount — the two the masked /proc forbids.
+    BW_F=$(bwrap --unshare-user --ro-bind / / --dev /dev --die-with-parent -- true 2>&1)
+    echo "[harness] sandbox: bwrap PATCHED read-only exit=$? err=${BW_F:0:200}"
+    BW_W=$(bwrap --unshare-user --ro-bind / / --dev /dev --die-with-parent --tmpfs /tmp --bind /data/workspace /data/workspace -- true 2>&1)
+    echo "[harness] sandbox: bwrap PATCHED workspace-write exit=$? err=${BW_W:0:200}"
+    BW_D=$(bwrap --unshare-user --ro-bind / / --die-with-parent -- true 2>&1)
+    echo "[harness] sandbox: bwrap no --dev exit=$? err=${BW_D:0:200}"
   else
     echo "[harness] sandbox: bwrap MISSING from the image"
   fi

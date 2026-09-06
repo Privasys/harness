@@ -368,19 +368,42 @@ edit('packages/llm/llm-deepseek/src/types.ts', [
 // which dsh reports only as the opaque "no sandbox backend is usable on this
 // host", so every Bash call fails and the agent falls back to search tools.
 //
-// User namespaces themselves ARE permitted here (`unshare -U true` exits 0,
-// max_user_namespaces=59148), so asking for one first is all that is needed:
-// inside the new user namespace the process holds a full capability set and
-// the PID namespace is then created without privilege on the host. The
-// confinement is unchanged — the same mounts, one more namespace.
+// User namespaces themselves ARE permitted (`unshare -U true` exits 0,
+// max_user_namespaces=59148), and adding --unshare-user does fix namespace
+// creation — measured, it advances the failure to:
 //
-// Upstreamable as-is: this is a container-hosted-dsh bug, not a Privasys
-// quirk, and the fix costs nothing on a laptop (D8 extend-don't-fork).
+//   bwrap: Can't mount proc on /newroot/proc: Operation not permitted
+//
+// which is the second, separate restriction: the container's /proc is masked
+// (the stock runtime hides /proc/kcore and friends), so the kernel does not
+// consider it "fully visible" and refuses to mount a fresh procfs inside a
+// nested user namespace. No argument ordering fixes that; only CAP_SYS_ADMIN
+// or an unmasked /proc would, and neither belongs in an app container.
+//
+// So drop the PID namespace and the /proc mount as well. This costs nothing
+// dsh actually promises: its sandbox vocabulary is explicitly file-effects
+// only — "Network and process visibility are outside this vocabulary"
+// (packages/sandbox/sandbox). The profile unshares PID anyway, which is a
+// guarantee the surrounding API never makes and no caller can rely on. What
+// remains — the read-only bind of /, the private /dev, the workspace-write
+// bind and private /tmp — is the entire documented contract, intact.
+//
+// Trade-off, stated plainly: a sandboxed command can now see and signal other
+// processes in this container. That is acceptable while a harness is
+// single-user and the container is itself the tenancy boundary. It stops
+// being acceptable when per-user worker processes share a container, which is
+// exactly why the mutualisation plan puts execution isolation in per-user
+// workers with their own uid rather than in dsh's sandbox
+// (.operations/plans/harness-policies.md, v2).
+//
+// Upstreamable as a container-hosted-dsh fix (D8): unprivileged containers are
+// a normal place to run an agent, and the PID namespace is not part of the
+// sandbox's stated contract.
 edit('packages/sandbox/sandbox-local/src/profiles.ts', [
   [
-    'bwrap unshare-user before unshare-pid',
+    'bwrap: user namespace, no pid namespace, no procfs mount',
     `  const args = ['--ro-bind', '/', '/', '--dev', '/dev', '--unshare-pid', '--proc', '/proc', '--die-with-parent']`,
-    `  const args = ['--unshare-user', '--ro-bind', '/', '/', '--dev', '/dev', '--unshare-pid', '--proc', '/proc', '--die-with-parent']`,
+    `  const args = ['--unshare-user', '--ro-bind', '/', '/', '--dev', '/dev', '--die-with-parent']`,
   ],
 ])
 
