@@ -40,7 +40,19 @@ import (
 	"time"
 
 	"github.com/Privasys/attested-harness/proxy/internal/attested"
+	"github.com/Privasys/attested-harness/proxy/internal/policy"
 )
+
+// splitList parses a comma-separated environment list, dropping blanks.
+func splitList(v string) []string {
+	var out []string
+	for _, s := range strings.Split(v, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
 
 type config struct {
 	// listenAddr is the loopback address the dsh plugins call.
@@ -227,12 +239,32 @@ func main() {
 	log.Printf("[egress-proxy] listening on %s (model=%s tools=%d on_platform=%v deps_enabled=%v)",
 		cfg.listenAddr, cfg.modelHost, len(cfg.toolHosts), cfg.onPlatform, deps.Enabled())
 
+	// The policy object this proxy enforces: the service ceiling, narrowed at
+	// each request by the acting tenant's own policy. A deployment that has
+	// never been handed a document bootstraps its ceiling from the measured
+	// image environment, so a harness predating this work behaves exactly as
+	// its image says rather than failing closed on an absent file.
+	store := policy.NewStore(envOr("HARNESS_POLICY_DIR", "/data/policy"))
+	stamp := newStamper()
+	store.OnCeilingChange = stamp.Stamp
+	ceiling, err := store.LoadCeiling(
+		policy.Mode(envOr("HARNESS_EGRESS_MODE", string(policy.ModeTeeOnly))),
+		splitList(os.Getenv("HARNESS_EGRESS_ALLOWLIST")),
+		os.Getenv("HARNESS_APP_ID"),
+	)
+	if err != nil {
+		// A ceiling that exists but cannot be parsed is fatal. Falling back to
+		// the image default would turn a corrupt file into a WIDENING, which
+		// is the one failure mode a policy engine must never have.
+		log.Fatalf("[policy] %v", err)
+	}
+	stamp.Stamp(ceiling)
+
 	// The governed fast path for everything that is not an attested peer
 	// call. Started before ingress so the shell's HTTP_PROXY is answerable
 	// from the moment dsh accepts a turn.
-	policy := loadEgressPolicy()
 	if cfg.forwardListen != "" {
-		go serveForward(cfg.forwardListen, policy)
+		go serveForward(cfg.forwardListen, store)
 	}
 
 	// Ingress front (INGRESS_LISTEN, the platform-allocated $PORT): the Go
@@ -243,7 +275,7 @@ func main() {
 	// to dsh on the loopback upstream, 503 until dsh is listening. Putting
 	// ingress here too means the measured Go layer owns every network edge.
 	if cfg.ingressListen != "" && cfg.dshUpstream != "" {
-		go serveIngress(cfg, deps, policy)
+		go serveIngress(cfg, deps, store, stamp)
 	}
 
 	if err := http.ListenAndServe(cfg.listenAddr, mux); err != nil {
@@ -253,7 +285,7 @@ func main() {
 
 // serveIngress fronts the platform port: instant health, the browser
 // attestation summary, and a reverse-proxy to dsh once it is up.
-func serveIngress(cfg config, deps *attested.DepSet, policy egressPolicy) {
+func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp *stamper) {
 	listen, upstream := cfg.ingressListen, cfg.dshUpstream
 	target, err := neturl.Parse(upstream)
 	if err != nil {
@@ -339,14 +371,26 @@ func serveIngress(cfg config, deps *attested.DepSet, policy egressPolicy) {
 			// harness PERMITS and what a session actually USED are
 			// different claims, and conflating them is how an honest
 			// product acquires a false badge.
+			//
+			// This is the CEILING, which is the same for every viewer and
+			// safe on an anonymous endpoint. A caller's own effective
+			// policy comes from /privasys/policy, which reads the
+			// relay-asserted subject.
 			"egress": map[string]any{
-				"mode":      string(policy.mode),
-				"allowlist": policy.allowlist,
+				"mode":      string(store.Ceiling().Egress.Mode),
+				"allowlist": store.Ceiling().Egress.Allowlist,
+			},
+			"policy": map[string]any{
+				"ceiling_digest": store.Ceiling().Digest(),
+				"digest_oid":     OIDPolicyDigest,
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
 	})
+	// The verification API: how a user checks which policy this enclave is
+	// applying to them, and how a third party checks the product's posture.
+	registerPolicyAPI(mux, store, stamp)
 	mux.Handle("/", rp)
 	log.Printf("[ingress] listening on %s -> %s", listen, upstream)
 	if err := http.ListenAndServe(listen, mux); err != nil {
