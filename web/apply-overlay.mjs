@@ -318,9 +318,35 @@ edit('packages/llm/llm/src/assistant-stream.ts', [
       `      }\n` +
       `    }\n` +
       `    try { walk(chunk, '') } catch { offenders.push('<walk failed: cycle?>') }\n` +
+      `    // Replicate the REAL rejection tests (values alone are not enough):\n` +
+      `    // dsh refuses any object with a non-enumerable or symbol own key, and\n` +
+      `    // any prototype that is not this realm's Object.prototype/null.\n` +
+      `    const structural: string[] = []\n` +
+      `    const inspect = (node: unknown, path: string, depth: number): void => {\n` +
+      `      if (depth > 6 || node === null || typeof node !== 'object') return\n` +
+      `      const proto: unknown = Object.getPrototypeOf(node)\n` +
+      `      const protoName = proto === null ? 'null' : String((proto as { constructor?: { name?: string } })?.constructor?.name)\n` +
+      `      if (proto !== null && proto !== Object.prototype && proto !== Array.prototype) {\n` +
+      `        structural.push(path + ':proto=' + protoName + (Array.isArray(node) ? '(array)' : ''))\n` +
+      `      }\n` +
+      `      for (const key of Reflect.ownKeys(node as object)) {\n` +
+      `        const label = typeof key === 'symbol' ? '@@' + String(key.description) : key\n` +
+      `        if (typeof key === 'symbol') { structural.push(path + '.' + label + ':symbol-key'); continue }\n` +
+      `        if (!Object.prototype.propertyIsEnumerable.call(node, key)) {\n` +
+      `          structural.push(path + '.' + label + ':non-enumerable')\n` +
+      `          continue\n` +
+      `        }\n` +
+      `        inspect((node as Record<string, unknown>)[key], path === '' ? key : path + '.' + key, depth + 1)\n` +
+      `      }\n` +
+      `    }\n` +
+      `    try { inspect(chunk, '', 0) } catch { structural.push('<inspect failed>') }\n` +
       `    throw new TypeError('Assistant stream chunk must be losslessly JSON-serializable'\n` +
       `      + ' [privasys chunkType=' + String((chunk as { type?: unknown }).type)\n` +
-      `      + ' keys=' + Object.keys(chunk as object).join('|')\n` +
+      `      + ' ownKeys=' + Reflect.ownKeys(chunk as object).map(String).join('|')\n` +
+      `      + ' enumKeys=' + Object.keys(chunk as object).join('|')\n` +
+      `      + ' proto=' + String((Object.getPrototypeOf(chunk) as { constructor?: { name?: string } })?.constructor?.name)\n` +
+      `      + ' sameRealmProto=' + String(Object.getPrototypeOf(chunk) === Object.prototype)\n` +
+      `      + ' structural=' + (structural.length > 0 ? structural.join(', ') : 'none')\n` +
       `      + ' offenders=' + (offenders.length > 0 ? offenders.join(', ') : 'none-found') + ']')\n` +
       `  }\n` +
       `  return snapshot\n` +
