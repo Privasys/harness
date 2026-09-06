@@ -264,93 +264,32 @@ edit('packages/preset/agent-presets/presets/cordis/agent.cordis.yml', [
   ],
 ])
 
-// --- 2e1. TEMPORARY DIAGNOSTIC: name the value session-format-v2 refuses ----
-// dsh 0.1.3 embeds assistant streams in the session log and validates every
-// chunk with snapshotJsonValue, which rejects NaN, ±Infinity, -0, undefined,
-// non-plain prototypes and cycles. The thrown error names none of them, so a
-// failure is untraceable: "Assistant stream raw chunk must be a lossless JSON
-// object" and nothing else, client-side, with the session UI dead.
+// --- 2e0. Firefox: intrinsic-prototype detection is V8-specific -------------
+// dsh 0.1.3's lossless-JSON validator proves a value's prototype is a realm's
+// intrinsic Object.prototype by comparing the constructor's source text to the
+// exact literal `function Object() { [native code] }`. That is V8's formatting.
+// SpiderMonkey prints `function Object() {\n    [native code]\n}`, so on
+// FIREFOX every plain object fails the check — every assistant-stream chunk is
+// refused, the session event feed dies at connect, and the UI shows
+// "Assistant stream raw chunk must be a lossless JSON object" for a chunk whose
+// keys, values and prototype are all perfectly ordinary. Chromium is
+// unaffected, which is why this looked like a data bug for a long time.
 //
-// Our stack passes the LLM half cleanly (verified offline against this exact
-// dsh version with a real Confidential AI stream), so the offender enters
-// somewhere between the accumulator and the client projection. Report the
-// offending JSON PATHS and value TYPES — never values, text or tool
-// arguments — so one reproduction identifies it exactly.
-//
-// REMOVE once the cause is fixed. This is a debugging build only.
-edit('packages/llm/llm/src/assistant-stream.ts', [
+// Compare on whitespace-normalised source so V8, SpiderMonkey and JSC all
+// satisfy it while a FORGED constructor (any body that is not the native
+// marker) still fails. Upstream fix candidate: report and drop this patch.
+edit('packages/util/values/src/index.ts', [
   [
-    'lossless failure diagnostic',
-    `function snapshotChunk(chunk: StreamChunk): StreamChunk {\n` +
-      `  const snapshot = snapshotJsonValue(chunk)\n` +
-      `  if (snapshot === undefined) throw new TypeError('Assistant stream chunk must be losslessly JSON-serializable')\n` +
-      `  return snapshot\n` +
-      `}`,
-    `function snapshotChunk(chunk: StreamChunk): StreamChunk {\n` +
-      `  const snapshot = snapshotJsonValue(chunk)\n` +
-      `  if (snapshot === undefined) {\n` +
-      `    const offenders: string[] = []\n` +
-      `    const walk = (node: unknown, path: string): void => {\n` +
-      `      if (node === null) return\n` +
-      `      const kind = typeof node\n` +
-      `      if (kind === 'number') {\n` +
-      `        if (!Number.isFinite(node as number) || Object.is(node, -0)) {\n` +
-      `          offenders.push(path + '=' + String(node))\n` +
-      `        }\n` +
-      `        return\n` +
-      `      }\n` +
-      `      if (kind === 'undefined' || kind === 'bigint' || kind === 'function' || kind === 'symbol') {\n` +
-      `        offenders.push(path + '=' + kind)\n` +
-      `        return\n` +
-      `      }\n` +
-      `      if (kind !== 'object') return\n` +
-      `      if (Array.isArray(node)) {\n` +
-      `        node.forEach((child, i) => { walk(child, path + '[' + String(i) + ']') })\n` +
-      `        return\n` +
-      `      }\n` +
-      `      if (Object.getPrototypeOf(node) !== Object.prototype) {\n` +
-      `        offenders.push(path + '=<prototype:' + String(Object.getPrototypeOf(node)?.constructor?.name) + '>')\n` +
-      `        return\n` +
-      `      }\n` +
-      `      for (const key of Reflect.ownKeys(node as object)) {\n` +
-      `        if (typeof key === 'symbol') { offenders.push(path + '.<symbol>'); continue }\n` +
-      `        walk((node as Record<string, unknown>)[key], path === '' ? key : path + '.' + key)\n` +
-      `      }\n` +
-      `    }\n` +
-      `    try { walk(chunk, '') } catch { offenders.push('<walk failed: cycle?>') }\n` +
-      `    // Replicate the REAL rejection tests (values alone are not enough):\n` +
-      `    // dsh refuses any object with a non-enumerable or symbol own key, and\n` +
-      `    // any prototype that is not this realm's Object.prototype/null.\n` +
-      `    const structural: string[] = []\n` +
-      `    const inspect = (node: unknown, path: string, depth: number): void => {\n` +
-      `      if (depth > 6 || node === null || typeof node !== 'object') return\n` +
-      `      const proto: unknown = Object.getPrototypeOf(node)\n` +
-      `      const protoName = proto === null ? 'null' : String((proto as { constructor?: { name?: string } })?.constructor?.name)\n` +
-      `      if (proto !== null && proto !== Object.prototype && proto !== Array.prototype) {\n` +
-      `        structural.push(path + ':proto=' + protoName + (Array.isArray(node) ? '(array)' : ''))\n` +
-      `      }\n` +
-      `      for (const key of Reflect.ownKeys(node as object)) {\n` +
-      `        const label = typeof key === 'symbol' ? '@@' + String(key.description) : key\n` +
-      `        if (typeof key === 'symbol') { structural.push(path + '.' + label + ':symbol-key'); continue }\n` +
-      `        if (!Object.prototype.propertyIsEnumerable.call(node, key)) {\n` +
-      `          structural.push(path + '.' + label + ':non-enumerable')\n` +
-      `          continue\n` +
-      `        }\n` +
-      `        inspect((node as Record<string, unknown>)[key], path === '' ? key : path + '.' + key, depth + 1)\n` +
-      `      }\n` +
-      `    }\n` +
-      `    try { inspect(chunk, '', 0) } catch { structural.push('<inspect failed>') }\n` +
-      `    throw new TypeError('Assistant stream chunk must be losslessly JSON-serializable'\n` +
-      `      + ' [privasys chunkType=' + String((chunk as { type?: unknown }).type)\n` +
-      `      + ' ownKeys=' + Reflect.ownKeys(chunk as object).map(String).join('|')\n` +
-      `      + ' enumKeys=' + Object.keys(chunk as object).join('|')\n` +
-      `      + ' proto=' + String((Object.getPrototypeOf(chunk) as { constructor?: { name?: string } })?.constructor?.name)\n` +
-      `      + ' sameRealmProto=' + String(Object.getPrototypeOf(chunk) === Object.prototype)\n` +
-      `      + ' structural=' + (structural.length > 0 ? structural.join(', ') : 'none')\n` +
-      `      + ' offenders=' + (offenders.length > 0 ? offenders.join(', ') : 'none-found') + ']')\n` +
-      `  }\n` +
-      `  return snapshot\n` +
-      `}`,
+    'engine-agnostic intrinsic constructor check',
+    `    return constructor.name === name\n` +
+      `      && constructor.prototype === prototype\n` +
+      `      && Function.prototype.toString.call(constructor) === \`function \${name}() { [native code] }\``,
+    `    // privasys: whitespace-normalised — SpiderMonkey and JSC format the\n` +
+      `    // native marker with newlines and indentation, V8 does not.\n` +
+      `    return constructor.name === name\n` +
+      `      && constructor.prototype === prototype\n` +
+      `      && Function.prototype.toString.call(constructor).replace(/\\s+/g, ' ')\n` +
+      `        === \`function \${name}() { [native code] }\``,
   ],
 ])
 
