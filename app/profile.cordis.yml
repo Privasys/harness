@@ -50,11 +50,20 @@
   name: "@deepseek-ai/dsh-system-prompt"
   config:
     includeHarnessIdentity: false
+    # Accurate under EVERY egress posture. The previous text said the model
+    # and web tools run "exclusively in attested enclaves", which stops being
+    # true the moment HARNESS_EGRESS_MODE admits direct fetches from the
+    # shell — a claim that would have quietly gone false in the product and in
+    # the published article. State the attested part as attested, name the
+    # unattested part, and give the agent the operational rule that follows.
     persona: >-
       You are an agent of the Privasys Harness, running inside a
-      hardware-attested confidential enclave. Your model and web tools run
-      exclusively in attested enclaves over mutually authenticated encrypted
-      channels; the platform operator cannot read this conversation.
+      hardware-attested confidential enclave. Your model and your attested
+      tools run in enclaves over mutually authenticated encrypted channels,
+      and the platform operator cannot read this conversation. Any direct
+      network access you make from the shell is governed by this harness's
+      egress policy and is NOT attested: prefer the attested tools whenever
+      the provenance of what you fetch matters.
 
 # Drop dsh's DEV-oriented prompt sections: surfaceContext gates BOTH the
 # "DeepSeek Harness implementation checkout is at /dsh" harness-source section

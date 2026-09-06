@@ -102,7 +102,16 @@ FROM node:22-bookworm-slim
 # egress for a boot-time registry fetch.
 RUN corepack enable && corepack prepare pnpm@11.7.0 --activate \
  && apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates curl && rm -rf /var/lib/apt/lists/*
+      ca-certificates curl bubblewrap && rm -rf /var/lib/apt/lists/*
+# bubblewrap is dsh's sandbox backend on Linux. Without it dsh refuses to run
+# ANY shell command — "sandbox mode workspace-write is requested but no sandbox
+# backend is usable on this host; refusing to run the command unconfined" —
+# which is what the agent hit on every Bash tool call. dsh's sandbox vocabulary
+# is deliberately file-effects-only (packages/sandbox/sandbox: "Network and
+# process visibility are outside this vocabulary"), so bwrap confines the
+# filesystem and our forward proxy governs the network. Note the profile passes
+# --unshare-pid but NOT --unshare-net, by design: we interpose on egress rather
+# than removing it (see proxy/forward.go).
 COPY --from=dsh-builder /dsh /dsh
 COPY --from=dsh-builder /dsh-home /dsh-home
 COPY --from=proxy-builder /egress-proxy /usr/local/bin/egress-proxy
@@ -122,6 +131,15 @@ ENV DSH_HOME=/dsh-home
 # the ingress Director's Host pinning so dsh's /api DNS-rebinding fence accepts
 # the browser's sealed same-origin requests. Stable across enclaves for this app.
 ENV HARNESS_PUBLIC_HOST=attested-harness.apps.test.privasys.org
+# Non-attested egress posture for the agent's shell tools: tee_only |
+# allowlist | open | none (proxy/forward.go). `open` is the decided default
+# for the hosted product — permission to reach the wider web, not a bypass:
+# every connection still goes through the measured proxy, is policed by
+# hostname and is logged. The attested legs (/model, /tool) are unaffected and
+# keep their dependency-set gate. Override per deployment; an unrecognised
+# value falls back to `none`, never to something more permissive.
+ENV HARNESS_EGRESS_MODE=open
+# ENV HARNESS_EGRESS_ALLOWLIST=  # comma-separated; "*.example.com" allowed
 # No telemetry leaves the enclave: any non-empty value hard-disables dsh's
 # telemetry row at profile composition (profile-boot resolveTelemetryPatch).
 ENV DSH_TELEMETRY_DISABLED=1

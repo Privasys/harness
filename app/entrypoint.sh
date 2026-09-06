@@ -61,6 +61,7 @@ mkdir -p "${DSH_HOME:-/dsh-home}"
 
 DSH_PORT=3080
 EGRESS_PROXY_LISTEN=127.0.0.1:9411 \
+EGRESS_FORWARD_LISTEN=127.0.0.1:9412 \
 INGRESS_LISTEN="0.0.0.0:${PORT}" \
 DSH_UPSTREAM="http://127.0.0.1:${DSH_PORT}" \
   /usr/local/bin/egress-proxy &
@@ -74,6 +75,29 @@ done
 # The model leg rides the proxy; the stock adapter reads these.
 export DEEPSEEK_BASE_URL=http://127.0.0.1:9411/model/v1
 export DEEPSEEK_API_KEY="${PRIVASYS_BEARER:-unset}"
+
+# --- governed fast path for shell egress ------------------------------------
+# Exported AFTER the health wait above so this script's own loopback curl is
+# not affected. Everything the agent spawns inherits these: curl, git, npm,
+# pip, and dsh's own fetches (it resolves the same names via
+# @deepseek-ai/dsh-http-proxy). The forward listener polices each host against
+# HARNESS_EGRESS_MODE and logs every verdict — see proxy/forward.go for why we
+# interpose rather than prohibit.
+#
+# NO_PROXY must cover loopback (the model leg, the tool shims, dsh's own web
+# server) AND the enclave manager, which lives on the GATEWAY IP rather than
+# loopback. The Go side sets Proxy:nil on the manager client as well; this is
+# the belt to that braces, and it also covers any child process that talks to
+# the manager.
+MGR_HOST="$(sed -E 's#^[a-z]+://([^/:]+).*#\1#' <<<"${PRIVASYS_MANAGER_URL:-}")"
+export HTTP_PROXY="http://127.0.0.1:9412"
+export HTTPS_PROXY="${HTTP_PROXY}"
+export NO_PROXY="localhost,127.0.0.1,::1,[::1]${MGR_HOST:+,${MGR_HOST}}"
+# Lowercase too: undici reads the lowercase name first, so both casings must
+# always be written together or a client sees a half-configured policy.
+export http_proxy="${HTTP_PROXY}"
+export https_proxy="${HTTPS_PROXY}"
+export no_proxy="${NO_PROXY}"
 
 # Boot smoke: one headless agent turn through the proxy to Confidential AI,
 # proving the model leg works IN THE ENCLAVE (on-platform: attested client

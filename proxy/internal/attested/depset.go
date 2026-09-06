@@ -54,7 +54,18 @@ func NewDepSet() *DepSet {
 		managerURL: strings.TrimRight(os.Getenv("PRIVASYS_MANAGER_URL"), "/"),
 		container:  os.Getenv("PRIVASYS_CONTAINER_NAME"),
 		token:      os.Getenv("PRIVASYS_CONTAINER_TOKEN"),
-		client:     &http.Client{Timeout: 10 * time.Second},
+		// Proxy:nil, explicitly. A bare &http.Client{} uses
+		// http.DefaultTransport, which honours HTTP_PROXY from the
+		// environment — and the container environment now sets it so the
+		// agent's shell tools route through our own forward proxy. The
+		// manager lives on the GATEWAY IP, not loopback, so no plausible
+		// NO_PROXY covers it: without this the dependency-set refresh (a
+		// control-plane call) would be tunnelled through the very egress
+		// policy it is fetching, at boot, before any policy is loaded.
+		client: &http.Client{
+			Timeout:   10 * time.Second,
+			Transport: &http.Transport{Proxy: nil},
+		},
 	}
 }
 

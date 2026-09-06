@@ -65,6 +65,10 @@ type config struct {
 	// empty off platform (dev drives dsh directly).
 	ingressListen string
 	dshUpstream   string
+	// forwardListen is the governed fast path for non-attested egress: the
+	// address exported as HTTP_PROXY/HTTPS_PROXY into the agent's shell
+	// tools. See forward.go for why interposition beats prohibition here.
+	forwardListen string
 }
 
 func loadConfig() config {
@@ -75,6 +79,7 @@ func loadConfig() config {
 		onPlatform:    os.Getenv("PRIVASYS_MANAGER_URL") != "",
 		ingressListen: os.Getenv("INGRESS_LISTEN"),
 		dshUpstream:   os.Getenv("DSH_UPSTREAM"),
+		forwardListen: envOr("EGRESS_FORWARD_LISTEN", "127.0.0.1:9412"),
 	}
 	for _, kv := range strings.Split(os.Getenv("HARNESS_TOOL_HOSTS"), ",") {
 		if name, host, ok := strings.Cut(strings.TrimSpace(kv), "="); ok && name != "" && host != "" {
@@ -222,6 +227,14 @@ func main() {
 	log.Printf("[egress-proxy] listening on %s (model=%s tools=%d on_platform=%v deps_enabled=%v)",
 		cfg.listenAddr, cfg.modelHost, len(cfg.toolHosts), cfg.onPlatform, deps.Enabled())
 
+	// The governed fast path for everything that is not an attested peer
+	// call. Started before ingress so the shell's HTTP_PROXY is answerable
+	// from the moment dsh accepts a turn.
+	policy := loadEgressPolicy()
+	if cfg.forwardListen != "" {
+		go serveForward(cfg.forwardListen, policy)
+	}
+
 	// Ingress front (INGRESS_LISTEN, the platform-allocated $PORT): the Go
 	// proxy owns $PORT from second one so the platform health check passes
 	// immediately while dsh (heavy, ~40s boot) comes up behind it — the same
@@ -230,7 +243,7 @@ func main() {
 	// to dsh on the loopback upstream, 503 until dsh is listening. Putting
 	// ingress here too means the measured Go layer owns every network edge.
 	if cfg.ingressListen != "" && cfg.dshUpstream != "" {
-		go serveIngress(cfg, deps)
+		go serveIngress(cfg, deps, policy)
 	}
 
 	if err := http.ListenAndServe(cfg.listenAddr, mux); err != nil {
@@ -240,7 +253,7 @@ func main() {
 
 // serveIngress fronts the platform port: instant health, the browser
 // attestation summary, and a reverse-proxy to dsh once it is up.
-func serveIngress(cfg config, deps *attested.DepSet) {
+func serveIngress(cfg config, deps *attested.DepSet, policy egressPolicy) {
 	listen, upstream := cfg.ingressListen, cfg.dshUpstream
 	target, err := neturl.Parse(upstream)
 	if err != nil {
@@ -321,6 +334,15 @@ func serveIngress(cfg config, deps *attested.DepSet) {
 			"dependencies":    deps.Pinned(),
 			"model_host":      cfg.modelHost,
 			"tool_hosts":      cfg.toolHosts,
+			// The non-attested egress posture. The panel must show this
+			// beside the attested set, never instead of it: what this
+			// harness PERMITS and what a session actually USED are
+			// different claims, and conflating them is how an honest
+			// product acquires a false badge.
+			"egress": map[string]any{
+				"mode":      string(policy.mode),
+				"allowlist": policy.allowlist,
+			},
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
