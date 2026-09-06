@@ -115,7 +115,15 @@ export no_proxy="${NO_PROXY}"
   if command -v bwrap >/dev/null 2>&1; then
     echo "[harness] sandbox: bwrap present ($(bwrap --version 2>&1 | head -1))"
     BW_ERR=$(bwrap --ro-bind / / --dev /dev --unshare-pid --proc /proc --die-with-parent -- true 2>&1)
-    echo "[harness] sandbox: bwrap probe exit=$? err=${BW_ERR:0:300}"
+    echo "[harness] sandbox: bwrap STOCK profile exit=$? err=${BW_ERR:0:200}"
+    # The patched profile (overlay 2e1) and two reductions, so a failure still
+    # says WHICH namespace the kernel refused rather than only that one did.
+    BW_U=$(bwrap --unshare-user --ro-bind / / --dev /dev --unshare-pid --proc /proc --die-with-parent -- true 2>&1)
+    echo "[harness] sandbox: bwrap +unshare-user exit=$? err=${BW_U:0:200}"
+    BW_P=$(bwrap --ro-bind / / --unshare-pid -- true 2>&1)
+    echo "[harness] sandbox: bwrap pid-ns only exit=$? err=${BW_P:0:200}"
+    BW_N=$(bwrap --ro-bind / / -- true 2>&1)
+    echo "[harness] sandbox: bwrap no-ns exit=$? err=${BW_N:0:200}"
   else
     echo "[harness] sandbox: bwrap MISSING from the image"
   fi

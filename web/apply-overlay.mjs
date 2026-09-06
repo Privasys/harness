@@ -354,6 +354,36 @@ edit('packages/llm/llm-deepseek/src/types.ts', [
   ],
 ])
 
+// --- 2e1. bwrap: create a user namespace before the PID namespace -----------
+// dsh's bwrap profile asks for --unshare-pid with no --unshare-user. That is
+// fine on a developer laptop, where bwrap runs unprivileged and creates a user
+// namespace of its own accord; it fails in our enclave container, where the
+// process is uid 0 but the capability set has CAP_SYS_ADMIN dropped (measured
+// 2026-09-06: CapEff=00000000a80425fb, the stock container set). bwrap then
+// takes its privileged path, asks the kernel for a PID namespace directly, and
+// gets:
+//
+//   bwrap: Creating new namespace failed: Operation not permitted
+//
+// which dsh reports only as the opaque "no sandbox backend is usable on this
+// host", so every Bash call fails and the agent falls back to search tools.
+//
+// User namespaces themselves ARE permitted here (`unshare -U true` exits 0,
+// max_user_namespaces=59148), so asking for one first is all that is needed:
+// inside the new user namespace the process holds a full capability set and
+// the PID namespace is then created without privilege on the host. The
+// confinement is unchanged — the same mounts, one more namespace.
+//
+// Upstreamable as-is: this is a container-hosted-dsh bug, not a Privasys
+// quirk, and the fix costs nothing on a laptop (D8 extend-don't-fork).
+edit('packages/sandbox/sandbox-local/src/profiles.ts', [
+  [
+    'bwrap unshare-user before unshare-pid',
+    `  const args = ['--ro-bind', '/', '/', '--dev', '/dev', '--unshare-pid', '--proc', '/proc', '--die-with-parent']`,
+    `  const args = ['--unshare-user', '--ro-bind', '/', '/', '--dev', '/dev', '--unshare-pid', '--proc', '/proc', '--die-with-parent']`,
+  ],
+])
+
 // --- 2f0. conversation hero headline ----------------------------------------
 // The empty-session hero tagline is a locale literal ("Into the Unknown") —
 // replace with the Privasys promise in both dictionaries.
