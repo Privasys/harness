@@ -293,6 +293,43 @@ edit('packages/util/values/src/index.ts', [
   ],
 ])
 
+// The same V8-only comparison is duplicated in three more copies of the
+// helper (upstream discussion #5709 counts four sites in total). core/tools
+// guards TOOL JSON SCHEMAS, which is why Firefox lost tool calls specifically
+// while plain chat still rendered; the other two cover the host runner and the
+// worker-thread runtime, which use their own intrinsic-capture style.
+for (const rel of [
+  'packages/core/tools/src/json-schema.ts',
+  'packages/extensions/cordis-host-runner/src/guard.ts',
+]) {
+  edit(rel, [
+    [
+      'engine-agnostic intrinsic constructor check',
+      `    return constructor.name === name\n` +
+        `      && constructor.prototype === prototype\n` +
+        `      && Function.prototype.toString.call(constructor) === \`function \${name}() { [native code] }\``,
+      `    // privasys: whitespace-normalised (see values/src/index.ts).\n` +
+        `    return constructor.name === name\n` +
+        `      && constructor.prototype === prototype\n` +
+        `      && Function.prototype.toString.call(constructor).replace(/\\s+/g, ' ')\n` +
+        `        === \`function \${name}() { [native code] }\``,
+    ],
+  ])
+}
+edit('packages/code-runtime/code-runtime-worker-thread/src/worker-json.ts', [
+  [
+    'engine-agnostic intrinsic constructor check (worker)',
+    `    return constructor.name === name\n` +
+      `      && constructor.prototype === prototype\n` +
+      `      && intrinsicReflectApply(intrinsicFunctionToString, constructor, []) === \`function \${name}() { [native code] }\``,
+    `    // privasys: whitespace-normalised (see values/src/index.ts).\n` +
+      `    return constructor.name === name\n` +
+      `      && constructor.prototype === prototype\n` +
+      `      && String(intrinsicReflectApply(intrinsicFunctionToString, constructor, [])).replace(/\\s+/g, ' ')\n` +
+      `        === \`function \${name}() { [native code] }\``,
+  ],
+])
+
 // --- 2e2. reasoning field compatibility (vLLM >= 0.28.0) ---------------------
 // vLLM removed `reasoning_content` from chat output at 0.28.0 (#50624,
 // after the rename in #33402): the engine now emits only `reasoning`, and
