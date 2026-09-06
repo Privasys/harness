@@ -99,6 +99,36 @@ export http_proxy="${HTTP_PROXY}"
 export https_proxy="${HTTPS_PROXY}"
 export no_proxy="${NO_PROXY}"
 
+# --- sandbox backend diagnostic ---------------------------------------------
+# dsh probes its Linux sandbox chain FUNCTIONALLY: it runs the real bwrap
+# profile (--ro-bind / / --dev /dev --unshare-pid --proc /proc
+# --die-with-parent -- true) and takes exit 0 as usable, then falls to the
+# landlock-run node addon. When BOTH rungs fail the agent gets the opaque
+# "no sandbox backend is usable on this host" on every Bash call, which names
+# neither rung nor the reason. Installing bubblewrap was necessary and, as of
+# v1.0.1, not sufficient — so print the facts that distinguish the causes
+# (binary missing / user namespaces denied / no capabilities / landlock absent)
+# rather than inferring them across build-and-deploy cycles.
+{
+  set +e
+  echo "[harness] sandbox: kernel=$(uname -r) uid=$(id -u) gid=$(id -g)"
+  if command -v bwrap >/dev/null 2>&1; then
+    echo "[harness] sandbox: bwrap present ($(bwrap --version 2>&1 | head -1))"
+    BW_ERR=$(bwrap --ro-bind / / --dev /dev --unshare-pid --proc /proc --die-with-parent -- true 2>&1)
+    echo "[harness] sandbox: bwrap probe exit=$? err=${BW_ERR:0:300}"
+  else
+    echo "[harness] sandbox: bwrap MISSING from the image"
+  fi
+  echo "[harness] sandbox: max_user_namespaces=$(cat /proc/sys/user/max_user_namespaces 2>/dev/null || echo n/a)"
+  UNS_ERR=$(unshare -U true 2>&1)
+  echo "[harness] sandbox: 'unshare -U' exit=$? err=${UNS_ERR:0:200}"
+  echo "[harness] sandbox: CapEff=$(awk '/CapEff/{print $2}' /proc/self/status 2>/dev/null)"
+  echo "[harness] sandbox: securityfs=$(ls /sys/kernel/security/ 2>/dev/null | tr '\n' ' ')"
+  LLBIN=$(find /dsh -path '*landlock-run*' -type f 2>/dev/null | head -3 | tr '\n' ' ')
+  echo "[harness] sandbox: landlock-run artefacts=${LLBIN:-NONE}"
+  set -e
+} || true
+
 # Boot smoke: one headless agent turn through the proxy to Confidential AI,
 # proving the model leg works IN THE ENCLAVE (on-platform: attested client
 # cert, no bearer). Bounded and non-fatal — logs PASS/FAIL and never blocks
