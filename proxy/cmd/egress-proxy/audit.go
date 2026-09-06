@@ -117,13 +117,13 @@ func (a *egressAudit) Snapshot(limit int) map[string]any {
 		}
 	}
 	return map[string]any{
-		"recent":         out,
-		"allowed_total":  a.allowed,
-		"refused_total":  a.refused,
-		"hosts_reached":  hosts,
+		"recent":          out,
+		"allowed_total":   a.allowed,
+		"refused_total":   a.refused,
+		"hosts_reached":   hosts,
 		"assurance_floor": string(floor),
-		"retained":       a.n,
-		"capacity":       auditCapacity,
+		"retained":        a.n,
+		"capacity":        auditCapacity,
 	}
 }
 

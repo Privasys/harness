@@ -54,8 +54,8 @@ func registerPolicyAPI(mux *http.ServeMux, store *policy.Store, stamp *stamper) 
 		recordSubject(sub)
 		eff := store.Effective(sub)
 		out := map[string]any{
-			"subject":   redactSubject(sub),
-			"summary":   eff.Summarise(),
+			"subject":           redactSubject(sub),
+			"summary":           eff.Summarise(),
 			"policy_digest_oid": OIDPolicyDigest,
 			// The ceiling's exact bytes, so a verifier can hash them and
 			// compare with the leaf without trusting this JSON envelope.

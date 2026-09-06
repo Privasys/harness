@@ -40,6 +40,7 @@ import (
 	"time"
 
 	"github.com/Privasys/attested-harness/proxy/internal/attested"
+	"github.com/Privasys/attested-harness/proxy/internal/capability"
 	"github.com/Privasys/attested-harness/proxy/internal/policy"
 )
 
@@ -261,6 +262,15 @@ func main() {
 	}
 	stamp.Stamp(ceiling)
 
+	// The capability identity and store: how this harness asks the holder for
+	// authority over a folder of their own Drive, so their sessions persist
+	// under their keys rather than inside this enclave (D6').
+	capIdentity, err := capability.NewIdentity(envOr("HARNESS_POLICY_DIR", "/data/policy"))
+	if err != nil {
+		log.Fatalf("[capability] %v", err)
+	}
+	capStore := capability.NewStore(envOr("HARNESS_POLICY_DIR", "/data/policy"), capIdentity)
+
 	// The governed fast path for everything that is not an attested peer
 	// call. Started before ingress so the shell's HTTP_PROXY is answerable
 	// from the moment dsh accepts a turn.
@@ -276,7 +286,7 @@ func main() {
 	// to dsh on the loopback upstream, 503 until dsh is listening. Putting
 	// ingress here too means the measured Go layer owns every network edge.
 	if cfg.ingressListen != "" && cfg.dshUpstream != "" {
-		go serveIngress(cfg, deps, store, stamp)
+		go serveIngress(cfg, deps, store, stamp, capStore)
 	}
 
 	if err := http.ListenAndServe(cfg.listenAddr, mux); err != nil {
@@ -286,7 +296,7 @@ func main() {
 
 // serveIngress fronts the platform port: instant health, the browser
 // attestation summary, and a reverse-proxy to dsh once it is up.
-func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp *stamper) {
+func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp *stamper, capStore *capability.Store) {
 	listen, upstream := cfg.ingressListen, cfg.dshUpstream
 	target, err := neturl.Parse(upstream)
 	if err != nil {
@@ -392,6 +402,7 @@ func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp 
 	// The verification API: how a user checks which policy this enclave is
 	// applying to them, and how a third party checks the product's posture.
 	registerPolicyAPI(mux, store, stamp)
+	registerCapabilityAPI(mux, capStore)
 	mux.Handle("/", rp)
 	log.Printf("[ingress] listening on %s -> %s", listen, upstream)
 	if err := http.ListenAndServe(listen, mux); err != nil {
