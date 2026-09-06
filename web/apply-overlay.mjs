@@ -264,6 +264,70 @@ edit('packages/preset/agent-presets/presets/cordis/agent.cordis.yml', [
   ],
 ])
 
+// --- 2e1. TEMPORARY DIAGNOSTIC: name the value session-format-v2 refuses ----
+// dsh 0.1.3 embeds assistant streams in the session log and validates every
+// chunk with snapshotJsonValue, which rejects NaN, ±Infinity, -0, undefined,
+// non-plain prototypes and cycles. The thrown error names none of them, so a
+// failure is untraceable: "Assistant stream raw chunk must be a lossless JSON
+// object" and nothing else, client-side, with the session UI dead.
+//
+// Our stack passes the LLM half cleanly (verified offline against this exact
+// dsh version with a real Confidential AI stream), so the offender enters
+// somewhere between the accumulator and the client projection. Report the
+// offending JSON PATHS and value TYPES — never values, text or tool
+// arguments — so one reproduction identifies it exactly.
+//
+// REMOVE once the cause is fixed. This is a debugging build only.
+edit('packages/llm/llm/src/assistant-stream.ts', [
+  [
+    'lossless failure diagnostic',
+    `function snapshotChunk(chunk: StreamChunk): StreamChunk {\n` +
+      `  const snapshot = snapshotJsonValue(chunk)\n` +
+      `  if (snapshot === undefined) throw new TypeError('Assistant stream chunk must be losslessly JSON-serializable')\n` +
+      `  return snapshot\n` +
+      `}`,
+    `function snapshotChunk(chunk: StreamChunk): StreamChunk {\n` +
+      `  const snapshot = snapshotJsonValue(chunk)\n` +
+      `  if (snapshot === undefined) {\n` +
+      `    const offenders: string[] = []\n` +
+      `    const walk = (node: unknown, path: string): void => {\n` +
+      `      if (node === null) return\n` +
+      `      const kind = typeof node\n` +
+      `      if (kind === 'number') {\n` +
+      `        if (!Number.isFinite(node as number) || Object.is(node, -0)) {\n` +
+      `          offenders.push(path + '=' + String(node))\n` +
+      `        }\n` +
+      `        return\n` +
+      `      }\n` +
+      `      if (kind === 'undefined' || kind === 'bigint' || kind === 'function' || kind === 'symbol') {\n` +
+      `        offenders.push(path + '=' + kind)\n` +
+      `        return\n` +
+      `      }\n` +
+      `      if (kind !== 'object') return\n` +
+      `      if (Array.isArray(node)) {\n` +
+      `        node.forEach((child, i) => { walk(child, path + '[' + String(i) + ']') })\n` +
+      `        return\n` +
+      `      }\n` +
+      `      if (Object.getPrototypeOf(node) !== Object.prototype) {\n` +
+      `        offenders.push(path + '=<prototype:' + String(Object.getPrototypeOf(node)?.constructor?.name) + '>')\n` +
+      `        return\n` +
+      `      }\n` +
+      `      for (const key of Reflect.ownKeys(node as object)) {\n` +
+      `        if (typeof key === 'symbol') { offenders.push(path + '.<symbol>'); continue }\n` +
+      `        walk((node as Record<string, unknown>)[key], path === '' ? key : path + '.' + key)\n` +
+      `      }\n` +
+      `    }\n` +
+      `    try { walk(chunk, '') } catch { offenders.push('<walk failed: cycle?>') }\n` +
+      `    throw new TypeError('Assistant stream chunk must be losslessly JSON-serializable'\n` +
+      `      + ' [privasys chunkType=' + String((chunk as { type?: unknown }).type)\n` +
+      `      + ' keys=' + Object.keys(chunk as object).join('|')\n` +
+      `      + ' offenders=' + (offenders.length > 0 ? offenders.join(', ') : 'none-found') + ']')\n` +
+      `  }\n` +
+      `  return snapshot\n` +
+      `}`,
+  ],
+])
+
 // --- 2e2. reasoning field compatibility (vLLM >= 0.28.0) ---------------------
 // vLLM removed `reasoning_content` from chat output at 0.28.0 (#50624,
 // after the rename in #33402): the engine now emits only `reasoning`, and
