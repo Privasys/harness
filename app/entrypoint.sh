@@ -99,45 +99,54 @@ export http_proxy="${HTTP_PROXY}"
 export https_proxy="${HTTPS_PROXY}"
 export no_proxy="${NO_PROXY}"
 
-# --- sandbox backend diagnostic ---------------------------------------------
-# dsh probes its Linux sandbox chain FUNCTIONALLY: it runs the real bwrap
-# profile (--ro-bind / / --dev /dev --unshare-pid --proc /proc
-# --die-with-parent -- true) and takes exit 0 as usable, then falls to the
-# landlock-run node addon. When BOTH rungs fail the agent gets the opaque
-# "no sandbox backend is usable on this host" on every Bash call, which names
-# neither rung nor the reason. Installing bubblewrap was necessary and, as of
-# v1.0.1, not sufficient — so print the facts that distinguish the causes
-# (binary missing / user namespaces denied / no capabilities / landlock absent)
-# rather than inferring them across build-and-deploy cycles.
+# --- shell + egress smoke ----------------------------------------------------
+# Two deterministic checks for the path the Bash tool depends on. Both were
+# broken in prod on 2026-09-06 and NO existing check noticed: the model-leg
+# smoke passed throughout, because it never runs a command and never leaves
+# the enclave except to Confidential AI.
+#
+# 1. Sandbox. dsh probes bwrap FUNCTIONALLY with the profile in
+#    packages/sandbox/sandbox-local/src/profiles.ts, and reports only "no
+#    sandbox backend is usable on this host" when it fails — naming neither the
+#    rung nor the cause. This container is uid 0 WITHOUT CAP_SYS_ADMIN and its
+#    /proc is masked, so the stock profile cannot create a namespace and cannot
+#    mount procfs; overlay 2e1 patches it to --unshare-user with no PID
+#    namespace and no --proc. Run the patched profile here so a regression
+#    (an overlay rebase, a runtime capability change) is named at boot instead
+#    of surfacing as a failed tool call in front of a user.
+# 2. Egress. The shell reaches the network only through the forward proxy
+#    (HTTP_PROXY, policed by HARNESS_EGRESS_MODE). Prove a real request
+#    completes end to end, against our own site rather than a third party.
 {
   set +e
-  echo "[harness] sandbox: kernel=$(uname -r) uid=$(id -u) gid=$(id -g)"
   if command -v bwrap >/dev/null 2>&1; then
-    echo "[harness] sandbox: bwrap present ($(bwrap --version 2>&1 | head -1))"
-    BW_ERR=$(bwrap --ro-bind / / --dev /dev --unshare-pid --proc /proc --die-with-parent -- true 2>&1)
-    echo "[harness] sandbox: bwrap STOCK profile exit=$? err=${BW_ERR:0:200}"
-    # The patched profile (overlay 2e1) and two reductions, so a failure still
-    # says WHICH namespace the kernel refused rather than only that one did.
-    BW_U=$(bwrap --unshare-user --ro-bind / / --dev /dev --unshare-pid --proc /proc --die-with-parent -- true 2>&1)
-    echo "[harness] sandbox: bwrap +unshare-user exit=$? err=${BW_U:0:200}"
-    # The patched profile (overlay 2e1): user namespace, no PID namespace, no
-    # procfs mount — the two the masked /proc forbids.
-    BW_F=$(bwrap --unshare-user --ro-bind / / --dev /dev --die-with-parent -- true 2>&1)
-    echo "[harness] sandbox: bwrap PATCHED read-only exit=$? err=${BW_F:0:200}"
-    BW_W=$(bwrap --unshare-user --ro-bind / / --dev /dev --die-with-parent --tmpfs /tmp --bind /data/workspace /data/workspace -- true 2>&1)
-    echo "[harness] sandbox: bwrap PATCHED workspace-write exit=$? err=${BW_W:0:200}"
-    BW_D=$(bwrap --unshare-user --ro-bind / / --die-with-parent -- true 2>&1)
-    echo "[harness] sandbox: bwrap no --dev exit=$? err=${BW_D:0:200}"
+    bwrap --unshare-user --ro-bind / / --dev /dev --die-with-parent -- true >/dev/null 2>&1
+    RO=$?
+    bwrap --unshare-user --ro-bind / / --dev /dev --die-with-parent --tmpfs /tmp \
+      --bind /data/workspace /data/workspace -- true >/dev/null 2>&1
+    RW=$?
+    if [[ $RO -eq 0 && $RW -eq 0 ]]; then
+      echo "[harness] shell smoke PASS: bwrap sandbox usable (read-only + workspace-write)"
+    else
+      echo "[harness] shell smoke FAIL: bwrap read-only=${RO} workspace-write=${RW}" \
+        "— the Bash tool will refuse every call (uid=$(id -u) CapEff=$(awk '/CapEff/{print $2}' /proc/self/status 2>/dev/null))"
+    fi
   else
-    echo "[harness] sandbox: bwrap MISSING from the image"
+    echo "[harness] shell smoke FAIL: bwrap MISSING — the Bash tool will refuse every call"
   fi
-  echo "[harness] sandbox: max_user_namespaces=$(cat /proc/sys/user/max_user_namespaces 2>/dev/null || echo n/a)"
-  UNS_ERR=$(unshare -U true 2>&1)
-  echo "[harness] sandbox: 'unshare -U' exit=$? err=${UNS_ERR:0:200}"
-  echo "[harness] sandbox: CapEff=$(awk '/CapEff/{print $2}' /proc/self/status 2>/dev/null)"
-  echo "[harness] sandbox: securityfs=$(ls /sys/kernel/security/ 2>/dev/null | tr '\n' ' ')"
-  LLBIN=$(find /dsh -path '*landlock-run*' -type f 2>/dev/null | head -3 | tr '\n' ' ')
-  echo "[harness] sandbox: landlock-run artefacts=${LLBIN:-NONE}"
+  case "${HARNESS_EGRESS_MODE:-}" in
+    open|allowlist)
+      EG=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 -I https://privasys.org 2>&1)
+      if [[ "$EG" =~ ^[23] ]]; then
+        echo "[harness] shell smoke PASS: egress via forward proxy (mode=${HARNESS_EGRESS_MODE}, HTTP ${EG})"
+      else
+        echo "[harness] shell smoke FAIL: egress via forward proxy returned '${EG}' (mode=${HARNESS_EGRESS_MODE})"
+      fi
+      ;;
+    *)
+      echo "[harness] shell smoke: egress check skipped (mode=${HARNESS_EGRESS_MODE:-unset} admits no direct fetch)"
+      ;;
+  esac
   set -e
 } || true
 
