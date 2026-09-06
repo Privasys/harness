@@ -29,6 +29,7 @@ import {
   useAttestation,
 } from './attestation-view/index.ts'
 import { ensureRowStyles } from './PrivasysRows.tsx'
+import { PrivasysPolicySection } from './PrivasysPolicy.tsx'
 
 interface ShellAttestationConfig {
   attestUrl?: string
@@ -199,6 +200,8 @@ export function PrivasysAttestationRow({ wide }: SidebarFooterActionOwnerProps) 
                         verifyQuoteUrl={verifyQuoteUrl}
                       />
                     )}
+              {/* Posture AND behaviour, always together. */}
+              <PrivasysPolicySection />
             </div>
           </div>
         )

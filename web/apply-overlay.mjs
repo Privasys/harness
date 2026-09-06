@@ -507,6 +507,11 @@ for (const rel of [
   put(`packages/client/ui-trajectory/src/client/attestation-view/${rel}`, `vendor/attestation-view/${rel}`)
 }
 put('packages/client/ui-brand-official/src/client/PrivasysAttestation.tsx', 'overlay/brand/PrivasysAttestation.tsx')
+// The policy section of that panel: what this harness PERMITS beside what it
+// has actually REACHED. Two lines, never one — showing either half alone is
+// how an honest product acquires a false badge. Reads the measured proxy's
+// /privasys/policy and /privasys/egress-log, same-origin.
+put('packages/client/ui-brand-official/src/client/PrivasysPolicy.tsx', 'overlay/brand/PrivasysPolicy.tsx')
 put('apps/web/public/privasys/privasys-attestation.css', 'vendor/privasys-attestation.css')
 
 // --- 2g. greenfield content: no DeepSeek-authored text reaches user or model
