@@ -73,6 +73,8 @@ type reproScanBody struct {
 	// lossyFound bounds the dsh-v2 lossless diagnostic (see lossyKeys) to a
 	// few findings per response so a long stream cannot flood the log.
 	lossyFound int
+	// toolFound bounds the tool-call shape probe (structure only, no content).
+	toolFound int
 }
 
 func newReproScanBody(rc io.ReadCloser) *reproScanBody {
@@ -113,6 +115,49 @@ func (b *reproScanBody) scan(line []byte) {
 			b.lossyFound++
 			if b.lossyFound >= 3 {
 				break
+			}
+		}
+	}
+	// Tool-call delta SHAPE probe. dsh 0.1.3 diverts any tool-call delta whose
+	// id or name is empty into a raw chunk record, which its session-format-v2
+	// validation then refuses — so what matters is whether OUR stream carries a
+	// non-empty id on a call's first delta. Logs structure only (index, which
+	// fields are present, id length): never names, arguments or any content.
+	if b.toolFound < 6 && strings.Contains(payload, `"tool_calls"`) {
+		var frame struct {
+			Choices []struct {
+				Delta struct {
+					ToolCalls []struct {
+						Index    *int    `json:"index"`
+						ID       *string `json:"id"`
+						Function *struct {
+							Name      *string `json:"name"`
+							Arguments *string `json:"arguments"`
+						} `json:"function"`
+					} `json:"tool_calls"`
+				} `json:"delta"`
+			} `json:"choices"`
+		}
+		if json.Unmarshal([]byte(payload), &frame) == nil {
+			for _, ch := range frame.Choices {
+				for _, tc := range ch.Delta.ToolCalls {
+					idLen := -1
+					if tc.ID != nil {
+						idLen = len(*tc.ID)
+					}
+					hasName, hasArgs := false, false
+					if tc.Function != nil {
+						hasName = tc.Function.Name != nil
+						hasArgs = tc.Function.Arguments != nil
+					}
+					idx := -1
+					if tc.Index != nil {
+						idx = *tc.Index
+					}
+					log.Printf("[egress-proxy] tool_call delta: index=%d id_len=%d has_name=%v has_arguments=%v",
+						idx, idLen, hasName, hasArgs)
+					b.toolFound++
+				}
 			}
 		}
 	}
