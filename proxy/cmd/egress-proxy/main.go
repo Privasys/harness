@@ -152,6 +152,13 @@ func forward(w http.ResponseWriter, r *http.Request, client *http.Client, host, 
 	body := resp.Body
 	if repro {
 		log.Printf("[egress-proxy] model leg: %s %s -> %d %s", r.Method, path, resp.StatusCode, resp.Header.Get("Content-Type"))
+	} else if resp.StatusCode >= 400 {
+		// Tool legs were silent unless the DIAL was refused, so a shim that
+		// connected and then got a 401 mounted an EMPTY tool set and the agent
+		// simply reported having no such tool — indistinguishable, from the
+		// outside, from a tool that was never configured. Name the status.
+		log.Printf("[egress-proxy] tool leg: %s %s%s -> %d (the tool will mount with no capabilities)",
+			r.Method, host, path, resp.StatusCode)
 	}
 	if repro && strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
 		body = newReproScanBody(resp.Body)

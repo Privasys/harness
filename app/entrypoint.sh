@@ -43,9 +43,34 @@ case "${PRIVASYS_APP_ID:-}" in
     export HARNESS_PUBLIC_HOST="${HARNESS_PUBLIC_HOST:-attested-harness.apps.test.privasys.org}"
     PV_ATTEST_BASE="https://api.developer.test.privasys.org"
     PV_API_BASE="https://api-test.privasys.org"
+    # STORAGE goes to the DEV Drive, not production. The image's baked tool
+    # topology points at the prod fleet, which is right for the read-only tools
+    # (one Brave, one Lightpanda, and dev has no copy of either) but wrong the
+    # moment the harness starts WRITING a user's sessions: a dev harness must
+    # not create folders and store transcripts in someone's production Drive.
+    # The user was also, reasonably, looking at drive.test.privasys.org and
+    # wondering where their sessions had gone.
+    export HARNESS_TOOL_HOSTS="${HARNESS_TOOL_HOSTS/drive=privasys-drive.apps.privasys.org/drive=drive-demo.apps.test.privasys.org}"
+    export HARNESS_DRIVE_APP_ID="02104572ca2f41e8ae2d24c0294e6f5e"
     ;;
 esac
 export HARNESS_APP_ID="${PRIVASYS_APP_ID:-590ebdc3-1b63-401f-bbb8-22d5f3886c5e}"
+
+# HOME is the workspace, because HOME is what the directory picker offers.
+#
+# dsh's browse picker starts every new session at homedir()
+# (packages/host/directory-picker-browse) and takes no configuration for it, so
+# in this container a new session landed in /root — the container's writable
+# layer. Anything the agent wrote there was destroyed by the next redeploy,
+# exactly like the session logs were, and just as silently: the workspace
+# simply came back empty and looked new.
+#
+# Node's homedir() reads $HOME on POSIX, so pointing HOME at the encrypted
+# volume fixes the picker without patching dsh. DSH_HOME is set explicitly and
+# takes precedence over the home-derived default (home-paths resolves
+# configured ?? env ?? defaultDshHome()), so the measured profiles do not move.
+mkdir -p /data/workspace
+export HOME=/data/workspace
 # Hand the environment to the browser shell: privasys-shell.js merges
 # window.__PRIVASYS_CFG__ over its dev defaults (its documented seam).
 DIST_INDEX=/dsh/apps/web/dist/index.html
