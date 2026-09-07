@@ -286,8 +286,15 @@ func main() {
 	// its own JSONL store (single-writer, torn-tail recovery, revisions) exactly
 	// as upstream wrote it; this carries the bytes out to where they belong.
 	capability.SetSubjectSource(currentSubject)
+	// Two roots, kept apart in Drive so a person opening the folder sees their
+	// conversations and their files as separate things. Both are tmpfs: the
+	// enclave holds no durable user data, so the mirror is not a backup, it is
+	// where the data actually lives.
 	syncer := capability.NewSyncer(capStore, capIdentity, client, cfg.toolHosts["drive"],
-		envOr("HARNESS_SESSION_ROOT", "/dev/shm/privasys-sessions"))
+		map[string]string{
+			"sessions":  envOr("HARNESS_SESSION_ROOT", "/dev/shm/privasys-sessions"),
+			"workspace": envOr("HARNESS_WORKSPACE_ROOT", "/dev/shm/privasys-workspace"),
+		})
 	syncer.LoadState()
 	if err := syncer.Restore(); err != nil {
 		log.Printf("[sync] restore skipped: %v", err)

@@ -69,8 +69,8 @@ export HARNESS_APP_ID="${PRIVASYS_APP_ID:-590ebdc3-1b63-401f-bbb8-22d5f3886c5e}"
 # volume fixes the picker without patching dsh. DSH_HOME is set explicitly and
 # takes precedence over the home-derived default (home-paths resolves
 # configured ?? env ?? defaultDshHome()), so the measured profiles do not move.
-mkdir -p /data/workspace
-export HOME=/data/workspace
+# The workspace is user data too, so it does not live on this enclave either.
+# Set below, once the tmpfs is resolved.
 
 # --- the session root must be MEMORY, never this enclave's disk -------------
 # The harness holds no durable user data. /data is encrypted and per-enclave,
@@ -101,6 +101,15 @@ if [[ -z "$SESSION_ROOT" ]]; then
 fi
 mkdir -p "$SESSION_ROOT"
 export HARNESS_SESSION_ROOT="$SESSION_ROOT"
+# The workspace is the agent's files — user data by the same argument as the
+# transcripts, and D6' puts it on the user's Drive too. HOME is what dsh's
+# directory picker offers, so pointing it here is what keeps new sessions off
+# the enclave's disk.
+WORKSPACE_ROOT="${SESSION_ROOT%/*}/privasys-workspace"
+mkdir -p "$WORKSPACE_ROOT"
+export HARNESS_WORKSPACE_ROOT="$WORKSPACE_ROOT"
+export HOME="$WORKSPACE_ROOT"
+echo "[harness] workspace root: $WORKSPACE_ROOT (tmpfs, mirrored to Drive)"
 # dsh reads its root from the composition, so hand the resolved path to the
 # profile as a later patch (patches apply in order; this overrides the
 # non-durable default in profile.cordis.yml).
@@ -112,10 +121,13 @@ printf -- '- id: session-persistence-jsonl
 # A store from before this change is no longer read. Say so rather than
 # leaving the user to wonder where their history went, and do not delete it:
 # it is their data, and deleting it is their call, not this script's.
-if [[ -d /data/sessions ]] && [[ -n "$(ls -A /data/sessions 2>/dev/null)" ]]; then
-  echo "[harness] NOTE: /data/sessions holds a legacy on-enclave store and is no longer read."
-  echo "[harness]       Sessions now live in memory and on your Drive. Clear it when ready."
-fi
+for legacy in /data/sessions /data/workspace; do
+  if [[ -d "$legacy" ]] && [[ -n "$(ls -A "$legacy" 2>/dev/null)" ]]; then
+    echo "[harness] NOTE: $legacy holds a legacy on-enclave store and is no longer read."
+    echo "[harness]       Sessions and workspace now live in memory and on your Drive."
+    echo "[harness]       It is your data, so this script will not delete it — clear it when ready."
+  fi
+done
 # Hand the environment to the browser shell: privasys-shell.js merges
 # window.__PRIVASYS_CFG__ over its dev defaults (its documented seam).
 DIST_INDEX=/dsh/apps/web/dist/index.html
@@ -193,7 +205,7 @@ export no_proxy="${NO_PROXY}"
     bwrap --unshare-user --ro-bind / / --dev /dev --die-with-parent -- true >/dev/null 2>&1
     RO=$?
     bwrap --unshare-user --ro-bind / / --dev /dev --die-with-parent --tmpfs /tmp \
-      --bind /data/workspace /data/workspace -- true >/dev/null 2>&1
+      --bind "$WORKSPACE_ROOT" "$WORKSPACE_ROOT" -- true >/dev/null 2>&1
     RW=$?
     if [[ $RO -eq 0 && $RW -eq 0 ]]; then
       echo "[harness] shell smoke PASS: bwrap sandbox usable (read-only + workspace-write)"
@@ -231,8 +243,7 @@ if [[ -z "${HARNESS_SKIP_BOOT_SMOKE:-}" ]]; then
   # source tree, and writing to the real store left its prompt sitting in the
   # user's history on every boot — a fresh harness opened showing a "dsh"
   # workspace and somebody else's conversation. A fresh harness must look fresh.
-  mkdir -p /data/workspace
-  SMOKE=$(cd /data/workspace && timeout 240 node /dsh/apps/cli/lib/bin.js --profile headless \
+  SMOKE=$(cd "$WORKSPACE_ROOT" && timeout 240 node /dsh/apps/cli/lib/bin.js --profile headless \
     --patch /app/profile.cordis.yml --patch /app/smoke.cordis.yml \
     "Reply with exactly: ONPLATFORM MODEL OK. Do not use any tools." 2>&1 | tail -3 || true)
   if grep -q "ONPLATFORM MODEL OK" <<<"$SMOKE"; then
@@ -256,13 +267,12 @@ fi
 # Sessions default their workspace to the process cwd. Running from /dsh (the
 # WORKDIR) made every session a workspace INSIDE the dsh checkout — dsh's own
 # AGENTS.md got injected as workspace instructions and users worked in the
-# harness source tree. Work belongs on the ENCRYPTED VOLUME: a persistent
-# workspace directory that survives redeploys.
-mkdir -p /data/workspace
+# harness source tree. Work now belongs on the tmpfs workspace root resolved
+# above, mirrored to the user's Drive — the enclave keeps no copy.
 # The deployment-owned skill root (presets pin skill discovery to it,
 # includeDefaultRoots:false — see app/profile notes + the preset overlay).
 mkdir -p /data/skills
-cd /data/workspace
+cd "$WORKSPACE_ROOT"
 
 echo "[harness] dsh web (compiled) on 127.0.0.1:${DSH_PORT}, proxy fronts 0.0.0.0:${PORT} (pid ${PROXY_PID}, trusted-host ${HARNESS_PUBLIC_HOST:-none})"
 exec node /dsh/apps/cli/lib/bin.js --profile web \

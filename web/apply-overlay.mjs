@@ -407,6 +407,39 @@ edit('packages/sandbox/sandbox-local/src/profiles.ts', [
   ],
 ])
 
+// --- 2e2. session export must ride the sealed transport ---------------------
+// The Session log button downloads the session archive with the BROWSER's raw
+// fetch (SessionLogDownloadController defaults its fetcher to global fetch and
+// builds a same-origin URL from location.origin). Every other /api call in this
+// deployment goes through the sealed channel, and the gateway refuses anything
+// on /api that does not — so the button returned:
+//
+//   Export failed: HTTP 403   ("sealed-transport-required")
+//
+// The fence is right and the client simply predates it. The controller already
+// takes an injectable fetcher for its tests, so hand it the sealed one when the
+// shell has installed it (window.__DSH_TRANSPORT__.fetch, see
+// web/privasys-shell.js) and fall back to global fetch off-platform, where
+// there is no sealed session and the raw path is correct.
+//
+// The archive still streams from the host and is saved by the browser download
+// manager exactly as upstream intends; only the carrier changes.
+edit('packages/session-query/session-log-export/src/client/index.ts', [
+  [
+    'session export via the sealed transport',
+    `  const controller = new SessionLogDownloadController()`,
+    `  // Privasys: /api is sealed-transport only, and the browser's raw fetch is\n` +
+    `  // refused by the gateway (403 sealed-transport-required). Use the sealed\n` +
+    `  // carrier the shell installs; fall back to global fetch off-platform.\n` +
+    `  const privasysTransport = (globalThis as { __DSH_TRANSPORT__?: { fetch?: typeof fetch } }).__DSH_TRANSPORT__\n` +
+    `  const controller = new SessionLogDownloadController(\n` +
+    `    privasysTransport?.fetch !== undefined\n` +
+    `      ? (input, init) => privasysTransport.fetch!(input, init)\n` +
+    `      : undefined,\n` +
+    `  )`,
+  ],
+])
+
 // --- 2f0. conversation hero headline ----------------------------------------
 // The empty-session hero tagline is a locale literal ("Into the Unknown") —
 // replace with the Privasys promise in both dictionaries.

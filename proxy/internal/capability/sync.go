@@ -48,7 +48,11 @@ type Syncer struct {
 	identity  *Identity
 	client    *http.Client
 	driveHost string
-	localRoot string
+	// roots maps a Drive subfolder name to the local directory mirrored into
+	// it. Two today — the session log and the workspace — kept apart in Drive
+	// so a person opening the folder sees their conversations and their files
+	// as separate things rather than one interleaved heap.
+	roots map[string]string
 
 	mu sync.Mutex
 	// uploaded maps a relative path to the content hash last stored, so an
@@ -62,10 +66,10 @@ type Syncer struct {
 	files   int
 }
 
-func NewSyncer(store *Store, id *Identity, client *http.Client, driveHost, localRoot string) *Syncer {
+func NewSyncer(store *Store, id *Identity, client *http.Client, driveHost string, roots map[string]string) *Syncer {
 	return &Syncer{
 		store: store, identity: id, client: client,
-		driveHost: driveHost, localRoot: localRoot,
+		driveHost: driveHost, roots: roots,
 		uploaded: map[string]string{}, folders: map[string]string{},
 	}
 }
@@ -148,56 +152,63 @@ func (s *Syncer) SyncOnce() error {
 	}
 
 	var changed, failed int
-	walkErr := filepath.WalkDir(s.localRoot, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			// An unreadable entry must not abort the whole mirror: the rest of
-			// the holder's sessions still deserve to reach their Drive.
-			return nil
-		}
-		if d.IsDir() {
-			return nil
-		}
-		rel, relErr := filepath.Rel(s.localRoot, path)
-		if relErr != nil {
-			return nil
-		}
-		rel = filepath.ToSlash(rel)
-		if rel == syncStateName {
-			// Our own bookkeeping. Mirroring it would upload a file that
-			// changes on every pass, so the mirror would never go quiet.
-			return nil
-		}
-		data, readErr := os.ReadFile(path)
-		if readErr != nil {
-			return nil
-		}
-		sum := sha256.Sum256(data)
-		hash := hex.EncodeToString(sum[:])
+	var walkErr error
+	for prefix, localRoot := range s.roots {
+		prefix, localRoot := prefix, localRoot
+		walkErr = filepath.WalkDir(localRoot, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				// An unreadable entry must not abort the whole mirror: the rest of
+				// the holder's sessions still deserve to reach their Drive.
+				return nil
+			}
+			if d.IsDir() {
+				return nil
+			}
+			rel, relErr := filepath.Rel(localRoot, path)
+			if relErr != nil {
+				return nil
+			}
+			rel = path0(prefix, filepath.ToSlash(rel))
+			if strings.HasSuffix(rel, syncStateName) {
+				// Our own bookkeeping. Mirroring it would upload a file that
+				// changes on every pass, so the mirror would never go quiet.
+				return nil
+			}
+			data, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return nil
+			}
+			sum := sha256.Sum256(data)
+			hash := hex.EncodeToString(sum[:])
 
-		s.mu.Lock()
-		unchanged := s.uploaded[rel] == hash
-		s.mu.Unlock()
-		if unchanged {
-			return nil
-		}
+			s.mu.Lock()
+			unchanged := s.uploaded[rel] == hash
+			s.mu.Unlock()
+			if unchanged {
+				return nil
+			}
 
-		parent, folderErr := s.ensurePath(ds, filepath.ToSlash(filepath.Dir(rel)))
-		if folderErr != nil {
-			failed++
-			log.Printf("[sync] folder for %s: %v", rel, folderErr)
+			parent, folderErr := s.ensurePath(ds, filepath.ToSlash(filepath.Dir(rel)))
+			if folderErr != nil {
+				failed++
+				log.Printf("[sync] folder for %s: %v", rel, folderErr)
+				return nil
+			}
+			if _, putErr := ds.PutIn(parent, filepath.Base(rel), data); putErr != nil {
+				failed++
+				log.Printf("[sync] upload %s: %v", rel, putErr)
+				return nil
+			}
+			s.mu.Lock()
+			s.uploaded[rel] = hash
+			s.mu.Unlock()
+			changed++
 			return nil
+		})
+		if walkErr != nil && !os.IsNotExist(walkErr) {
+			log.Printf("[sync] walking %s: %v", localRoot, walkErr)
 		}
-		if _, putErr := ds.PutIn(parent, filepath.Base(rel), data); putErr != nil {
-			failed++
-			log.Printf("[sync] upload %s: %v", rel, putErr)
-			return nil
-		}
-		s.mu.Lock()
-		s.uploaded[rel] = hash
-		s.mu.Unlock()
-		changed++
-		return nil
-	})
+	}
 
 	s.mu.Lock()
 	s.last = time.Now().UTC()
@@ -209,9 +220,6 @@ func (s *Syncer) SyncOnce() error {
 
 	if changed > 0 || failed > 0 {
 		log.Printf("[sync] mirrored %d file(s) to the holder's Drive, %d failed", changed, failed)
-	}
-	if walkErr != nil && !os.IsNotExist(walkErr) {
-		return walkErr
 	}
 	if failed > 0 {
 		return fmt.Errorf("capability: %d file(s) could not be mirrored", failed)
@@ -270,7 +278,13 @@ func (s *Syncer) Restore() error {
 	if !g.Usable() {
 		return nil
 	}
-	if entries, err := os.ReadDir(s.localRoot); err == nil && len(entries) > 0 {
+	empty := true
+	for _, localRoot := range s.roots {
+		if entries, err := os.ReadDir(localRoot); err == nil && len(entries) > 0 {
+			empty = false
+		}
+	}
+	if !empty {
 		// Local content exists. Restoring over it could resurrect a session the
 		// holder deleted, or overwrite a newer local log with an older remote
 		// one — neither is a call this code should make silently.
@@ -280,7 +294,20 @@ func (s *Syncer) Restore() error {
 	if err != nil {
 		return err
 	}
-	n, err := s.restoreInto(ds, ds.nodeID(), s.localRoot)
+	total := 0
+	for prefix, localRoot := range s.roots {
+		id, ferr := ds.EnsureFolder(ds.nodeID(), prefix)
+		if ferr != nil {
+			log.Printf("[sync] restore %s: %v", prefix, ferr)
+			continue
+		}
+		n, rerr := s.restoreInto(ds, id, localRoot)
+		total += n
+		if rerr != nil {
+			log.Printf("[sync] restore %s: %v", prefix, rerr)
+		}
+	}
+	n, err := total, error(nil)
 	if err != nil {
 		return err
 	}
@@ -329,7 +356,18 @@ func (s *Syncer) restoreInto(ds *DriveStore, nodeID, dir string) (int, error) {
 // every session. Best-effort: losing it costs one redundant mirror pass.
 const syncStateName = ".privasys-sync.json"
 
-func (s *Syncer) statePath() string { return filepath.Join(s.localRoot, syncStateName) }
+// statePath lives on tmpfs, not with the data: it is a map of content hashes
+// DERIVED from the user's files, so it is theirs too and must not outlive the
+// container either. Losing it costs one redundant mirror pass.
+func (s *Syncer) statePath() string { return filepath.Join("/run", syncStateName) }
+
+// path0 joins the Drive subfolder prefix onto a relative path.
+func path0(prefix, rel string) string {
+	if prefix == "" {
+		return rel
+	}
+	return prefix + "/" + rel
+}
 
 func (s *Syncer) LoadState() {
 	raw, err := os.ReadFile(s.statePath())
