@@ -107,10 +107,22 @@ func registerCapabilityAPI(mux *http.ServeMux, store *capability.Store) {
 			return
 		}
 		recordSubject(sub)
-		if g := store.Granted(sub); g.Usable() {
+		existing := store.Granted(sub)
+		if existing.Usable() {
 			writeJSON(w, http.StatusOK, map[string]any{
 				"status":        "already_granted",
-				"capability_id": g.CapabilityID,
+				"capability_id": existing.CapabilityID,
+			})
+			return
+		}
+		// A previous refusal stands until the user deliberately reopens it.
+		// Delivering deny exists so the app stops asking; re-prompting on the
+		// next page load would make the decision meaningless. ?retry=1 is the
+		// user changing their mind, never the app trying again.
+		if existing.Denied() && r.URL.Query().Get("retry") != "1" {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"status": "declined",
+				"at":     existing.At,
 			})
 			return
 		}
@@ -141,6 +153,7 @@ func registerCapabilityAPI(mux *http.ServeMux, store *capability.Store) {
 		g := store.Granted(sub)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"persistent":   g.Usable(),
+			"declined":     g.Denied(),
 			"resource_app": driveAppID(),
 			"folder":       storageFolder(),
 		})

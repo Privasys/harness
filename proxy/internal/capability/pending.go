@@ -179,27 +179,37 @@ func (s *Store) Resolve(nonce, status, capabilityID string, result map[string]st
 		At:            time.Now().UTC(),
 	}
 	subject := p.Subject
-	if status == "approved" {
-		s.granted[subject] = g
-	}
+	// A denial is recorded, not discarded. The protocol delivers deny precisely
+	// so the app can STOP ASKING; throwing it away would leave the harness
+	// prompting a user who has already said no, which is the behaviour the
+	// commitment exists to prevent.
+	s.granted[subject] = g
 	s.mu.Unlock()
 
+	// Persist BOTH outcomes. A denial that lived only in memory would be
+	// forgotten on the next redeploy and the user would be asked again —
+	// which is exactly what delivering deny is meant to prevent.
+	if err := s.persist(subject, g); err != nil {
+		// Non-fatal: the outcome holds for this process either way, and failing
+		// the wallet's delivery would leave the holder believing their decision
+		// was lost when it was not.
+		log.Printf("[capability] could not persist the outcome for %.8s… (it holds for this run): %v", subject, err)
+	}
 	if status == "approved" {
-		if err := s.persist(subject, g); err != nil {
-			// Non-fatal: the capability works for this process either way, and
-			// failing the wallet's delivery would leave the holder believing
-			// their approval was lost when it was not.
-			log.Printf("[capability] could not persist the capability for %.8s… (it holds for this run): %v", subject, err)
-		}
 		log.Printf("[capability] APPROVED for %.8s… (id=%s tenant=%s node=%s)",
 			subject, capabilityID, result["tenant_id"], result["node_id"])
 	} else {
-		log.Printf("[capability] denied for %.8s…", subject)
+		log.Printf("[capability] DENIED for %.8s… — storage stays in-enclave and the harness will not ask again", subject)
 	}
 	return g, nil
 }
 
-// Granted returns the capability held for one subject, if any.
+// Denied reports whether this subject has refused, and when. The harness must
+// not re-prompt after a no; only an explicit request from the user reopens it.
+func (g *Granted) Denied() bool { return g != nil && g.Status == "denied" }
+
+// Granted returns the capability record for one subject, if any — approved OR
+// denied. Callers test Usable() for the former and Denied() for the latter.
 func (s *Store) Granted(subject string) *Granted {
 	s.mu.RLock()
 	g, ok := s.granted[subject]
