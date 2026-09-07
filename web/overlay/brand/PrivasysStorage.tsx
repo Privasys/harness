@@ -113,7 +113,7 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
               {persistent
                 ? (
                   <p style={{ fontSize: 13.5 }}>
-                    Your conversations and workspace are saved to <strong>{state.folder ?? 'Harness'}</strong> in
+                    Your conversations and workspace are saved to <strong>{state.folder ?? 'AppData/Harness'}</strong> in
                     your own Drive, under your own keys. They survive this enclave being
                     replaced. You can withdraw access at any time in Drive.
                   </p>
@@ -127,8 +127,8 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
                       work around.
                     </p>
                     <p style={{ fontSize: 13.5 }}>
-                      To keep them, connect your Drive. They are then stored in a folder
-                      called <strong>{state.folder ?? 'Harness'}</strong> in{' '}
+                      To keep them, connect your Drive. They are then stored
+                      under <strong>{state.folder ?? 'AppData/Harness'}</strong> in{' '}
                       <em>your</em> Drive, under your own keys, where this harness can reach
                       that one folder and nothing else — and you can withdraw it at any time
                       in Drive.

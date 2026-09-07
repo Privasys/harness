@@ -19,7 +19,8 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
 
 # ---- dsh at the pin -------------------------------------------------------
 FROM node:22-bookworm AS dsh-builder
-ARG DSH_PIN=d347e703908d0406b7a7ef80e3a0e594d86b2215
+# dsh-v0.1.3-alpha.2 (2026-09-07)
+ARG DSH_PIN=82a5fd61a7cf5c293cec4bdff68f455398d685e9
 RUN corepack enable \
  && git clone https://github.com/deepseek-ai/deepseek-harness /dsh \
  && git -C /dsh checkout "${DSH_PIN}"

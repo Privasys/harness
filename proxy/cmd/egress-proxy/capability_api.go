@@ -38,9 +38,12 @@ func driveAppID() string {
 	return envOr("HARNESS_DRIVE_APP_ID", "cf7a0d585468416884c341ebe0ce4025")
 }
 
-// storageFolder is the folder the harness asks for. A NAME, never a path with
-// an ownership boundary in it: Drive derives the tenant from the authenticated
-// holder and refuses any request that names one.
+// storageFolder is the folder LABEL the harness asks for. A NAME, never a path
+// with an ownership boundary in it: Drive derives the tenant from the
+// authenticated holder and refuses any request that names one. Drive places
+// the folder under AppData/ in the holder's personal tenant and returns the
+// path it chose in service_result.path (the label is suffixed when another app
+// already owns it), so the path is read from the grant, never assumed.
 func storageFolder() string { return envOr("HARNESS_STORAGE_FOLDER", "Harness") }
 
 func registerCapabilityAPI(mux *http.ServeMux, store *capability.Store) {
@@ -151,11 +154,22 @@ func registerCapabilityAPI(mux *http.ServeMux, store *capability.Store) {
 	mux.HandleFunc("GET /privasys/capability/status", func(w http.ResponseWriter, r *http.Request) {
 		sub := r.Header.Get("X-Privasys-Sub")
 		g := store.Granted(sub)
+		// Drive confines app folders to AppData/<label>/ (2026-09-07) and
+		// reports the path it actually chose in service_result.path; the
+		// label can be suffixed on collision, so once granted the reported
+		// path wins over our request. Before a grant exists, the default
+		// confinement is what the user will see.
+		folder := "AppData/" + storageFolder()
+		if g.Usable() {
+			if p := g.ServiceResult["path"]; p != "" {
+				folder = p
+			}
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"persistent":   g.Usable(),
 			"declined":     g.Denied(),
 			"resource_app": driveAppID(),
-			"folder":       storageFolder(),
+			"folder":       folder,
 		})
 	})
 

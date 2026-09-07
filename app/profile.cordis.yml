@@ -56,7 +56,9 @@
     # shell — a claim that would have quietly gone false in the product and in
     # the published article. State the attested part as attested, name the
     # unattested part, and give the agent the operational rule that follows.
-    persona: >-
+    # (dsh 0.1.3-alpha.2 split `persona` into personaPrefix + personaSuffix;
+    # the identity is the prefix, and no suffix is set.)
+    personaPrefix: >-
       You are an agent of the Privasys Harness, running inside a
       hardware-attested confidential enclave. Your model and your attested
       tools run in enclaves over mutually authenticated encrypted channels,
@@ -79,6 +81,18 @@
     printUrl: true
     surfaceContext: false
     trustedHosts: !!js ctx.webStartup.trustedHosts
+
+# "Open in app" (dsh 0.1.3-alpha.2): the web header offers to open the
+# workspace in an editor, IDE or file manager INSTALLED ON THE HOST, probed by
+# the host process. The host is an enclave container with no desktop and the
+# browser is on another machine, so the button could never work and the probe
+# is noise. Both rows (host probe + client UI) are dropped from the web
+# profile; the greenfield rule applies too — no DeepSeek-authored launch
+# surface reaches the user.
+- id: open-in-app
+  disabled: true
+- id: ui-open-in-app
+  disabled: true
 
 # Clock for the agent (dsh injects NO date/time by default). dsh-time-context
 # appends a timestamp message at the ABSOLUTE TAIL of the step batch

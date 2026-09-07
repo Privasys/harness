@@ -1,8 +1,8 @@
 // Apply the Privasys attested-harness web overlay onto a vendored dsh tree.
 //
 // This is the sanctioned patch-queue divergence (D8: extend-don't-fork), rebased
-// for dsh v0.1.2-alpha (the @Remote gateway; the legacy APIProxy/AbstractApiClient
-// was removed). It:
+// for dsh v0.1.3-alpha.2 (persona prefix/suffix split; earlier: the @Remote
+// gateway, the legacy APIProxy/AbstractApiClient removed). It:
 //   1. copies NEW / replaced files (no rebase conflicts):
 //        - apps/web/src/main.ts                    (gated boot)
 //        - apps/web/index.html                     (shell script + roots)
@@ -244,23 +244,31 @@ edit('packages/llm/deepseek-llm-api-extensions/src/index.ts', [
 // --- 2e. preset personas: Privasys identity ---------------------------------
 // Preset dsh-persona rows SHADOW the deployment persona (same section name in
 // the agent scope), so the profile-level Privasys persona never shows in
-// preset sessions — rewrite the preset texts themselves.
-const PRIVASYS_PERSONA =
-  `      You are a coding agent of the Privasys Harness, powered by the {{model}} model running in a hardware-attested confidential enclave. Your working directory is {{cwd}}.`
+// preset sessions — rewrite the preset texts themselves. Since dsh
+// 0.1.3-alpha.2 the persona is split into a `prefix` (identity, rendered as
+// deployment:persona-prefix) and a `suffix` (rendered after first-party
+// guidance); the working-directory line lives in the suffix and is kept as
+// upstream wrote it — only the identity prefix is rebranded.
+const PRIVASYS_PERSONA_PREFIX =
+  `      You are a coding agent of the Privasys Harness, powered by the {{model}} model running in a hardware-attested confidential enclave.`
 for (const preset of ['standard', 'ptc']) {
   edit(`packages/preset/agent-presets/presets/${preset}/agent.cordis.yml`, [
     [
       `preset ${preset} persona rebrand`,
-      `      You are a coding agent powered by the {{model}} model. Your working directory is {{cwd}}.`,
-      PRIVASYS_PERSONA,
+      `    prefix: >-\n` +
+        `      You are a coding agent powered by the {{model}} model.`,
+      `    prefix: >-\n` +
+        PRIVASYS_PERSONA_PREFIX,
     ],
   ])
 }
 edit('packages/preset/agent-presets/presets/cordis/agent.cordis.yml', [
   [
     'preset cordis persona rebrand',
-    `      You are a coding agent powered by the {{model}} model, running on the DeepSeek Harness. Your working directory is {{cwd}}.`,
-    PRIVASYS_PERSONA,
+    `    prefix: |-\n` +
+      `      You are a coding agent powered by the {{model}} model, running on the DeepSeek Harness.`,
+    `    prefix: >-\n` +
+      PRIVASYS_PERSONA_PREFIX,
   ],
 ])
 
