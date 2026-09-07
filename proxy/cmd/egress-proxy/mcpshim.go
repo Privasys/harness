@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 )
 
@@ -90,9 +91,18 @@ func mcpShim(w http.ResponseWriter, r *http.Request, client *http.Client, toolNa
 	case "tools/list":
 		tools, err := fetchCatalogue(r, client, host)
 		if err != nil {
+			// This was SILENT, and it is the failure that matters most: the
+			// catalogue is how a tool acquires its capabilities, so a refusal
+			// here mounts an EMPTY tool set and the agent simply reports
+			// having no such tool — indistinguishable from one nobody
+			// configured. Three rounds of "why is there no Drive tool?" came
+			// down to this line not existing.
+			log.Printf("[mcp %s] CATALOGUE FAILED against %s: %v — the tool will mount with no capabilities",
+				toolName, host, err)
 			rpcError(w, req.ID, -32000, fmt.Sprintf("catalogue: %v", err))
 			return
 		}
+		log.Printf("[mcp %s] catalogue: %d tool(s) from %s", toolName, len(tools), host)
 		out := make([]map[string]any, 0, len(tools))
 		for _, t := range tools {
 			schema := t.InputSchema

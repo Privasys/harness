@@ -512,6 +512,11 @@ put('packages/client/ui-brand-official/src/client/PrivasysAttestation.tsx', 'ove
 // how an honest product acquires a false badge. Reads the measured proxy's
 // /privasys/policy and /privasys/egress-log, same-origin.
 put('packages/client/ui-brand-official/src/client/PrivasysPolicy.tsx', 'overlay/brand/PrivasysPolicy.tsx')
+// The storage row: where this user's sessions are kept, and the only place they
+// can ask for them to live in their own Drive. A sidebar row rather than a
+// modal, because the commitment is a NON-BLOCKING banner — nobody mid-task
+// should be interrupted to decide about storage.
+put('packages/client/ui-brand-official/src/client/PrivasysStorage.tsx', 'overlay/brand/PrivasysStorage.tsx')
 put('apps/web/public/privasys/privasys-attestation.css', 'vendor/privasys-attestation.css')
 
 // --- 2g. greenfield content: no DeepSeek-authored text reaches user or model

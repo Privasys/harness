@@ -15,6 +15,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import { OfficialBrandMark, OfficialBrandName } from './Brand.tsx'
 import { PrivasysUserRow } from './PrivasysRows.tsx'
 import { PrivasysAttestationRow } from './PrivasysAttestation.tsx'
+import { PrivasysStorageRow } from './PrivasysStorage.tsx'
 
 /** Required service: the UI slot registry. */
 export const inject = ['slots']
@@ -34,6 +35,10 @@ export function apply(ctx: ClientContext): void {
         yield ctx.slots.register(
           { name: 'sidebar.footer.action', id: 'privasys-attestation' },
           PrivasysAttestationRow,
+        )
+        yield ctx.slots.register(
+          { name: 'sidebar.footer.action', id: 'privasys-storage' },
+          PrivasysStorageRow,
         )
         yield ctx.slots.register(
           { name: 'sidebar.footer.action', id: 'privasys-user' },
