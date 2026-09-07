@@ -1,0 +1,16 @@
+# Boot-smoke overlay: the model-leg check must leave NOTHING in the user's
+# session list.
+#
+# The smoke runs one headless turn to prove the attested model leg works. With
+# the deployment profile it wrote that turn into the real session store, so
+# every boot left a visible "Reply with exactly: ONPLATFORM MODEL OK" session
+# in the user's history — and, because the smoke runs before the entrypoint
+# cd's to /data/workspace, it also created a workspace rooted at the WORKDIR
+# (/dsh), i.e. inside the harness source tree. A user opening a fresh harness
+# saw a "dsh" workspace and someone else's prompt.
+#
+# Applied AFTER the deployment profile, so it overrides only the session root.
+- id: session-persistence-jsonl
+  name: "@deepseek-ai/dsh-session-persistence-jsonl"
+  config:
+    root: /tmp/boot-smoke-sessions

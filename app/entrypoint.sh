@@ -156,8 +156,14 @@ export no_proxy="${NO_PROXY}"
 # the web server. Skipped when HARNESS_SKIP_BOOT_SMOKE is set.
 if [[ -z "${HARNESS_SKIP_BOOT_SMOKE:-}" ]]; then
   echo "[harness] boot smoke: headless model turn -> ${HARNESS_MODEL_HOST}"
-  SMOKE=$(timeout 240 node /dsh/apps/cli/lib/bin.js --profile headless \
-    --patch /app/profile.cordis.yml \
+  # From the WORKSPACE, and with the smoke's own session root. Running from the
+  # WORKDIR (/dsh) made the smoke's session a workspace INSIDE the harness
+  # source tree, and writing to the real store left its prompt sitting in the
+  # user's history on every boot — a fresh harness opened showing a "dsh"
+  # workspace and somebody else's conversation. A fresh harness must look fresh.
+  mkdir -p /data/workspace
+  SMOKE=$(cd /data/workspace && timeout 240 node /dsh/apps/cli/lib/bin.js --profile headless \
+    --patch /app/profile.cordis.yml --patch /app/smoke.cordis.yml \
     "Reply with exactly: ONPLATFORM MODEL OK. Do not use any tools." 2>&1 | tail -3 || true)
   if grep -q "ONPLATFORM MODEL OK" <<<"$SMOKE"; then
     echo "[harness] boot smoke PASS: on-platform model leg attested + serving"

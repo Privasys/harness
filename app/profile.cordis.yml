@@ -103,3 +103,21 @@
 # here: preset rows are what the Settings "Plugins" inventory lists as session
 # plugins, and the preset layer is where per-preset activation lives (see
 # apply-overlay.mjs §2c — the rows replace the removed built-in tool-web).
+
+# Sessions on the ENCRYPTED VOLUME, not the container layer.
+#
+# The stock bundle roots the JSONL session store at dshHomePath('sessions') —
+# $DSH_HOME/sessions, i.e. /dsh-home/sessions, which is baked into the image
+# and therefore lives in the container's writable layer. Every redeploy threw
+# away every conversation, silently: the only visible symptom was a session
+# list that kept starting empty, which reads as "new enclave" rather than
+# "your history was deleted". (The Dockerfile comment claiming this row already
+# existed was wrong; it never did.)
+#
+# /data is the LUKS volume that survives redeploys, and already holds the
+# workspace and skills. Until sessions move to the user's Drive under their own
+# keys (D6', the capability work), this is where they belong.
+- id: session-persistence-jsonl
+  name: "@deepseek-ai/dsh-session-persistence-jsonl"
+  config:
+    root: /data/sessions

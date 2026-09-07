@@ -116,6 +116,7 @@ COPY --from=dsh-builder /dsh /dsh
 COPY --from=dsh-builder /dsh-home /dsh-home
 COPY --from=proxy-builder /egress-proxy /usr/local/bin/egress-proxy
 COPY app/profile.cordis.yml /app/profile.cordis.yml
+COPY app/smoke.cordis.yml /app/smoke.cordis.yml
 # The service ceiling, IN THE IMAGE and therefore in the measurement. The
 # proxy also publishes its digest at OID 5.4.9, but baking it here gives the
 # stronger property: the code hash already commits to this posture, so a
@@ -126,8 +127,9 @@ COPY app/ceiling.json /app/ceiling.json
 COPY app/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 # The measured web profile (plugins + frontend) is baked at /dsh-home. Only
-# sessions/settings persist, on the encrypted volume — the overlay points
-# session persistence at /data (see profile.cordis.yml).
+# sessions/settings persist, on the encrypted volume — profile.cordis.yml roots
+# the JSONL session store at /data/sessions (the stock bundle roots it at
+# $DSH_HOME/sessions, i.e. the container layer, where a redeploy destroys it).
 ENV DSH_HOME=/dsh-home
 # Fixed attested topology — the harness always calls Confidential AI and the
 # platform tool apps; the 6.1 DepSet + allowed_callers enforce the actual
