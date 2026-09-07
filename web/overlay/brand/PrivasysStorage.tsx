@@ -12,11 +12,16 @@
  *      that nonce and this host, and everything else the wallet learns from the
  *      attested fetch.
  *
- * Deliberately a sidebar row rather than a modal over the conversation: a
- * person mid-task should not be interrupted to make a decision about storage,
- * and "non-blocking" was the commitment. It states the current truth at all
- * times — in-enclave only, saved to your Drive, or declined — so the answer to
- * "where are my sessions?" is always one glance away rather than a support
+ * NOT an option with two acceptable answers. The harness enclave holds no user
+ * data: the session root is a tmpfs that dies with the container, so without a
+ * Drive nothing is kept at all. The row says SETUP IS INCOMPLETE, never that a
+ * preference is unset — an earlier version of this file offered "not saved to
+ * your Drive" as though staying in the enclave were a legitimate resting place,
+ * which inverted the whole data model.
+ *
+ * Still a sidebar row rather than a modal: non-blocking was the commitment, and
+ * nobody mid-task should be interrupted. It states the current truth at all
+ * times, so "where are my sessions?" is a glance rather than a support
  * question.
  */
 import { useEffect, useState } from 'react'
@@ -71,10 +76,11 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
 
   const persistent = state.persistent === true
   const declined = state.declined === true
-  const label = persistent
-    ? 'Saved to your Drive'
-    : declined ? 'Kept in this enclave' : 'Not saved to your Drive'
-  const colour = persistent ? '#059669' : declined ? 'inherit' : '#d97706'
+  // Not an option with two acceptable answers. Without a Drive this harness
+  // cannot keep anything: the session root is a tmpfs and dies with the
+  // container. The row says setup is incomplete, not that a preference is unset.
+  const label = persistent ? 'Saved to your Drive' : 'Connect your Drive'
+  const colour = persistent ? '#059669' : '#d97706' 
 
   return (
     <>
@@ -84,7 +90,7 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
         style={{ color: colour }}
         title={persistent
           ? 'Your sessions are stored in your own Drive'
-          : 'Your sessions are kept inside this enclave and are lost if it is replaced'}
+          : 'This harness cannot keep your sessions until you connect your Drive'}
         aria-label="Session storage"
         onClick={() => { setOpen(true) }}
       >
@@ -115,15 +121,17 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
                 : (
                   <>
                     <p style={{ fontSize: 13.5 }}>
-                      Your conversations are currently kept <strong>inside this enclave only</strong>.
-                      They are on encrypted storage, but if this enclave is replaced or
-                      redeployed they are gone.
+                      This harness keeps <strong>no copy of your data</strong>. Your
+                      conversations are held in memory for as long as this enclave runs and
+                      are gone the moment it stops — that is deliberate, not a limitation to
+                      work around.
                     </p>
                     <p style={{ fontSize: 13.5 }}>
-                      You can keep them in your own Drive instead — in a folder called{' '}
-                      <strong>{state.folder ?? 'Harness'}</strong>, under your own keys. The
-                      harness gets access to that one folder and nothing else, and you can
-                      withdraw it at any time in Drive.
+                      To keep them, connect your Drive. They are then stored in a folder
+                      called <strong>{state.folder ?? 'Harness'}</strong> in{' '}
+                      <em>your</em> Drive, under your own keys, where this harness can reach
+                      that one folder and nothing else — and you can withdraw it at any time
+                      in Drive.
                     </p>
                     {declined
                       ? (
@@ -135,7 +143,7 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
                     <button type="button" className="pv-row" style={{ width: 'auto', marginTop: 8 }}
                       disabled={busy}
                       onClick={() => { request(declined) }}>
-                      {busy ? 'Preparing…' : declined ? 'Ask me again' : 'Save my sessions to my Drive'}
+                      {busy ? 'Preparing…' : declined ? 'Ask me again' : 'Connect my Drive'}
                     </button>
                   </>
                 )}

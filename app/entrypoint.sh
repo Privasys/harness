@@ -71,6 +71,51 @@ export HARNESS_APP_ID="${PRIVASYS_APP_ID:-590ebdc3-1b63-401f-bbb8-22d5f3886c5e}"
 # configured ?? env ?? defaultDshHome()), so the measured profiles do not move.
 mkdir -p /data/workspace
 export HOME=/data/workspace
+
+# --- the session root must be MEMORY, never this enclave's disk -------------
+# The harness holds no durable user data. /data is encrypted and per-enclave,
+# but it is still the operator's enclave keeping the user's transcripts, and
+# D6' puts the durable home on the user's own Drive. So sessions live on a
+# tmpfs for the life of the container and are mirrored to Drive continuously.
+#
+# We cannot CREATE one: this container is uid 0 without CAP_SYS_ADMIN, so
+# mount(2) is refused (the same restriction that shaped the bwrap profile).
+# Pick an existing tmpfs instead, and if there is genuinely none, fail the boot
+# rather than quietly writing conversations to disk - silently degrading the
+# data model is exactly the class of bug this change is correcting.
+SESSION_ROOT=""
+for cand in /dev/shm /run /tmp; do
+  [[ -d "$cand" ]] || continue
+  if [[ "$(stat -f -c %T "$cand" 2>/dev/null)" == "tmpfs" ]]; then
+    SESSION_ROOT="${cand}/privasys-sessions"
+    SESSION_ROOT_KB="$(df -k --output=size "$cand" 2>/dev/null | tail -1 | tr -d ' ')"
+    echo "[harness] session root: ${SESSION_ROOT} (tmpfs on ${cand}, ${SESSION_ROOT_KB:-?} KiB)"
+    break
+  fi
+done
+if [[ -z "$SESSION_ROOT" ]]; then
+  echo "[harness] ERROR: no tmpfs available for the session root. Refusing to start:"
+  echo "[harness]        writing conversations to this enclave's disk is the data model"
+  echo "[harness]        this build exists to prevent. Checked /dev/shm, /run, /tmp."
+  exit 1
+fi
+mkdir -p "$SESSION_ROOT"
+export HARNESS_SESSION_ROOT="$SESSION_ROOT"
+# dsh reads its root from the composition, so hand the resolved path to the
+# profile as a later patch (patches apply in order; this overrides the
+# non-durable default in profile.cordis.yml).
+printf -- '- id: session-persistence-jsonl
+  name: "@deepseek-ai/dsh-session-persistence-jsonl"
+  config:
+    root: %s
+'   "$SESSION_ROOT" > /run/session-root.cordis.yml
+# A store from before this change is no longer read. Say so rather than
+# leaving the user to wonder where their history went, and do not delete it:
+# it is their data, and deleting it is their call, not this script's.
+if [[ -d /data/sessions ]] && [[ -n "$(ls -A /data/sessions 2>/dev/null)" ]]; then
+  echo "[harness] NOTE: /data/sessions holds a legacy on-enclave store and is no longer read."
+  echo "[harness]       Sessions now live in memory and on your Drive. Clear it when ready."
+fi
 # Hand the environment to the browser shell: privasys-shell.js merges
 # window.__PRIVASYS_CFG__ over its dev defaults (its documented seam).
 DIST_INDEX=/dsh/apps/web/dist/index.html
@@ -220,5 +265,6 @@ mkdir -p /data/skills
 cd /data/workspace
 
 echo "[harness] dsh web (compiled) on 127.0.0.1:${DSH_PORT}, proxy fronts 0.0.0.0:${PORT} (pid ${PROXY_PID}, trusted-host ${HARNESS_PUBLIC_HOST:-none})"
-exec node /dsh/apps/cli/lib/bin.js --profile web --patch /app/profile.cordis.yml \
+exec node /dsh/apps/cli/lib/bin.js --profile web \
+  --patch /app/profile.cordis.yml --patch /run/session-root.cordis.yml \
   -- --no-open "${TRUST[@]}"

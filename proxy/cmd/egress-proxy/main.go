@@ -287,12 +287,16 @@ func main() {
 	// as upstream wrote it; this carries the bytes out to where they belong.
 	capability.SetSubjectSource(currentSubject)
 	syncer := capability.NewSyncer(capStore, capIdentity, client, cfg.toolHosts["drive"],
-		envOr("HARNESS_SESSION_ROOT", "/data/sessions"))
+		envOr("HARNESS_SESSION_ROOT", "/dev/shm/privasys-sessions"))
 	syncer.LoadState()
 	if err := syncer.Restore(); err != nil {
 		log.Printf("[sync] restore skipped: %v", err)
 	}
-	syncer.Start(time.Minute)
+	// 15s, not a minute. The session root is now MEMORY: anything not yet
+	// mirrored is lost if the container dies, so the interval IS the exposure
+	// window. Uploads are content-addressed, so a quiet harness still sends
+	// nothing — the cost of the shorter tick is a directory walk.
+	syncer.Start(15 * time.Second)
 	registerSyncAPI(mux, syncer)
 
 	// The governed fast path for everything that is not an attested peer
