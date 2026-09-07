@@ -136,10 +136,14 @@ type Node struct {
 	Size int64  `json:"size"`
 }
 
-// List returns the folder's direct children.
-func (d *DriveStore) List() ([]Node, error) {
+// List returns the approved folder's direct children.
+func (d *DriveStore) List() ([]Node, error) { return d.ListIn(d.nodeID()) }
+
+// ListIn returns one folder's direct children. The node must be at or under
+// the granted folder; Drive enforces that, not this code.
+func (d *DriveStore) ListIn(nodeID string) ([]Node, error) {
 	u := fmt.Sprintf("https://%s/v1/tenants/%s/folders/%s",
-		d.host, url.PathEscape(d.tenantID()), url.PathEscape(d.nodeID()))
+		d.host, url.PathEscape(d.tenantID()), url.PathEscape(nodeID))
 	req, err := http.NewRequest(http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
@@ -178,6 +182,47 @@ func (d *DriveStore) List() ([]Node, error) {
 	return nil, nil
 }
 
+// EnsureFolder returns the id of a child folder, creating it when absent.
+// Subfolders of the granted node are inside the granted subtree, so the same
+// write scope admits them — which is what lets stored sessions keep dsh's own
+// project/session shape instead of being flattened into one directory.
+func (d *DriveStore) EnsureFolder(parentID, name string) (string, error) {
+	children, err := d.ListIn(parentID)
+	if err != nil {
+		return "", err
+	}
+	for _, c := range children {
+		if c.Name == name {
+			return c.ID, nil
+		}
+	}
+	body, _ := json.Marshal(map[string]string{"parent_id": parentID, "name": name})
+	u := fmt.Sprintf("https://%s/v1/tenants/%s/folders", d.host, url.PathEscape(d.tenantID()))
+	req, err := http.NewRequest(http.MethodPost, u, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := d.do(req, []string{"read", "write"})
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		return "", driveError("create folder "+name, resp)
+	}
+	var n Node
+	if err := json.NewDecoder(resp.Body).Decode(&n); err != nil {
+		return "", fmt.Errorf("capability: folder %q created but its id could not be read: %w", name, err)
+	}
+	return n.ID, nil
+}
+
+// PutIn writes one file into a named parent folder.
+func (d *DriveStore) PutIn(parentID, name string, data []byte) (string, error) {
+	return d.put(parentID, name, data)
+}
+
 // Put writes one file into the approved folder, replacing any file of the
 // same name.
 //
@@ -185,9 +230,13 @@ func (d *DriveStore) List() ([]Node, error) {
 // searchable. Indexing them would push conversation text through the embedding
 // pipeline and into the RAG surface without anyone choosing that.
 func (d *DriveStore) Put(name string, data []byte) (string, error) {
+	return d.put(d.nodeID(), name, data)
+}
+
+func (d *DriveStore) put(parentID, name string, data []byte) (string, error) {
 	u := fmt.Sprintf("https://%s/v1/tenants/%s/files?name=%s&parent_id=%s&mime=%s&index=false",
 		d.host, url.PathEscape(d.tenantID()), url.QueryEscape(name),
-		url.QueryEscape(d.nodeID()), url.QueryEscape("application/json"))
+		url.QueryEscape(parentID), url.QueryEscape("application/octet-stream"))
 	req, err := http.NewRequest(http.MethodPost, u, bytes.NewReader(data))
 	if err != nil {
 		return "", err

@@ -275,6 +275,19 @@ func main() {
 	// and an unattested connection would silently get the weaker key-only check.
 	registerStorageAPI(mux, capStore, capIdentity, client, cfg.toolHosts["drive"])
 
+	// Mirror the session store into the holder's approved Drive folder. dsh keeps
+	// its own JSONL store (single-writer, torn-tail recovery, revisions) exactly
+	// as upstream wrote it; this carries the bytes out to where they belong.
+	capability.SetSubjectSource(currentSubject)
+	syncer := capability.NewSyncer(capStore, capIdentity, client, cfg.toolHosts["drive"],
+		envOr("HARNESS_SESSION_ROOT", "/data/sessions"))
+	syncer.LoadState()
+	if err := syncer.Restore(); err != nil {
+		log.Printf("[sync] restore skipped: %v", err)
+	}
+	syncer.Start(time.Minute)
+	registerSyncAPI(mux, syncer)
+
 	// The governed fast path for everything that is not an attested peer
 	// call. Started before ingress so the shell's HTTP_PROXY is answerable
 	// from the moment dsh accepts a turn.
