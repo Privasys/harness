@@ -35,7 +35,7 @@ import (
 // image environment; it is also a declared dependency, so the same identity is
 // pinned in OID 7.1.
 func driveAppID() string {
-	return envOr("HARNESS_DRIVE_APP_ID", "82cb3965811d4ad298cac29e4837fd45")
+	return envOr("HARNESS_DRIVE_APP_ID", "cf7a0d585468416884c341ebe0ce4025")
 }
 
 // storageFolder is the folder the harness asks for. A NAME, never a path with

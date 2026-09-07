@@ -22,9 +22,9 @@
 
   "tools": {
     "attested": [
-      { "name": "web_search", "app_id": "cf7a0d585468416884c341ebe0ce4025" },
+      { "name": "web_search", "app_id": "82cb3965811d4ad298cac29e4837fd45" },
       { "name": "web_reader", "app_id": "09965ab93f2e480ea0417cce438f0696" },
-      { "name": "drive",      "app_id": "82cb3965811d4ad298cac29e4837fd45" }
+      { "name": "drive",      "app_id": "cf7a0d585468416884c341ebe0ce4025" }
     ]
   },
 
