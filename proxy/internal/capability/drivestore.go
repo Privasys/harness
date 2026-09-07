@@ -1,0 +1,243 @@
+// Copyright (c) Privasys. All rights reserved.
+// Licensed under the GNU Affero General Public License v3.0.
+
+package capability
+
+// Exercising an approved capability: reading and writing the holder's own
+// Drive folder with a token minted by the sealed key they bound.
+//
+// Two properties make this safe, and both are enforced on Drive's side:
+//
+//   - The token is a holder-of-key capability. Drive checks the embedded
+//     public key against the binding the holder fixed at approval, so only
+//     this enclave — which alone has the private half — can use the grant.
+//   - The calls go out over the proxy's ATTESTED client identity. Drive then
+//     also matches the enclave-os-verified peer app id against the grant's
+//     subject, so a leaked key presented by a different app is refused. That
+//     is why storage must ride the attested leg rather than opening its own
+//     client: on an unattested connection Drive falls back to the key-only
+//     check, which is strictly weaker.
+//
+// Scope is never widened here. The token requests exactly the permissions the
+// holder saw on their approval screen; Drive independently confirms the grant
+// carries them and that the node is inside the granted subtree.
+
+import (
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+)
+
+const (
+	grantIssuer   = "https://privasys.id"
+	grantAudience = "privasys-drive"
+	// tokenTTL is deliberately short. The capability lives for as long as the
+	// holder allowed; a TOKEN is a single working credential and there is no
+	// reason for one to outlive the call it was minted for.
+	tokenTTL = 5 * time.Minute
+)
+
+// envelope mirrors grants.Envelope on Drive's side. Field names and the
+// signing input (the marshalled JSON) must match exactly, or the signature
+// fails to verify.
+type envelope struct {
+	Iss   string   `json:"iss"`
+	Aud   string   `json:"aud"`
+	Sub   string   `json:"sub"`  // tenant id
+	Node  string   `json:"node"` // node id
+	Scope []string `json:"scope"`
+	MRTD  string   `json:"mrtd"`
+	JTI   string   `json:"jti"` // the grant id, for revocation lookup
+	Iat   int64    `json:"iat"`
+	Exp   int64    `json:"exp"`
+	PK    string   `json:"pk"` // base64 ed25519 public key
+}
+
+// DriveStore performs file operations inside one approved folder.
+//
+// The caller supplies an http.Client whose transport is the proxy's attested
+// RA-TLS client — see the package comment for why that is not optional.
+type DriveStore struct {
+	client   *http.Client
+	host     string
+	identity *Identity
+	granted  *Granted
+}
+
+// NewDriveStore binds a store to one holder's approved capability.
+func NewDriveStore(client *http.Client, host string, id *Identity, g *Granted) (*DriveStore, error) {
+	if !g.Usable() {
+		return nil, errors.New("capability: no usable storage capability for this user")
+	}
+	return &DriveStore{client: client, host: host, identity: id, granted: g}, nil
+}
+
+func (d *DriveStore) tenantID() string { return d.granted.ServiceResult["tenant_id"] }
+func (d *DriveStore) nodeID() string   { return d.granted.ServiceResult["node_id"] }
+
+// grantID is the token's jti and Drive's revocation lookup key. Drive returns
+// it in service_result; older records may carry only capability_id, which is
+// the same value.
+func (d *DriveStore) grantID() string {
+	if g := d.granted.ServiceResult["grant_id"]; g != "" {
+		return g
+	}
+	return d.granted.CapabilityID
+}
+
+// token mints a short-lived AppGrant credential for the requested scopes.
+func (d *DriveStore) token(scopes []string) (string, error) {
+	now := time.Now().UTC()
+	env := envelope{
+		Iss:   grantIssuer,
+		Aud:   grantAudience,
+		Sub:   d.tenantID(),
+		Node:  d.nodeID(),
+		Scope: scopes,
+		JTI:   d.grantID(),
+		Iat:   now.Unix(),
+		Exp:   now.Add(tokenTTL).Unix(),
+		PK:    d.identity.PublicKeyB64(),
+	}
+	body, err := json.Marshal(env)
+	if err != nil {
+		return "", err
+	}
+	sig, err := d.identity.Sign(body)
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(body) + "." +
+		base64.RawURLEncoding.EncodeToString(sig), nil
+}
+
+func (d *DriveStore) do(req *http.Request, scopes []string) (*http.Response, error) {
+	tok, err := d.token(scopes)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "AppGrant "+tok)
+	req.Host = d.host
+	return d.client.Do(req)
+}
+
+// Node describes one entry in the approved folder.
+type Node struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Kind string `json:"kind"`
+	Size int64  `json:"size"`
+}
+
+// List returns the folder's direct children.
+func (d *DriveStore) List() ([]Node, error) {
+	u := fmt.Sprintf("https://%s/v1/tenants/%s/folders/%s",
+		d.host, url.PathEscape(d.tenantID()), url.PathEscape(d.nodeID()))
+	req, err := http.NewRequest(http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := d.do(req, []string{"read"})
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, driveError("list", resp)
+	}
+	// Drive's folder listing has carried more than one envelope shape over
+	// time; accept a bare array or a wrapper rather than coupling to one.
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return nil, err
+	}
+	var direct []Node
+	if json.Unmarshal(raw, &direct) == nil && direct != nil {
+		return direct, nil
+	}
+	var wrapped struct {
+		Nodes    []Node `json:"nodes"`
+		Children []Node `json:"children"`
+		Entries  []Node `json:"entries"`
+	}
+	if err := json.Unmarshal(raw, &wrapped); err != nil {
+		return nil, fmt.Errorf("capability: unrecognised folder listing: %w", err)
+	}
+	for _, set := range [][]Node{wrapped.Nodes, wrapped.Children, wrapped.Entries} {
+		if len(set) > 0 {
+			return set, nil
+		}
+	}
+	return nil, nil
+}
+
+// Put writes one file into the approved folder, replacing any file of the
+// same name.
+//
+// `index=false`: these are session logs, not documents the holder asked to be
+// searchable. Indexing them would push conversation text through the embedding
+// pipeline and into the RAG surface without anyone choosing that.
+func (d *DriveStore) Put(name string, data []byte) (string, error) {
+	u := fmt.Sprintf("https://%s/v1/tenants/%s/files?name=%s&parent_id=%s&mime=%s&index=false",
+		d.host, url.PathEscape(d.tenantID()), url.QueryEscape(name),
+		url.QueryEscape(d.nodeID()), url.QueryEscape("application/json"))
+	req, err := http.NewRequest(http.MethodPost, u, bytes.NewReader(data))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	resp, err := d.do(req, []string{"read", "write"})
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return "", driveError("upload "+name, resp)
+	}
+	var n Node
+	if err := json.NewDecoder(resp.Body).Decode(&n); err != nil {
+		return "", nil // stored; the id is a convenience, not a requirement
+	}
+	return n.ID, nil
+}
+
+// Get reads one file by its node id.
+func (d *DriveStore) Get(fileID string) ([]byte, error) {
+	u := fmt.Sprintf("https://%s/v1/tenants/%s/files/%s",
+		d.host, url.PathEscape(d.tenantID()), url.PathEscape(fileID))
+	req, err := http.NewRequest(http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := d.do(req, []string{"read"})
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, driveError("download", resp)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+}
+
+// driveError turns a Drive refusal into a sentence worth reading. A 403 here
+// almost always means one of three things, and naming them saves the next
+// person the investigation.
+func driveError(op string, resp *http.Response) error {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+	msg := strings.TrimSpace(string(body))
+	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("capability: Drive refused %s (HTTP %d: %s) — the capability may have been "+
+			"revoked or expired, the call may not be riding the attested client identity (Drive then "+
+			"matches the peer app id against the grant subject), or the target may be outside the "+
+			"granted folder", op, resp.StatusCode, msg)
+	}
+	return fmt.Errorf("capability: Drive %s failed (HTTP %d: %s)", op, resp.StatusCode, msg)
+}

@@ -270,6 +270,10 @@ func main() {
 		log.Fatalf("[capability] %v", err)
 	}
 	capStore := capability.NewStore(envOr("HARNESS_POLICY_DIR", "/data/policy"), capIdentity)
+	// The storage leg rides the ATTESTED client (same transport as the tool
+	// shims): Drive matches the verified peer app id against the grant subject,
+	// and an unattested connection would silently get the weaker key-only check.
+	registerStorageAPI(mux, capStore, capIdentity, client, cfg.toolHosts["drive"])
 
 	// The governed fast path for everything that is not an attested peer
 	// call. Started before ingress so the shell's HTTP_PROXY is answerable
