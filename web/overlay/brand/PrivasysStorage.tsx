@@ -72,7 +72,12 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
   const refresh = (): void => {
     void pvFetch('/privasys/capability/status')
       .then(async r => (r.ok ? await r.json() : undefined))
-      .then(d => { setState(d ?? {}) }, () => { setState({}) })
+      .then(d => {
+        setState(d ?? {})
+        // The ask is over once the runtime reports the grant: drop the
+        // "approve on your device" box rather than leaving the user on it.
+        if (d?.persistent === true) setAsk(undefined)
+      }, () => { setState({}) })
   }
   useEffect(refresh, [])
 
@@ -160,7 +165,7 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
                   </>
                 )}
 
-              {ask?.nonce
+              {ask?.nonce && !persistent
                 ? (
                   <div style={{ marginTop: 14, border: '1px solid #e5e7eb', borderRadius: 8, padding: '10px 12px' }}>
                     <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>Approve on your device</div>
