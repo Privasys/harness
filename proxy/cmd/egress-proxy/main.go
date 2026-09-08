@@ -128,6 +128,12 @@ func forward(w http.ResponseWriter, r *http.Request, client *http.Client, host, 
 		return
 	}
 	req.Header = r.Header.Clone()
+	if forwardableAuthorization(r) == "" {
+		req.Header.Del("Authorization") // a worker's bearer never leaves this proxy
+	}
+	// A body the proxy rewrote (sampling.go) or one dsh sent with a known
+	// length travels with that length; only an unknown length is chunked.
+	req.ContentLength = r.ContentLength
 	// The plugin-to-proxy hop is loopback: upstream compression only turns
 	// the SSE stream into opaque bytes the repro scanner (and any future
 	// in-proxy policy) cannot read. Plaintext end-to-end.
@@ -163,7 +169,7 @@ func forward(w http.ResponseWriter, r *http.Request, client *http.Client, host, 
 			r.Method, host, path, resp.StatusCode)
 	}
 	if repro && strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
-		body = newReproScanBody(resp.Body)
+		body = newReproScanBody(resp.Body, modelCallOf(r))
 	}
 	for k, vs := range resp.Header {
 		for _, v := range vs {
@@ -234,7 +240,13 @@ func main() {
 			if sub != "" {
 				r.Header.Set("X-Privasys-On-Behalf-Of", sub)
 			}
+		} else if forwardableAuthorization(r) == "" {
+			r.Header.Del("Authorization") // a worker's bearer never leaves this proxy
 		}
+		// The user's sampling pins and any armed replay ride the request
+		// (sampling.go); the call record they produce annotates the
+		// reproducibility trailer on the way back.
+		r = prepareModelCall(r, sampling, sub)
 		forward(w, r, client, cfg.modelHost, strings.TrimPrefix(r.URL.Path, "/model"), true)
 	})
 	mux.HandleFunc("/tool/", func(w http.ResponseWriter, r *http.Request) {
@@ -531,6 +543,9 @@ func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp 
 		toolNames = append(toolNames, name)
 	}
 	registerSpendAPI(mux, store, meter, toolNames)
+	// Per-session sampling pins and faithful replay (sampling.go); read and
+	// written by the chat UI over the sealed session, applied on the model leg.
+	registerSamplingAPI(mux, sampling)
 	if mgr != nil {
 		// Operators' view of the workers (no subjects, only keys).
 		mux.HandleFunc("GET /privasys/workers", func(w http.ResponseWriter, _ *http.Request) {

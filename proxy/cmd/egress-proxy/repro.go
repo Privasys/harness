@@ -61,15 +61,20 @@ func logRepro(where string, raw json.RawMessage) {
 }
 
 // reproScanBody wraps an SSE response body: it streams every byte through
-// unchanged while watching for the trailing `data: {"reproducibility":...}`
-// frame and logging it when seen. Line-oriented (SSE frames are lines); a
-// line longer than the scanner buffer passes through unscanned rather than
-// failing the stream.
+// while watching for the trailing `data: {"reproducibility":...}` frame. That
+// one frame is logged and, when the request carried a call record
+// (sampling.go), rewritten to carry the proxy's `harness` annotation — the
+// prompt digest, the pins applied, the replay verdict — so the block dsh
+// folds into its session log is the whole story of the call, not only what
+// Confidential AI could see. Every other byte passes unchanged.
+// Line-oriented (SSE frames are lines); a line longer than the scanner
+// buffer passes through unscanned rather than failing the stream.
 type reproScanBody struct {
 	rc     io.ReadCloser
 	br     *bufio.Reader
 	buf    []byte // current line remainder being served to the caller
 	logged bool
+	call   *modelCall
 	// lossyFound bounds the dsh-v2 lossless diagnostic (see lossyKeys) to a
 	// few findings per response so a long stream cannot flood the log.
 	lossyFound int
@@ -77,16 +82,15 @@ type reproScanBody struct {
 	toolFound int
 }
 
-func newReproScanBody(rc io.ReadCloser) *reproScanBody {
-	return &reproScanBody{rc: rc, br: bufio.NewReaderSize(rc, 64<<10)}
+func newReproScanBody(rc io.ReadCloser, call *modelCall) *reproScanBody {
+	return &reproScanBody{rc: rc, br: bufio.NewReaderSize(rc, 64<<10), call: call}
 }
 
 func (b *reproScanBody) Read(p []byte) (int, error) {
 	if len(b.buf) == 0 {
 		line, err := b.br.ReadBytes('\n')
 		if len(line) > 0 {
-			b.scan(line)
-			b.buf = line
+			b.buf = b.scan(line)
 		}
 		if len(b.buf) == 0 {
 			return 0, err
@@ -97,13 +101,15 @@ func (b *reproScanBody) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-func (b *reproScanBody) scan(line []byte) {
+// scan inspects one SSE line and returns the line to serve: the same bytes,
+// or the reproducibility frame with the harness annotation folded in.
+func (b *reproScanBody) scan(line []byte) []byte {
 	if b.logged {
-		return
+		return line
 	}
 	s := strings.TrimSpace(string(line))
 	if !strings.HasPrefix(s, "data:") {
-		return
+		return line
 	}
 	payload := strings.TrimSpace(strings.TrimPrefix(s, "data:"))
 	// dsh session-format-v2 diagnostic: report chunks carrying a value the
@@ -162,16 +168,41 @@ func (b *reproScanBody) scan(line []byte) {
 		}
 	}
 	if !strings.Contains(payload, `"reproducibility"`) {
-		return
+		return line
 	}
 	var frame struct {
 		Reproducibility json.RawMessage `json:"reproducibility"`
 	}
 	if err := json.Unmarshal([]byte(payload), &frame); err != nil || frame.Reproducibility == nil {
-		return
+		return line
 	}
 	logRepro("stream", frame.Reproducibility)
 	b.logged = true
+	if b.call == nil {
+		return line
+	}
+	return annotateReproFrame(line, payload, b.call)
+}
+
+// annotateReproFrame merges the call's `harness` annotation into the
+// reproducibility object of one SSE data line. A frame that does not decode
+// as an object is served unchanged: a lost annotation is a lesser fault than
+// a broken stream.
+func annotateReproFrame(line []byte, payload string, call *modelCall) []byte {
+	var frame map[string]any
+	if err := json.Unmarshal([]byte(payload), &frame); err != nil {
+		return line
+	}
+	repro, ok := frame["reproducibility"].(map[string]any)
+	if !ok {
+		return line
+	}
+	repro["harness"] = call.annotation()
+	out, err := json.Marshal(frame)
+	if err != nil {
+		return line
+	}
+	return append(append([]byte("data: "), out...), '\n')
 }
 
 // lossyKeys reports the JSON key paths in one SSE payload whose numeric value

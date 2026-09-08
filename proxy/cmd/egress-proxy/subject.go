@@ -104,6 +104,24 @@ func subjectOfEgress(r *http.Request) string {
 	return ""
 }
 
+// forwardableAuthorization returns the caller's Authorization header when it
+// is a credential to carry upstream, and "" when it is a worker's own bearer:
+// that token names the worker to THIS proxy and must never leave it. A tool
+// app receiving it would (rightly) refuse it as a malformed token, and the
+// attested peer identity plus X-Privasys-On-Behalf-Of is the credential the
+// on-platform legs actually use.
+func forwardableAuthorization(r *http.Request) string {
+	auth := r.Header.Get("Authorization")
+	if auth == "" || workerMgr == nil {
+		return auth
+	}
+	tok := strings.TrimSpace(strings.TrimPrefix(auth, "Bearer"))
+	if workerMgr.ByToken(tok) != nil {
+		return ""
+	}
+	return auth
+}
+
 // subjectOfShell names the user behind a shell egress connection (the
 // forward proxy): the worker runs as its own uid, and the kernel's record of
 // who owns the client socket names it. No header is involved, so nothing a

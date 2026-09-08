@@ -20,7 +20,9 @@ import (
 // then needs only CONFIG to mount an attested tool app — no Node code — and
 // the tool catalogue and every call cross the measured Go leg, where the
 // declared-dependency gate has already vetted the peer (D2). The caller's
-// Authorization header is forwarded verbatim; the shim holds no credentials.
+// Authorization header is forwarded verbatim unless it is a worker's own
+// bearer (proxy-internal, see forwardableAuthorization); the shim holds no
+// credentials.
 
 const mcpProtocolVersion = "2025-03-26"
 
@@ -239,7 +241,7 @@ func fetchCatalogue(r *http.Request, client *http.Client, host, sub string) ([]u
 	if err != nil {
 		return nil, err
 	}
-	if auth := r.Header.Get("Authorization"); auth != "" {
+	if auth := forwardableAuthorization(r); auth != "" {
 		req.Header.Set("Authorization", auth)
 	}
 	// The catalogue fetch is the one assistant request tool apps serve
@@ -279,7 +281,7 @@ func callTool(r *http.Request, client *http.Client, host, fn string, args json.R
 		return nil, 0, "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if auth := r.Header.Get("Authorization"); auth != "" {
+	if auth := forwardableAuthorization(r); auth != "" {
 		req.Header.Set("Authorization", auth)
 	}
 	// Name the acting user for user-scoped tool apps (Drive requires it on
