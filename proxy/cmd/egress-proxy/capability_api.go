@@ -54,9 +54,14 @@ func registerCapabilityAPI(mux *http.ServeMux, broker *capability.Broker) {
 	// Whether this harness can persist for the acting holder, and where.
 	mux.HandleFunc("GET /privasys/capability/status", func(w http.ResponseWriter, r *http.Request) {
 		sub := r.Header.Get("X-Privasys-Sub")
+		// signed_in tells the UI whether this answer is ABOUT someone. Right
+		// after sign-in the sealed session can still be anonymous for a
+		// moment, and "nobody is signed in" must not render as "your Drive
+		// is not connected".
 		resp := map[string]any{
 			"persistent": false,
 			"declined":   false,
+			"signed_in":  sub != "",
 			"folder":     "AppData/Harness",
 		}
 		if sub == "" || !broker.Enabled() {

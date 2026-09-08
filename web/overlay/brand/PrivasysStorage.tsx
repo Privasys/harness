@@ -31,6 +31,7 @@ import { ensureRowStyles } from './PrivasysRows.tsx'
 interface StorageState {
   persistent?: boolean
   declined?: boolean
+  signed_in?: boolean
   folder?: string
 }
 
@@ -73,13 +74,29 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
     void pvFetch('/privasys/capability/status')
       .then(async r => (r.ok ? await r.json() : undefined))
       .then(d => {
+        // An answer about nobody (the sealed session is still anonymous
+        // right after sign-in) is not an answer: keep the row hidden and
+        // ask again shortly rather than showing "Connect your Drive" to a
+        // user whose Drive is connected.
+        if (d !== undefined && d.signed_in === false) {
+          setState(undefined)
+          return
+        }
         setState(d ?? {})
         // The ask is over once the runtime reports the grant: drop the
         // "approve on your device" box rather than leaving the user on it.
         if (d?.persistent === true) setAsk(undefined)
       }, () => { setState({}) })
   }
-  useEffect(refresh, [])
+  // Poll: quickly until the session is bound to someone, then slowly, so a
+  // grant approved on the device (or withdrawn in Drive) shows without a
+  // reload. The panel opening also re-checks.
+  useEffect(() => {
+    refresh()
+    const t = setInterval(refresh, state === undefined ? 3000 : 30000)
+    return () => { clearInterval(t) }
+  }, [state === undefined])
+  useEffect(() => { if (open) refresh() }, [open])
 
   const request = (retry: boolean): void => {
     setBusy(true)
