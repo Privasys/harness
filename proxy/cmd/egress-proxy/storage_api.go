@@ -39,8 +39,8 @@ func registerStorageAPI(mux *http.ServeMux, broker *capability.Broker,
 	// storeFor resolves the acting holder's capability into a working store,
 	// or explains why there is none. The reason is surfaced to Node so the UI
 	// can say something true rather than "storage failed".
-	storeFor := func() (*capability.DriveStore, string) {
-		sub := currentSubject()
+	storeFor := func(r *http.Request) (*capability.DriveStore, string) {
+		sub := subjectOfEgress(r)
 		if sub == "" {
 			return nil, "no signed-in user is bound to this harness yet"
 		}
@@ -61,16 +61,16 @@ func registerStorageAPI(mux *http.ServeMux, broker *capability.Broker,
 		return ds, ""
 	}
 
-	mux.HandleFunc("GET /storage/status", func(w http.ResponseWriter, _ *http.Request) {
-		ds, why := storeFor()
+	mux.HandleFunc("GET /storage/status", func(w http.ResponseWriter, r *http.Request) {
+		ds, why := storeFor(r)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"available": ds != nil,
 			"reason":    why,
 		})
 	})
 
-	mux.HandleFunc("GET /storage/files", func(w http.ResponseWriter, _ *http.Request) {
-		ds, why := storeFor()
+	mux.HandleFunc("GET /storage/files", func(w http.ResponseWriter, r *http.Request) {
+		ds, why := storeFor(r)
 		if ds == nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": why})
 			return
@@ -85,7 +85,7 @@ func registerStorageAPI(mux *http.ServeMux, broker *capability.Broker,
 	})
 
 	mux.HandleFunc("GET /storage/files/{name}", func(w http.ResponseWriter, r *http.Request) {
-		ds, why := storeFor()
+		ds, why := storeFor(r)
 		if ds == nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": why})
 			return
@@ -114,7 +114,7 @@ func registerStorageAPI(mux *http.ServeMux, broker *capability.Broker,
 	})
 
 	mux.HandleFunc("PUT /storage/files/{name}", func(w http.ResponseWriter, r *http.Request) {
-		ds, why := storeFor()
+		ds, why := storeFor(r)
 		if ds == nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": why})
 			return

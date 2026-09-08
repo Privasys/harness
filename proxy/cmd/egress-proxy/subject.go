@@ -5,6 +5,7 @@ package main
 
 import (
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -79,4 +80,44 @@ func recordSubject(sub string) {
 func currentSubject() string {
 	sub, _ := actingSubject.Load().(string)
 	return sub
+}
+
+// workerMgr is set when this process supervises one dsh per user (WS5).
+// With it, the acting subject is resolved PER REQUEST from what the worker
+// holds; without it, the single-user process-wide binding above applies.
+var workerMgr *WorkerManager
+
+// subjectOfEgress names the user an egress call (model leg, tool shim,
+// loopback storage) acts for. In the per-user layout the caller is a dsh
+// worker presenting the bearer this proxy minted for it, and that bearer
+// alone names the subject — the model cannot choose another user, it can
+// only present the token it was started with. A bearer that matches no
+// worker names nobody.
+func subjectOfEgress(r *http.Request) string {
+	if workerMgr == nil {
+		return currentSubject()
+	}
+	tok := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer"))
+	if w := workerMgr.ByToken(tok); w != nil {
+		return w.Subject
+	}
+	return ""
+}
+
+// subjectOfShell names the user behind a shell egress connection (the
+// forward proxy): the worker runs as its own uid, and the kernel's record of
+// who owns the client socket names it. No header is involved, so nothing a
+// process runs can claim to be someone else.
+func subjectOfShell(remoteAddr string) string {
+	if workerMgr == nil {
+		return currentSubject()
+	}
+	uid, err := uidOfLoopbackPeer(remoteAddr)
+	if err != nil {
+		return ""
+	}
+	if w := workerMgr.ByUID(uid); w != nil {
+		return w.Subject
+	}
+	return ""
 }

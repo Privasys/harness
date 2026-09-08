@@ -53,6 +53,9 @@ type upstreamTool struct {
 
 // mcpShim handles one JSON-RPC message for the tool app at host.
 func mcpShim(w http.ResponseWriter, r *http.Request, client *http.Client, toolName, host string) {
+	// The acting user, attributed once per message from what the calling
+	// worker holds (its bearer), never from anything in the JSON-RPC body.
+	sub := subjectOfEgress(r)
 	if r.Method == http.MethodGet {
 		// No server-initiated stream in the stateless shim.
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -89,7 +92,7 @@ func mcpShim(w http.ResponseWriter, r *http.Request, client *http.Client, toolNa
 	case "ping":
 		rpcResult(w, req.ID, map[string]any{})
 	case "tools/list":
-		tools, err := fetchCatalogue(r, client, host)
+		tools, err := fetchCatalogue(r, client, host, sub)
 		if err != nil {
 			// This was SILENT, and it is the failure that matters most: the
 			// catalogue is how a tool acquires its capabilities, so a refusal
@@ -130,7 +133,7 @@ func mcpShim(w http.ResponseWriter, r *http.Request, client *http.Client, toolNa
 			args = json.RawMessage(`{}`)
 		}
 		args = applyDocumentedDefaults(toolName, p.Name, args)
-		result, status, price, err := callTool(r, client, host, p.Name, args, "")
+		result, status, price, err := callTool(r, client, host, p.Name, args, "", sub)
 		if err != nil {
 			rpcError(w, req.ID, -32000, fmt.Sprintf("tool call: %v", err))
 			return
@@ -149,7 +152,7 @@ func mcpShim(w http.ResponseWriter, r *http.Request, client *http.Client, toolNa
 				})
 				return
 			}
-			ok, why := spendConsent(toolName, p.Name, credits)
+			ok, why := spendConsent(sub, toolName, p.Name, credits)
 			if !ok {
 				msg, _ := json.Marshal(map[string]any{
 					"error":   "payment approval required",
@@ -163,13 +166,13 @@ func mcpShim(w http.ResponseWriter, r *http.Request, client *http.Client, toolNa
 				})
 				return
 			}
-			result, status, _, err = callTool(r, client, host, p.Name, args, priceHeaderValue(credits))
+			result, status, _, err = callTool(r, client, host, p.Name, args, priceHeaderValue(credits), sub)
 			if err != nil {
 				rpcError(w, req.ID, -32000, fmt.Sprintf("tool call: %v", err))
 				return
 			}
 			if status >= 200 && status < 300 {
-				spendCharged(toolName, p.Name, credits)
+				spendCharged(sub, toolName, p.Name, credits)
 			}
 		}
 		// Non-2xx upstreams surface as tool errors the model can read,
@@ -230,7 +233,7 @@ func applyDocumentedDefaults(server, tool string, args json.RawMessage) json.Raw
 	return filled
 }
 
-func fetchCatalogue(r *http.Request, client *http.Client, host string) ([]upstreamTool, error) {
+func fetchCatalogue(r *http.Request, client *http.Client, host, sub string) ([]upstreamTool, error) {
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet,
 		"https://"+host+"/api/v1/mcp/tools", nil)
 	if err != nil {
@@ -242,7 +245,7 @@ func fetchCatalogue(r *http.Request, client *http.Client, host string) ([]upstre
 	// The catalogue fetch is the one assistant request tool apps serve
 	// without an acting user (it runs on mcp-client's startup timer), but
 	// naming the subject when one is bound is harmless and consistent.
-	if sub := currentSubject(); sub != "" {
+	if sub != "" {
 		req.Header.Set("X-Privasys-On-Behalf-Of", sub)
 	}
 	resp, err := client.Do(req)
@@ -269,7 +272,7 @@ func fetchCatalogue(r *http.Request, client *http.Client, host string) ([]upstre
 // callTool performs one tool invocation. approved, when set, is the
 // byte-exact fee consent (`N credits`) the runtime hosting the tool expects;
 // the returned price is the runtime's X-Billing-Price on a refusal.
-func callTool(r *http.Request, client *http.Client, host, fn string, args json.RawMessage, approved string) (json.RawMessage, int, string, error) {
+func callTool(r *http.Request, client *http.Client, host, fn string, args json.RawMessage, approved, sub string) (json.RawMessage, int, string, error) {
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost,
 		"https://"+host+"/api/v1/mcp/tools/"+fn, bytes.NewReader(args))
 	if err != nil {
@@ -283,7 +286,7 @@ func callTool(r *http.Request, client *http.Client, host, fn string, args json.R
 	// every tool call) and, since 2026-09-08, the PAYER of a priced call.
 	// The subject is the relay-asserted sign-in identity recorded by the
 	// ingress front — never anything the model supplied.
-	if sub := currentSubject(); sub != "" {
+	if sub != "" {
 		req.Header.Set("X-Privasys-On-Behalf-Of", sub)
 	}
 	// The consent header is set by THIS layer from the user's policy, never

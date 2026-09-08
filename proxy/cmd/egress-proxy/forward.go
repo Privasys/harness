@@ -74,8 +74,8 @@ func serveForward(listen string, store *policy.Store) {
 // tenant. This function is the seam where multi-tenancy changes that — a
 // per-user worker process will carry its own subject and pass it here, rather
 // than the process-wide value (see subject.go).
-func actingEffective(store *policy.Store) policy.Effective {
-	return store.Effective(currentSubject())
+func actingEffective(store *policy.Store, r *http.Request) policy.Effective {
+	return store.Effective(subjectOfShell(r.RemoteAddr))
 }
 
 // forwardConnect policies and then splices an HTTPS tunnel. The TLS session is
@@ -86,7 +86,7 @@ func forwardConnect(w http.ResponseWriter, r *http.Request, store *policy.Store)
 	if err != nil {
 		host, port = r.Host, "443"
 	}
-	eff := actingEffective(store)
+	eff := actingEffective(store, r)
 	if ok, why := eff.PermitsEgress(host, port); !ok {
 		log.Printf("[egress-forward] REFUSED CONNECT %s:%s -> %s", host, port, why)
 		audit.Record(EgressRecord{At: time.Now().UTC(), Host: host, Port: port,
@@ -153,7 +153,7 @@ func forwardPlain(w http.ResponseWriter, r *http.Request, store *policy.Store) {
 	if port == "" {
 		port = "80"
 	}
-	eff := actingEffective(store)
+	eff := actingEffective(store, r)
 	if ok, why := eff.PermitsEgress(host, port); !ok {
 		log.Printf("[egress-forward] REFUSED %s %s -> %s", r.Method, r.URL.Host, why)
 		audit.Record(EgressRecord{At: time.Now().UTC(), Host: host, Port: port,

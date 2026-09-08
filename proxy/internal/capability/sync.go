@@ -80,6 +80,13 @@ type Syncer struct {
 	appID     string
 	sessions  string // local session root
 	workspace string // local workspace root
+	// subject binds this syncer to one person (per-user workers); empty
+	// means the process-wide acting subject (single-user layout).
+	subject string
+	// stateFile overrides the default state path (per worker).
+	stateFile string
+	// stop ends the tick loop started by Start.
+	stop chan struct{}
 
 	mu sync.Mutex
 	// uploaded maps a session-relative path to the content hash last stored,
@@ -176,13 +183,32 @@ func (s *Syncer) RestoreFor(subject string) (int, error) {
 }
 
 // NewSyncer wires the two local roots to the holder's Drive folder. appID is
-// this app's platform id, recorded in every snapshot manifest.
+// this app's platform id, recorded in every snapshot manifest. The acting
+// subject is the process-wide one (single-user layout).
 func NewSyncer(broker *Broker, client *http.Client, driveHost, appID, sessionsRoot, workspaceRoot string) *Syncer {
 	return &Syncer{
 		broker: broker, client: client, driveHost: driveHost, appID: appID,
 		sessions: sessionsRoot, workspace: workspaceRoot,
 		uploaded: map[string]string{}, blobs: map[string]bool{}, folders: map[string]string{},
 	}
+}
+
+// NewSyncerFor is NewSyncer bound to one subject: the per-user worker layout,
+// where each worker's roots belong to exactly one person.
+func NewSyncerFor(broker *Broker, client *http.Client, driveHost, appID, sessionsRoot, workspaceRoot, subject string) *Syncer {
+	s := NewSyncer(broker, client, driveHost, appID, sessionsRoot, workspaceRoot)
+	s.subject = subject
+	s.stateFile = filepath.Join(filepath.Dir(sessionsRoot), syncStateName)
+	return s
+}
+
+// subjectNow is the subject this syncer works for: its own when bound, else
+// the process-wide acting subject.
+func (s *Syncer) subjectNow() string {
+	if s.subject != "" {
+		return s.subject
+	}
+	return currentSubjectFn()
 }
 
 // Status reports what the UI needs to tell the truth about persistence.
@@ -202,7 +228,7 @@ func (s *Syncer) Status() SyncStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st := SyncStatus{LastSync: s.last, Files: s.files, Blobs: s.blobCount, WorkspaceSavedAt: s.savedAt, LastError: s.lastErr, AccessWithdrawn: s.withdrawn}
-	sub := currentSubjectFn()
+	sub := s.subjectNow()
 	switch {
 	case sub == "":
 		st.Reason = "no signed-in user is bound to this harness yet"
@@ -237,10 +263,19 @@ func (s *Syncer) Start(interval time.Duration) {
 	if interval <= 0 {
 		interval = 60 * time.Second
 	}
+	stop := make(chan struct{})
+	s.mu.Lock()
+	s.stop = stop
+	s.mu.Unlock()
 	go func() {
 		t := time.NewTicker(interval)
 		defer t.Stop()
-		for range t.C {
+		for {
+			select {
+			case <-stop:
+				return
+			case <-t.C:
+			}
 			if err := s.SyncOnce(); err != nil {
 				s.mu.Lock()
 				s.lastErr = err.Error()
@@ -250,10 +285,22 @@ func (s *Syncer) Start(interval time.Duration) {
 	}()
 }
 
+// StopTicks ends the loop started by Start. The syncer stays usable for a
+// final SyncOnce.
+func (s *Syncer) StopTicks() {
+	s.mu.Lock()
+	stop := s.stop
+	s.stop = nil
+	s.mu.Unlock()
+	if stop != nil {
+		close(stop)
+	}
+}
+
 // store resolves the acting holder's capability into a working store, or
 // nil when there is nothing to do yet.
 func (s *Syncer) store() (*DriveStore, string) {
-	sub := currentSubjectFn()
+	sub := s.subjectNow()
 	if sub == "" || s.driveHost == "" || !s.broker.Enabled() {
 		return nil, sub
 	}
@@ -916,7 +963,12 @@ func parseMode(s string) (os.FileMode, error) {
 // must not outlive the container either.
 const syncStateName = ".privasys-sync.json"
 
-func (s *Syncer) statePath() string { return filepath.Join("/run", syncStateName) }
+func (s *Syncer) statePath() string {
+	if s.stateFile != "" {
+		return s.stateFile
+	}
+	return filepath.Join("/run", syncStateName)
+}
 
 type syncState struct {
 	Uploaded map[string]string `json:"uploaded"`

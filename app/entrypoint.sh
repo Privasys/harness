@@ -144,10 +144,16 @@ fi
 mkdir -p "${DSH_HOME:-/dsh-home}"
 
 DSH_PORT=3080
+# One dsh per signed-in user (WS5). With HARNESS_WORKERS=1 the proxy
+# supervises dsh itself: a worker per subject with its own uid, home,
+# session root and bearer, plus a system worker for the public shell. The
+# legacy single-user layout (this script exec'ing one dsh) stays reachable
+# with HARNESS_WORKERS=0 for a deployment that must roll back.
+export HARNESS_WORKERS="${HARNESS_WORKERS:-1}"
 EGRESS_PROXY_LISTEN=127.0.0.1:9411 \
 EGRESS_FORWARD_LISTEN=127.0.0.1:9412 \
 INGRESS_LISTEN="0.0.0.0:${PORT}" \
-DSH_UPSTREAM="http://127.0.0.1:${DSH_PORT}" \
+DSH_UPSTREAM="$([[ "$HARNESS_WORKERS" == "1" ]] || echo "http://127.0.0.1:${DSH_PORT}")" \
   /usr/local/bin/egress-proxy &
 PROXY_PID=$!
 for i in $(seq 1 50); do
@@ -286,6 +292,18 @@ fi
 # includeDefaultRoots:false — see app/profile notes + the preset overlay).
 mkdir -p /data/skills
 cd "$WORKSPACE_ROOT"
+
+if [[ "$HARNESS_WORKERS" == "1" ]]; then
+  # The proxy runs one dsh per user; this script only keeps the container
+  # alive and forwards a stop to it (its workers die with their process
+  # groups). Per-user caches live under /data/users/<key>; their owning
+  # uids are unprivileged and never see another user's directory.
+  mkdir -p /data/users
+  trap 'kill -TERM "$PROXY_PID" 2>/dev/null' TERM INT
+  echo "[harness] per-user dsh workers under the proxy (pid ${PROXY_PID}); proxy fronts 0.0.0.0:${PORT} (trusted-host ${HARNESS_PUBLIC_HOST:-none})"
+  wait "$PROXY_PID"
+  exit $?
+fi
 
 echo "[harness] dsh web (compiled) on 127.0.0.1:${DSH_PORT}, proxy fronts 0.0.0.0:${PORT} (pid ${PROXY_PID}, trusted-host ${HARNESS_PUBLIC_HOST:-none})"
 exec node /dsh/apps/cli/lib/bin.js --profile web \

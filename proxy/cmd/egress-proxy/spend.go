@@ -75,8 +75,7 @@ func newSpendMeter(store *policy.Store) *spendMeter {
 }
 
 // consent decides one priced call for the acting subject.
-func (m *spendMeter) consent(server, tool string, credits uint64) (bool, string) {
-	sub := currentSubject()
+func (m *spendMeter) consent(sub, server, tool string, credits uint64) (bool, string) {
 	if sub == "" {
 		return false, "no signed-in user to charge"
 	}
@@ -91,8 +90,7 @@ func (m *spendMeter) consent(server, tool string, credits uint64) (bool, string)
 }
 
 // charged records one delivered priced call.
-func (m *spendMeter) charged(server, tool string, credits uint64) {
-	sub := currentSubject()
+func (m *spendMeter) charged(sub, server, tool string, credits uint64) {
 	if sub == "" {
 		return
 	}
@@ -127,10 +125,10 @@ func (m *spendMeter) snapshot(sub string) map[string]any {
 // wiring; main installs the meter once the policy store exists. Without a
 // meter (a build that never installed one) every priced call is refused.
 var (
-	spendConsent = func(server, tool string, credits uint64) (bool, string) {
+	spendConsent = func(sub, server, tool string, credits uint64) (bool, string) {
 		return false, "no spending policy engine is installed in this build"
 	}
-	spendCharged = func(server, tool string, credits uint64) {}
+	spendCharged = func(sub, server, tool string, credits uint64) {}
 )
 
 func installSpendMeter(store *policy.Store) *spendMeter {

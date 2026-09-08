@@ -28,6 +28,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -224,9 +225,12 @@ func main() {
 		// harness app's. The header is set only from the measured binding —
 		// any value dsh or the model supplied is discarded first.
 		r.Header.Del("X-Privasys-On-Behalf-Of")
+		// Attributed BEFORE the bearer is dropped: in the per-user layout the
+		// bearer is the worker's own token and the only thing that names it.
+		sub := subjectOfEgress(r)
 		if cfg.onPlatform {
 			r.Header.Del("Authorization")
-			if sub := currentSubject(); sub != "" {
+			if sub != "" {
 				r.Header.Set("X-Privasys-On-Behalf-Of", sub)
 			}
 		}
@@ -309,25 +313,39 @@ func main() {
 	syncer := capability.NewSyncer(broker, client, cfg.toolHosts["drive"], os.Getenv("HARNESS_APP_ID"),
 		envOr("HARNESS_SESSION_ROOT", "/dev/shm/privasys-sessions"),
 		envOr("HARNESS_WORKSPACE_ROOT", "/dev/shm/privasys-workspace"))
-	syncer.LoadState()
-	// Boot-time restore for the subject this deployment remembered: dsh
-	// builds its workspace list once at start and never re-bootstraps, so
-	// the holder's sessions must be on disk BEFORE it starts. The entrypoint
-	// waits on /storage/ready for exactly this.
-	if remembered := loadRememberedSubject(); remembered != "" {
-		recordSubject(remembered)
-		if n, err := syncer.RestoreFor(remembered); err != nil {
-			log.Printf("[sync] boot restore for %.8s…: %v", remembered, err)
-		} else if n > 0 {
-			log.Printf("[sync] boot restore for %.8s…: %d file(s)", remembered, n)
+	// One dsh per user (WS5): this process supervises the workers, and each
+	// worker gets its own mirror, restored before its dsh starts. The
+	// process-wide syncer above then serves only the legacy single-user
+	// layout, where the entrypoint runs one dsh for whoever signs in.
+	var mgr *WorkerManager
+	if workersEnabled() {
+		mgr = newWorkerManager(cfg, broker, client)
+		workerMgr = mgr
+		mgr.Ensure(systemSubject)
+		go mgr.Reap(context.Background())
+		syncer.SetReady()
+		log.Printf("[workers] per-user dsh workers enabled (uids=%v idle=%s)", mgr.useUIDs, mgr.idle)
+	} else {
+		syncer.LoadState()
+		// Boot-time restore for the subject this deployment remembered: dsh
+		// builds its workspace list once at start and never re-bootstraps,
+		// so the holder's sessions must be on disk BEFORE it starts. The
+		// entrypoint waits on /storage/ready for exactly this.
+		if remembered := loadRememberedSubject(); remembered != "" {
+			recordSubject(remembered)
+			if n, err := syncer.RestoreFor(remembered); err != nil {
+				log.Printf("[sync] boot restore for %.8s…: %v", remembered, err)
+			} else if n > 0 {
+				log.Printf("[sync] boot restore for %.8s…: %d file(s)", remembered, n)
+			}
 		}
+		syncer.SetReady()
+		// 15s, not a minute. The session root is MEMORY: anything not yet
+		// mirrored is lost if the container dies, so the interval IS the
+		// exposure window. Uploads are content-addressed, so a quiet harness
+		// still sends nothing — the cost of the shorter tick is a walk.
+		syncer.Start(15 * time.Second)
 	}
-	syncer.SetReady()
-	// 15s, not a minute. The session root is now MEMORY: anything not yet
-	// mirrored is lost if the container dies, so the interval IS the exposure
-	// window. Uploads are content-addressed, so a quiet harness still sends
-	// nothing — the cost of the shorter tick is a directory walk.
-	syncer.Start(15 * time.Second)
 	registerSyncAPI(mux, syncer)
 
 	// The governed fast path for everything that is not an attested peer
@@ -344,8 +362,8 @@ func main() {
 	// is ready). /healthz answers instantly; everything else reverse-proxies
 	// to dsh on the loopback upstream, 503 until dsh is listening. Putting
 	// ingress here too means the measured Go layer owns every network edge.
-	if cfg.ingressListen != "" && cfg.dshUpstream != "" {
-		go serveIngress(cfg, deps, store, stamp, broker, syncer, meter)
+	if cfg.ingressListen != "" && (cfg.dshUpstream != "" || mgr != nil) {
+		go serveIngress(cfg, deps, store, stamp, broker, syncer, meter, mgr)
 	}
 
 	if err := http.ListenAndServe(cfg.listenAddr, mux); err != nil {
@@ -355,11 +373,21 @@ func main() {
 
 // serveIngress fronts the platform port: instant health, the browser
 // attestation summary, and a reverse-proxy to dsh once it is up.
-func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp *stamper, broker *capability.Broker, syncer *capability.Syncer, meter *spendMeter) {
+// upstreamKey carries the per-request dsh upstream (a worker's loopback
+// port) from the routing handler to the reverse proxy's director.
+type upstreamKey struct{}
+
+func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp *stamper, broker *capability.Broker, syncer *capability.Syncer, meter *spendMeter, mgr *WorkerManager) {
 	listen, upstream := cfg.ingressListen, cfg.dshUpstream
-	target, err := neturl.Parse(upstream)
-	if err != nil {
-		log.Fatalf("[ingress] bad DSH_UPSTREAM %q: %v", upstream, err)
+	var target *neturl.URL
+	if upstream != "" {
+		var err error
+		if target, err = neturl.Parse(upstream); err != nil {
+			log.Fatalf("[ingress] bad DSH_UPSTREAM %q: %v", upstream, err)
+		}
+	} else {
+		// Per-user layout: the worker chosen per request supplies the host.
+		target, _ = neturl.Parse("http://127.0.0.1:0")
 	}
 	rp := httputil.NewSingleHostReverseProxy(target)
 	// dsh guards /api with a DNS-rebinding + cross-site fence
@@ -388,6 +416,12 @@ func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp 
 	baseDirector := rp.Director
 	rp.Director = func(req *http.Request) {
 		baseDirector(req)
+		// Per-user layout: the routing handler chose the worker for this
+		// request and left its upstream on the context.
+		if u, ok := req.Context().Value(upstreamKey{}).(*neturl.URL); ok && u != nil {
+			req.URL.Scheme = u.Scheme
+			req.URL.Host = u.Host
+		}
 		// Bind the acting user: the sealed relay asserts the signed-in
 		// subject on every unsealed request (see subject.go).
 		recordSubject(req.Header.Get("X-Privasys-Sub"))
@@ -461,12 +495,57 @@ func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp 
 	// The verification API: how a user checks which policy this enclave is
 	// applying to them, and how a third party checks the product's posture.
 	registerPolicyAPI(mux, store, stamp)
-	registerCapabilityAPI(mux, broker, syncer)
+	registerCapabilityAPI(mux, broker, func(sub string) bool {
+		if mgr != nil {
+			if w := mgr.Get(sub); w != nil && w.syncer != nil {
+				return w.syncer.AccessWithdrawn()
+			}
+			return false
+		}
+		return syncer.AccessWithdrawn()
+	})
 	toolNames := make([]string, 0, len(cfg.toolHosts))
 	for name := range cfg.toolHosts {
 		toolNames = append(toolNames, name)
 	}
 	registerSpendAPI(mux, store, meter, toolNames)
+	if mgr != nil {
+		// Operators' view of the workers (no subjects, only keys).
+		mux.HandleFunc("GET /privasys/workers", func(w http.ResponseWriter, _ *http.Request) {
+			writeJSON(w, http.StatusOK, map[string]any{"workers": mgr.Snapshot()})
+		})
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			sub := r.Header.Get("X-Privasys-Sub")
+			var worker *Worker
+			if sub == "" {
+				// No signed-in subject: only the public shell and its
+				// bundles, which the system worker serves. The app itself
+				// is never reachable anonymously — sessions belong to
+				// someone.
+				if strings.HasPrefix(r.URL.Path, "/api/") {
+					writeJSON(w, http.StatusUnauthorized, map[string]string{
+						"error": "a signed-in session is required",
+					})
+					return
+				}
+				worker = mgr.Ensure(systemSubject)
+			} else {
+				worker = mgr.Ensure(sub)
+			}
+			if !worker.isReady() {
+				w.Header().Set("Retry-After", "5")
+				http.Error(w, `{"status":"starting","component":"harness"}`, http.StatusServiceUnavailable)
+				return
+			}
+			u, _ := neturl.Parse(worker.Upstream())
+			rp.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), upstreamKey{}, u)))
+		})
+		log.Printf("[ingress] listening on %s -> per-user dsh workers", listen)
+		if err := http.ListenAndServe(listen, mux); err != nil {
+			log.Fatalf("[ingress] listen: %v", err)
+		}
+		return
+	}
 	mux.Handle("/", rp)
 	log.Printf("[ingress] listening on %s -> %s", listen, upstream)
 	if err := http.ListenAndServe(listen, mux); err != nil {
