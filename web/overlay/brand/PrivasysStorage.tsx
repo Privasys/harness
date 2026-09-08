@@ -40,6 +40,18 @@ interface PendingAsk {
   app_host?: string
 }
 
+// Both storage calls MUST ride the sealed transport the shell installs
+// (window.__DSH_TRANSPORT__.fetch): the acting subject the proxy files the
+// capability under is the relay-asserted X-Privasys-Sub, which the relay sets
+// only on sealed requests and strips from everything else, and the relay
+// refuses a plaintext POST on the terminate leg outright (403
+// sealed-transport-required). Off-platform there is no sealed session and the
+// raw fetch is the right call.
+function pvFetch(input: string, init?: RequestInit): Promise<Response> {
+  const t = (globalThis as { __DSH_TRANSPORT__?: { fetch?: typeof fetch } }).__DSH_TRANSPORT__
+  return t?.fetch !== undefined ? t.fetch(input, init) : fetch(input, init)
+}
+
 function DriveIcon({ size = 16 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
@@ -58,7 +70,7 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
   const [open, setOpen] = useState(false)
 
   const refresh = (): void => {
-    void fetch('/privasys/capability/status')
+    void pvFetch('/privasys/capability/status')
       .then(async r => (r.ok ? await r.json() : undefined))
       .then(d => { setState(d ?? {}) }, () => { setState({}) })
   }
@@ -66,7 +78,7 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
 
   const request = (retry: boolean): void => {
     setBusy(true)
-    void fetch(`/privasys/capability/request${retry ? '?retry=1' : ''}`, { method: 'POST' })
+    void pvFetch(`/privasys/capability/request${retry ? '?retry=1' : ''}`, { method: 'POST' })
       .then(async r => (r.ok ? await r.json() : undefined))
       .then(d => { setAsk(d); setBusy(false); refresh() },
         () => { setBusy(false) })
