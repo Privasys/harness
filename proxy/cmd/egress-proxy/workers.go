@@ -369,12 +369,15 @@ func (m *WorkerManager) prepare(w *Worker) error {
 			return err
 		}
 	}
-	profiles := filepath.Join(w.Home, "profiles")
-	if _, err := os.Lstat(profiles); err != nil {
-		src := filepath.Join(envOr("DSH_HOME", "/dsh-home"), "profiles")
-		if err := os.Symlink(src, profiles); err != nil {
-			return fmt.Errorf("profiles link: %w", err)
-		}
+	// The profiles are the worker's own COPY of the measured ones, refreshed
+	// from the image on every start: dsh rewrites the composed root
+	// (cordis.yml) and may heal module fallbacks inside the profile tree at
+	// boot, so a shared read-only tree is not usable by an unprivileged
+	// worker, and a stale per-user copy would let one user run yesterday's
+	// bundle. Only the user layer (cordis.patch.yml, where the Settings
+	// toggles land) survives the refresh.
+	if err := refreshProfiles(filepath.Join(envOr("DSH_HOME", "/dsh-home"), "profiles"), filepath.Join(w.Home, "profiles")); err != nil {
+		return fmt.Errorf("profiles: %w", err)
 	}
 	patch := fmt.Sprintf("- id: webserver\n  name: \"@deepseek-ai/dsh-host-webserver\"\n  config:\n    host: \"127.0.0.1\"\n    port: %d\n"+
 		"- id: session-persistence-jsonl\n  name: \"@deepseek-ai/dsh-session-persistence-jsonl\"\n  config:\n    root: %s\n", w.Port, w.Sessions)
@@ -386,6 +389,41 @@ func (m *WorkerManager) prepare(w *Worker) error {
 			return err
 		}
 		if err := chownTree(filepath.Dir(w.Sessions), w.UID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// refreshProfiles replaces dst with a copy of src (symlinks preserved, so
+// module-fallback links keep pointing into the installation), keeping each
+// profile's user layer from the previous copy.
+func refreshProfiles(src, dst string) error {
+	if fi, err := os.Lstat(dst); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		_ = os.Remove(dst) // the first WS5 layout linked the shared tree
+	}
+	userLayers := map[string][]byte{}
+	if entries, err := os.ReadDir(dst); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() || e.Name() == "node_modules" {
+				continue
+			}
+			if raw, err := os.ReadFile(filepath.Join(dst, e.Name(), "cordis.patch.yml")); err == nil {
+				userLayers[e.Name()] = raw
+			}
+		}
+	}
+	if err := os.RemoveAll(dst); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dst, 0o700); err != nil {
+		return err
+	}
+	if out, err := exec.Command("cp", "-a", src+"/.", dst+"/").CombinedOutput(); err != nil {
+		return fmt.Errorf("copy %s: %s (%v)", src, strings.TrimSpace(string(out)), err)
+	}
+	for name, raw := range userLayers {
+		if err := os.WriteFile(filepath.Join(dst, name, "cordis.patch.yml"), raw, 0o600); err != nil {
 			return err
 		}
 	}
