@@ -21,6 +21,9 @@
 //            is reachable only via the enclave manager -> in-TCB egress-proxy
 //            (trusted Host); the sealed session the manager already terminated IS
 //            the auth, and the sealed relay cannot carry dsh's per-process cookie.
+//        (b') webserver: with DSH_INGRESS_TOKEN set, refuse every request and
+//            upgrade that does not carry it. One dsh per user (WS5) puts several
+//            users' processes on one loopback; only the proxy holds each token.
 //
 // The sealed TRANSPORT is injected at runtime by the vanilla shell
 // (privasys-shell.js: window.__DSH_TRANSPORT__.fetch + a mux WebSocket adapter),
@@ -145,6 +148,59 @@ edit('packages/client/connection/src/rpc-host.ts', [
       `    if (isTrustedApiRequest(request, this.trustedHosts)) return true\n` +
       `    return this.browserAuth.authorizeIndex(request, response)\n` +
       `  }`,
+  ],
+])
+
+// --- 2b'. webserver: one user per dsh process, one token per process.
+//          Under the per-user proxy (WS5) every worker's dsh listens on a
+//          loopback port that every process in the container can reach,
+//          including the other users' sandboxed shells. 2b made "trusted Host"
+//          equal "authenticated", which is right for the relay hop but not for
+//          a loopback neighbour. With DSH_INGRESS_TOKEN set (the proxy mints
+//          one per worker), the webserver refuses any request or upgrade that
+//          does not carry it, before routing. Unset (legacy single-user
+//          layout) nothing changes.
+edit('packages/host/webserver/src/index.ts', [
+  [
+    'ingress token helper (after injections import)',
+    `import { renderIndexInjections, type IndexInjection } from './injections.ts'\n`,
+    `import { renderIndexInjections, type IndexInjection } from './injections.ts'\n` +
+      `import { timingSafeEqual } from 'node:crypto'\n` +
+      `\n` +
+      `// Privasys: the token the measured proxy presents on every request when\n` +
+      `// this process serves one user among several (see createServer below).\n` +
+      `const PRIVASYS_INGRESS_TOKEN = process.env.DSH_INGRESS_TOKEN ?? ''\n` +
+      `function privasysIngressAdmits(req: IncomingMessage): boolean {\n` +
+      `  if (PRIVASYS_INGRESS_TOKEN === '') return true\n` +
+      `  const value = req.headers['x-privasys-ingress-token']\n` +
+      `  if (typeof value !== 'string' || value.length !== PRIVASYS_INGRESS_TOKEN.length) return false\n` +
+      `  return timingSafeEqual(Buffer.from(value), Buffer.from(PRIVASYS_INGRESS_TOKEN))\n` +
+      `}\n`,
+  ],
+  [
+    'ingress token gate on requests',
+    `    this.server = createServer((req, res) => {\n` +
+      `      const next = (): void => {\n`,
+    `    this.server = createServer((req, res) => {\n` +
+      `      // Privasys: only the proxy that started this process may use it.\n` +
+      `      if (!privasysIngressAdmits(req)) {\n` +
+      `        res.writeHead(401)\n` +
+      `        res.end('unauthorized')\n` +
+      `        return\n` +
+      `      }\n` +
+      `      const next = (): void => {\n`,
+  ],
+  [
+    'ingress token gate on upgrades',
+    `    this.server.on('upgrade', (req, socket, head) => {\n` +
+      `      const onError = (error: Error): void => {\n`,
+    `    this.server.on('upgrade', (req, socket, head) => {\n` +
+      `      // Privasys: same gate as the request path.\n` +
+      `      if (!privasysIngressAdmits(req)) {\n` +
+      `        socket.destroy()\n` +
+      `        return\n` +
+      `      }\n` +
+      `      const onError = (error: Error): void => {\n`,
   ],
 ])
 

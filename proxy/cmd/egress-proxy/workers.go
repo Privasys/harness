@@ -65,7 +65,8 @@ type Worker struct {
 	Key       string // subjectKey(Subject); "" is the system worker's dir "system"
 	UID       int
 	Port      int
-	Token     string
+	Token     string // the worker's egress bearer: names its subject to this proxy
+	Ingress   string // the token this proxy presents to the worker's dsh on every request
 	Dir       string // per-user cache root on the encrypted volume
 	Sessions  string
 	Workspace string
@@ -209,6 +210,7 @@ func (m *WorkerManager) Ensure(sub string) *Worker {
 		Subject: sub, Key: key,
 		Port:     m.allocPort(),
 		Token:    randomToken(),
+		Ingress:  randomToken(),
 		Dir:      filepath.Join(envOr("HARNESS_USERS_DIR", "/data/users"), key),
 		exited:   make(chan struct{}),
 		lastSeen: time.Now(), started: time.Now(),
@@ -322,7 +324,9 @@ func (m *WorkerManager) start(w *Worker) {
 			return
 		default:
 		}
-		resp, err := http.Get(w.Upstream() + "/")
+		probe, _ := http.NewRequest(http.MethodGet, w.Upstream()+"/", nil)
+		probe.Header.Set("X-Privasys-Ingress-Token", w.Ingress)
+		resp, err := http.DefaultClient.Do(probe)
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode < 500 {
@@ -458,6 +462,10 @@ func (m *WorkerManager) command(w *Worker) (*exec.Cmd, error) {
 	env["DSH_HOME"] = w.Home
 	env["PRIVASYS_BEARER"] = w.Token
 	env["DEEPSEEK_API_KEY"] = w.Token
+	// dsh (overlay 2b) refuses any request without this token, so the
+	// worker's loopback port is usable by this proxy alone: another user's
+	// sandboxed shell shares the network namespace but not this value.
+	env["DSH_INGRESS_TOKEN"] = w.Ingress
 	env["DEEPSEEK_BASE_URL"] = "http://" + m.cfg.listenAddr + "/model/v1"
 	env["USER"] = "harness-" + w.Key
 	// The governed fast path for the worker's shell: every child inherits

@@ -33,6 +33,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	neturl "net/url"
@@ -377,6 +378,20 @@ func main() {
 // port) from the routing handler to the reverse proxy's director.
 type upstreamKey struct{}
 
+// ingressTokenKey carries the chosen worker's ingress token alongside.
+type ingressTokenKey struct{}
+
+// isLoopbackPeer reports whether a connection came from inside this
+// container's network namespace rather than from the enclave manager.
+func isLoopbackPeer(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp *stamper, broker *capability.Broker, syncer *capability.Syncer, meter *spendMeter, mgr *WorkerManager) {
 	listen, upstream := cfg.ingressListen, cfg.dshUpstream
 	var target *neturl.URL
@@ -421,6 +436,13 @@ func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp 
 		if u, ok := req.Context().Value(upstreamKey{}).(*neturl.URL); ok && u != nil {
 			req.URL.Scheme = u.Scheme
 			req.URL.Host = u.Host
+		}
+		// Every worker's dsh answers only requests carrying the token this
+		// process minted for it (DSH_INGRESS_TOKEN in its environment). Its
+		// loopback port is otherwise reachable by every process in the
+		// container, including the other users' sandboxed shells.
+		if tok, ok := req.Context().Value(ingressTokenKey{}).(string); ok && tok != "" {
+			req.Header.Set("X-Privasys-Ingress-Token", tok)
 		}
 		// Bind the acting user: the sealed relay asserts the signed-in
 		// subject on every unsealed request (see subject.go).
@@ -515,6 +537,16 @@ func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp 
 			writeJSON(w, http.StatusOK, map[string]any{"workers": mgr.Snapshot()})
 		})
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			// The subject is the relay's assertion, and the relay reaches
+			// this port from the enclave manager's address. A connection from
+			// INSIDE the container (a worker's shell on loopback) is not the
+			// relay, whatever header it sends: strip the claim so such a
+			// caller is anonymous and can reach only the public shell.
+			if isLoopbackPeer(r.RemoteAddr) {
+				r.Header.Del("X-Privasys-Sub")
+			}
+			// Only this process adds the worker token dsh checks.
+			r.Header.Del("X-Privasys-Ingress-Token")
 			sub := r.Header.Get("X-Privasys-Sub")
 			var worker *Worker
 			if sub == "" {
@@ -538,7 +570,9 @@ func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp 
 				return
 			}
 			u, _ := neturl.Parse(worker.Upstream())
-			rp.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), upstreamKey{}, u)))
+			ctx := context.WithValue(r.Context(), upstreamKey{}, u)
+			ctx = context.WithValue(ctx, ingressTokenKey{}, worker.Ingress)
+			rp.ServeHTTP(w, r.WithContext(ctx))
 		})
 		log.Printf("[ingress] listening on %s -> per-user dsh workers", listen)
 		if err := http.ListenAndServe(listen, mux); err != nil {
