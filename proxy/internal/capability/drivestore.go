@@ -358,6 +358,29 @@ func (d *DriveStore) Get(fileID string) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(resp.Body, 64<<20))
 }
 
+// RefusedError is Drive refusing the capability itself (401/403): withdrawn
+// by the holder, expired, or presented off the attested identity. Callers
+// distinguish it from an outage because the two call for different words on
+// screen — "connect again" versus "trying again".
+type RefusedError struct {
+	Op     string
+	Status int
+	Msg    string
+}
+
+func (e *RefusedError) Error() string {
+	return fmt.Sprintf("capability: Drive refused %s (HTTP %d: %s) — the capability may have been "+
+		"revoked or expired, the call may not be riding the attested client identity (Drive then "+
+		"matches the peer app id against the grant subject), or the target may be outside the "+
+		"granted folder", e.Op, e.Status, e.Msg)
+}
+
+// IsRefused reports whether err is Drive refusing the capability.
+func IsRefused(err error) bool {
+	var r *RefusedError
+	return errors.As(err, &r)
+}
+
 // driveError turns a Drive refusal into a sentence worth reading. A 403 here
 // almost always means one of three things, and naming them saves the next
 // person the investigation.
@@ -365,10 +388,7 @@ func driveError(op string, resp *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
 	msg := strings.TrimSpace(string(body))
 	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
-		return fmt.Errorf("capability: Drive refused %s (HTTP %d: %s) — the capability may have been "+
-			"revoked or expired, the call may not be riding the attested client identity (Drive then "+
-			"matches the peer app id against the grant subject), or the target may be outside the "+
-			"granted folder", op, resp.StatusCode, msg)
+		return &RefusedError{Op: op, Status: resp.StatusCode, Msg: msg}
 	}
 	return fmt.Errorf("capability: Drive %s failed (HTTP %d: %s)", op, resp.StatusCode, msg)
 }

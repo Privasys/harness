@@ -22,7 +22,7 @@ import (
 	"github.com/Privasys/attested-harness/proxy/internal/capability"
 )
 
-func registerCapabilityAPI(mux *http.ServeMux, broker *capability.Broker) {
+func registerCapabilityAPI(mux *http.ServeMux, broker *capability.Broker, syncer *capability.Syncer) {
 	// Begin an ask. Called by the harness UI over the sealed session, so the
 	// relay-asserted subject names the holder this capability will belong to.
 	mux.HandleFunc("POST /privasys/capability/request", func(w http.ResponseWriter, r *http.Request) {
@@ -78,6 +78,12 @@ func registerCapabilityAPI(mux *http.ServeMux, broker *capability.Broker) {
 		resp["declined"] = st.Declined
 		resp["resource_app"] = st.ResourceApp
 		resp["permissions"] = st.Permissions
+		// The runtime cannot see a revoke made in Drive; the mirror can, on
+		// its next pass. "Granted but refused" is a state the user must see
+		// as such, not as "saved to your Drive".
+		if st.Persistent && syncer != nil && syncer.AccessWithdrawn() {
+			resp["withdrawn"] = true
+		}
 		// Drive confines app folders to AppData/<label>/ and reports the path
 		// it actually chose (the label can be suffixed on collision), so once
 		// granted the reported path wins over the declared label.

@@ -16,43 +16,63 @@ import (
 
 // Store holds the ceiling and the per-tenant policies.
 //
-// ⚠ TRANSITIONAL LOCATION. D6' puts per-user state on the acting user's Drive
-// under per-user keys, so that an enterprise admin's access is decided by
-// Drive's tenant roles rather than by anything the harness grants (D11). Until
-// the Drive storage adapter lands, tenant policies live on the enclave's
-// encrypted volume, keyed by a hash of the subject. That is safe for the
-// single-user deployment we run today — the container IS the tenancy boundary
-// — and must NOT outlive it: a shared volume holding several tenants' policies
-// is precisely the isolation problem mutualisation removes. The migration is
-// this file only; nothing above it knows where the bytes live.
+// The ceiling is the deployment's (measured image, or an owner-set file on
+// the volume). A tenant's policy is THEIR data: D6' puts it on the acting
+// user's Drive under their own keys, so an enterprise admin's access to it is
+// decided by Drive's tenant roles rather than by anything the harness grants
+// (D11), and the enclave keeps no per-user record. The store therefore reads
+// and writes tenant documents through a TenantBackend the command layer
+// supplies (the holder's granted Drive folder), caching them in memory for
+// the life of the process. Without a backend, or before the holder has
+// connected a Drive, a tenant policy lives in memory only and the write
+// reports that it was not persisted — never silently.
 type Store struct {
 	dir string
 
 	mu      sync.RWMutex
 	ceiling *Document
 	tenants map[string]*Document // keyed by subjectKey(sub)
+	backend TenantBackend
 
 	// OnCeilingChange fires after the ceiling's digest moves, so the caller can
 	// re-stamp the attested extension and evict anything derived from it.
 	OnCeilingChange func(*Document)
 }
 
+// TenantBackend is where one subject's policy document lives.
+type TenantBackend interface {
+	// Load returns the stored document, found=false when the subject has
+	// none, and an error when the backend could not be consulted.
+	Load(sub string) (raw []byte, found bool, err error)
+	// Save stores the document. ErrNotPersisted means the backend has
+	// nowhere to put it for this subject yet (no Drive connected); the
+	// caller keeps the document in memory and says so.
+	Save(sub string, raw []byte) error
+}
+
+// ErrNotPersisted is returned by a TenantBackend that cannot store for the
+// subject yet. It is not a failure of the policy, only of its durability.
+var ErrNotPersisted = errors.New("policy: not persisted (no Drive connected for this user)")
+
 // NewStore opens (and creates) the policy directory.
 func NewStore(dir string) *Store {
 	return &Store{dir: dir, tenants: map[string]*Document{}}
 }
 
+// SetTenantBackend wires where tenant documents are kept.
+func (s *Store) SetTenantBackend(b TenantBackend) {
+	s.mu.Lock()
+	s.backend = b
+	s.mu.Unlock()
+}
+
 func (s *Store) ceilingPath() string { return filepath.Join(s.dir, "ceiling.json") }
 
-// subjectKey avoids putting a raw pairwise subject on the filesystem: it is an
-// identifier for a person, and a directory listing should not enumerate them.
+// subjectKey keys the in-memory cache without holding a raw pairwise subject
+// in any structure that might be dumped: it is an identifier for a person.
 func subjectKey(sub string) string {
 	sum := sha256.Sum256([]byte(sub))
 	return hex.EncodeToString(sum[:16])
-}
-
-func (s *Store) tenantPath(sub string) string {
-	return filepath.Join(s.dir, "tenants", subjectKey(sub)+".json")
 }
 
 // LoadCeiling reads the ceiling from disk, falling back to a bootstrap
@@ -163,12 +183,22 @@ func (s *Store) Tenant(sub string) *Document {
 	key := subjectKey(sub)
 	s.mu.RLock()
 	d, ok := s.tenants[key]
+	backend := s.backend
 	s.mu.RUnlock()
 	if ok {
 		return d
 	}
-	raw, err := os.ReadFile(s.tenantPath(sub))
+	if backend == nil {
+		return nil
+	}
+	raw, found, err := backend.Load(sub)
 	if err != nil {
+		// A backend outage is not "no policy": say so, but the ceiling still
+		// applies and the next read tries again.
+		log.Printf("[policy] tenant document for %.8s… could not be read (the ceiling still applies): %v", sub, err)
+		return nil
+	}
+	if !found {
 		return nil
 	}
 	parsed, err := Parse(raw, ScopeTenant)
@@ -182,29 +212,32 @@ func (s *Store) Tenant(sub string) *Document {
 	return parsed
 }
 
-// SaveTenant validates one subject's policy and persists it.
+// SaveTenant validates one subject's policy and persists it. persisted is
+// false when the document was accepted but has no durable home yet (no
+// Drive connected for this user): it applies for the life of the process
+// and the caller must say so.
 //
 // The narrowing invariant is checked HERE, at the write, as well as being
 // enforced at every request by conjunction. Rejecting a widening document when
 // it is written gives the user an immediate, comprehensible error instead of a
 // policy that silently does less than it says.
-func (s *Store) SaveTenant(sub string, raw []byte) (*Document, error) {
+func (s *Store) SaveTenant(sub string, raw []byte) (d *Document, persisted bool, err error) {
 	if sub == "" {
-		return nil, errors.New("policy: no acting subject")
+		return nil, false, errors.New("policy: no acting subject")
 	}
-	d, err := Parse(raw, ScopeTenant)
+	d, err = Parse(raw, ScopeTenant)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if d.Subject != sub {
-		return nil, fmt.Errorf("policy: document subject does not match the acting subject")
+		return nil, false, fmt.Errorf("policy: document subject does not match the acting subject")
 	}
 	ceiling := s.Ceiling()
 	if ceiling == nil {
-		return nil, errors.New("policy: no ceiling loaded")
+		return nil, false, errors.New("policy: no ceiling loaded")
 	}
 	if d.Egress.Mode.rank() > ceiling.Egress.Mode.rank() {
-		return nil, fmt.Errorf("policy: egress mode %q is more permissive than this harness permits (%q); a tenant policy may only narrow",
+		return nil, false, fmt.Errorf("policy: egress mode %q is more permissive than this harness permits (%q); a tenant policy may only narrow",
 			d.Egress.Mode, ceiling.Egress.Mode)
 	}
 	// A tenant allowlist entry the ceiling would refuse is not an error — the
@@ -217,21 +250,29 @@ func (s *Store) SaveTenant(sub string, raw []byte) (*Document, error) {
 				probe = trimmed
 			}
 			if !HostMatches(probe, ceiling.Egress.Allowlist) {
-				return nil, fmt.Errorf("policy: %q is not permitted by this harness's allowlist; a tenant policy may only narrow", h)
+				return nil, false, fmt.Errorf("policy: %q is not permitted by this harness's allowlist; a tenant policy may only narrow", h)
 			}
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(s.tenantPath(sub)), 0o700); err != nil {
-		return nil, err
-	}
-	if err := writeFileAtomic(s.tenantPath(sub), d.Raw()); err != nil {
-		return nil, err
+	s.mu.RLock()
+	backend := s.backend
+	s.mu.RUnlock()
+	persisted = false
+	if backend != nil {
+		switch err := backend.Save(sub, d.Raw()); {
+		case err == nil:
+			persisted = true
+		case errors.Is(err, ErrNotPersisted):
+			// Accepted, applies now, kept in memory; the caller tells the user.
+		default:
+			return nil, false, err
+		}
 	}
 	s.mu.Lock()
 	s.tenants[subjectKey(sub)] = d
 	s.mu.Unlock()
-	log.Printf("[policy] tenant policy saved for %.8s… (mode=%s digest=%.16s…)", sub, d.Egress.Mode, d.Digest())
-	return d, nil
+	log.Printf("[policy] tenant policy saved for %.8s… (mode=%s digest=%.16s… persisted=%v)", sub, d.Egress.Mode, d.Digest(), persisted)
+	return d, persisted, nil
 }
 
 // probeHost turns a wildcard entry into a hostname the ceiling's matcher can

@@ -86,17 +86,25 @@ func registerPolicyAPI(mux *http.ServeMux, store *policy.Store, stamp *stamper) 
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		d, err := store.SaveTenant(sub, raw)
+		d, persisted, err := store.SaveTenant(sub, raw)
 		if err != nil {
 			// Policy errors are user-facing and actionable — surface the
 			// sentence, not a generic 400.
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{
+		out := map[string]any{
 			"digest":  d.Digest(),
 			"summary": store.Effective(sub).Summarise(),
-		})
+			// The document lives in the holder's Drive folder. Before a Drive
+			// is connected it applies for this process only, and the UI must
+			// say so rather than imply the enclave kept it.
+			"persisted": persisted,
+		}
+		if !persisted {
+			out["notice"] = "this policy applies now but is not saved anywhere: connect your Drive to keep it"
+		}
+		writeJSON(w, http.StatusOK, out)
 	})
 
 	// What this harness ACTUALLY reached, as distinct from what it permits.

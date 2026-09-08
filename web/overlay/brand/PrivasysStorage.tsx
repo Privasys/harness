@@ -32,6 +32,7 @@ interface StorageState {
   persistent?: boolean
   declined?: boolean
   signed_in?: boolean
+  withdrawn?: boolean
   folder?: string
 }
 
@@ -108,13 +109,16 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
 
   if (state === undefined) return null
 
-  const persistent = state.persistent === true
+  // A grant the runtime recorded but Drive now refuses (withdrawn there, or
+  // expired) is NOT "saved": the mirror sees the refusal and the row says so.
+  const withdrawn = state.withdrawn === true
+  const persistent = state.persistent === true && !withdrawn
   const declined = state.declined === true
   // Not an option with two acceptable answers. Without a Drive this harness
   // cannot keep anything: the session root is a tmpfs and dies with the
   // container. The row says setup is incomplete, not that a preference is unset.
-  const label = persistent ? 'Saved to your Drive' : 'Connect your Drive'
-  const colour = persistent ? '#059669' : '#d97706' 
+  const label = withdrawn ? 'Drive access withdrawn' : persistent ? 'Saved to your Drive' : 'Connect your Drive'
+  const colour = persistent ? '#059669' : '#d97706'
 
   return (
     <>
@@ -167,6 +171,15 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
                       that one folder and nothing else — and you can withdraw it at any time
                       in Drive.
                     </p>
+                    {withdrawn
+                      ? (
+                        <p style={{ fontSize: 12.5, color: '#b45309' }}>
+                          Your Drive is refusing this harness: the access was withdrawn there, or
+                          has expired. Nothing has been saved since. Connect your Drive again to
+                          approve it afresh.
+                        </p>
+                      )
+                      : null}
                     {declined
                       ? (
                         <p style={{ fontSize: 12.5, color: '#6b7280' }}>
@@ -176,8 +189,8 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
                       : null}
                     <button type="button" className="pv-row" style={{ width: 'auto', marginTop: 8 }}
                       disabled={busy}
-                      onClick={() => { request(declined) }}>
-                      {busy ? 'Preparing…' : declined ? 'Ask me again' : 'Connect my Drive'}
+                      onClick={() => { request(declined || withdrawn) }}>
+                      {busy ? 'Preparing…' : withdrawn ? 'Connect again' : declined ? 'Ask me again' : 'Connect my Drive'}
                     </button>
                   </>
                 )}

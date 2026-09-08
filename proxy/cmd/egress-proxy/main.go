@@ -217,8 +217,18 @@ func main() {
 		// On-platform: drop dsh's Authorization bearer so CAI authenticates
 		// the harness as an attested app (mutual RA-TLS peer identity), not a
 		// token. Off platform the bearer is the only credential — keep it.
+		//
+		// The acting user pays for inference (decision 2026-09-08): the same
+		// relay-asserted subject the tool leg stamps is named here too, so
+		// CAI meters the turn to the user's own account instead of the
+		// harness app's. The header is set only from the measured binding —
+		// any value dsh or the model supplied is discarded first.
+		r.Header.Del("X-Privasys-On-Behalf-Of")
 		if cfg.onPlatform {
 			r.Header.Del("Authorization")
+			if sub := currentSubject(); sub != "" {
+				r.Header.Set("X-Privasys-On-Behalf-Of", sub)
+			}
 		}
 		forward(w, r, client, cfg.modelHost, strings.TrimPrefix(r.URL.Path, "/model"), true)
 	})
@@ -282,6 +292,9 @@ func main() {
 	// shims): Drive matches the verified peer app id against the grant subject,
 	// and an unattested connection would silently get the weaker key-only check.
 	registerStorageAPI(mux, broker, client, cfg.toolHosts["drive"])
+	// A tenant's policy is their data too: it lives in their Drive folder,
+	// never on this volume (D6'). In memory until they connect one.
+	store.SetTenantBackend(newDriveTenantBackend(broker, client, cfg.toolHosts["drive"]))
 
 	// Carry the holder's data out to their Drive: session logs mirrored one
 	// file per file, the working tree as a content-addressed snapshot. dsh
@@ -328,7 +341,7 @@ func main() {
 	// to dsh on the loopback upstream, 503 until dsh is listening. Putting
 	// ingress here too means the measured Go layer owns every network edge.
 	if cfg.ingressListen != "" && cfg.dshUpstream != "" {
-		go serveIngress(cfg, deps, store, stamp, broker)
+		go serveIngress(cfg, deps, store, stamp, broker, syncer)
 	}
 
 	if err := http.ListenAndServe(cfg.listenAddr, mux); err != nil {
@@ -338,7 +351,7 @@ func main() {
 
 // serveIngress fronts the platform port: instant health, the browser
 // attestation summary, and a reverse-proxy to dsh once it is up.
-func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp *stamper, broker *capability.Broker) {
+func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp *stamper, broker *capability.Broker, syncer *capability.Syncer) {
 	listen, upstream := cfg.ingressListen, cfg.dshUpstream
 	target, err := neturl.Parse(upstream)
 	if err != nil {
@@ -444,7 +457,7 @@ func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp 
 	// The verification API: how a user checks which policy this enclave is
 	// applying to them, and how a third party checks the product's posture.
 	registerPolicyAPI(mux, store, stamp)
-	registerCapabilityAPI(mux, broker)
+	registerCapabilityAPI(mux, broker, syncer)
 	mux.Handle("/", rp)
 	log.Printf("[ingress] listening on %s -> %s", listen, upstream)
 	if err := http.ListenAndServe(listen, mux); err != nil {

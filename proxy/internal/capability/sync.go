@@ -107,6 +107,32 @@ type Syncer struct {
 	// data is on disk: dsh builds its workspace list ONCE at start and never
 	// re-bootstraps, so a session restored after that start is invisible.
 	ready bool
+	// withdrawn is set when Drive refuses the capability itself (401/403)
+	// and cleared by the next pass Drive accepts. The runtime cannot see a
+	// revoke made in Drive, so this is the only place the truth surfaces.
+	withdrawn bool
+}
+
+// AccessWithdrawn reports whether Drive last refused the holder's capability.
+func (s *Syncer) AccessWithdrawn() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.withdrawn
+}
+
+// noteOutcome records whether Drive accepted the capability on this pass.
+func (s *Syncer) noteOutcome(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch {
+	case err == nil:
+		s.withdrawn = false
+	case IsRefused(err):
+		if !s.withdrawn {
+			log.Printf("[sync] Drive refused the holder's capability; access looks withdrawn: %v", err)
+		}
+		s.withdrawn = true
+	}
 }
 
 // Ready reports whether the boot-time restore has completed.
@@ -162,6 +188,7 @@ func NewSyncer(broker *Broker, client *http.Client, driveHost, appID, sessionsRo
 // Status reports what the UI needs to tell the truth about persistence.
 type SyncStatus struct {
 	Available        bool      `json:"available"`
+	AccessWithdrawn  bool      `json:"access_withdrawn,omitempty"`
 	Reason           string    `json:"reason,omitempty"`
 	Folder           string    `json:"folder,omitempty"`
 	LastSync         time.Time `json:"last_sync,omitempty"`
@@ -174,7 +201,7 @@ type SyncStatus struct {
 func (s *Syncer) Status() SyncStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	st := SyncStatus{LastSync: s.last, Files: s.files, Blobs: s.blobCount, WorkspaceSavedAt: s.savedAt, LastError: s.lastErr}
+	st := SyncStatus{LastSync: s.last, Files: s.files, Blobs: s.blobCount, WorkspaceSavedAt: s.savedAt, LastError: s.lastErr, AccessWithdrawn: s.withdrawn}
 	sub := currentSubjectFn()
 	switch {
 	case sub == "":
@@ -185,6 +212,9 @@ func (s *Syncer) Status() SyncStatus {
 		st.Reason = "sessions are kept in memory only — connect your Drive to keep them"
 	case s.driveHost == "":
 		st.Reason = "no Drive host is configured for this deployment"
+	case s.withdrawn:
+		st.Reason = "your Drive refused this harness's access — it was withdrawn or has expired; connect your Drive again"
+		st.Folder = s.broker.Granted(sub).Path()
 	default:
 		st.Available = true
 		st.Folder = s.broker.Granted(sub).Path()
@@ -263,6 +293,10 @@ func (s *Syncer) SyncOnce() error {
 
 	sessErr := s.mirrorSessions(ds)
 	wsErr := s.snapshotWorkspace(ds)
+	s.noteOutcome(sessErr)
+	if sessErr == nil {
+		s.noteOutcome(wsErr)
+	}
 
 	s.mu.Lock()
 	s.last = time.Now().UTC()
@@ -282,6 +316,7 @@ func (s *Syncer) SyncOnce() error {
 
 func (s *Syncer) mirrorSessions(ds *DriveStore) error {
 	var changed, failed int
+	var refused error
 	walkErr := filepath.WalkDir(s.sessions, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			// An unreadable entry must not abort the whole mirror: the rest of
@@ -321,6 +356,10 @@ func (s *Syncer) mirrorSessions(ds *DriveStore) error {
 		if _, putErr := ds.PutIn(parent, filepath.Base(rel), data); putErr != nil {
 			failed++
 			log.Printf("[sync] upload %s: %v", rel, putErr)
+			if IsRefused(putErr) {
+				refused = putErr
+				return fs.SkipAll // the capability is gone; the rest would fail the same way
+			}
 			return nil
 		}
 		s.mu.Lock()
@@ -334,6 +373,9 @@ func (s *Syncer) mirrorSessions(ds *DriveStore) error {
 	}
 	if changed > 0 || failed > 0 {
 		log.Printf("[sync] mirrored %d session file(s) to the holder's Drive, %d failed", changed, failed)
+	}
+	if refused != nil {
+		return refused
 	}
 	if failed > 0 {
 		return fmt.Errorf("capability: %d session file(s) could not be mirrored", failed)
@@ -527,6 +569,9 @@ func (s *Syncer) snapshotWorkspace(ds *DriveStore) error {
 		if _, perr := ds.PutIn(blobsID, hash, data); perr != nil {
 			failed++
 			log.Printf("[sync] blob %s: %v", hash[:12], perr)
+			if IsRefused(perr) {
+				return perr
+			}
 			continue
 		}
 		s.mu.Lock()
