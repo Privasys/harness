@@ -130,10 +130,47 @@ func mcpShim(w http.ResponseWriter, r *http.Request, client *http.Client, toolNa
 			args = json.RawMessage(`{}`)
 		}
 		args = applyDocumentedDefaults(toolName, p.Name, args)
-		result, status, err := callTool(r, client, host, p.Name, args)
+		result, status, price, err := callTool(r, client, host, p.Name, args, "")
 		if err != nil {
 			rpcError(w, req.ID, -32000, fmt.Sprintf("tool call: %v", err))
 			return
+		}
+		// A priced tool: the runtime refused with the exact attested price.
+		// Consent is the USER's standing policy, never the model's answer;
+		// when it admits this price the call is retried with the byte-exact
+		// header, and the charge is recorded against the session. When it
+		// does not, the model is told why in words it can relay.
+		if status == http.StatusPaymentRequired {
+			credits := parseCredits(price, string(result))
+			if credits == 0 {
+				rpcResult(w, req.ID, map[string]any{
+					"content": []map[string]any{{"type": "text", "text": string(result)}},
+					"isError": true,
+				})
+				return
+			}
+			ok, why := spendConsent(toolName, p.Name, credits)
+			if !ok {
+				msg, _ := json.Marshal(map[string]any{
+					"error":   "payment approval required",
+					"tool":    toolName + "/" + p.Name,
+					"price":   priceHeaderValue(credits),
+					"message": why,
+				})
+				rpcResult(w, req.ID, map[string]any{
+					"content": []map[string]any{{"type": "text", "text": string(msg)}},
+					"isError": true,
+				})
+				return
+			}
+			result, status, _, err = callTool(r, client, host, p.Name, args, priceHeaderValue(credits))
+			if err != nil {
+				rpcError(w, req.ID, -32000, fmt.Sprintf("tool call: %v", err))
+				return
+			}
+			if status >= 200 && status < 300 {
+				spendCharged(toolName, p.Name, credits)
+			}
 		}
 		// Non-2xx upstreams surface as tool errors the model can read,
 		// not protocol errors that abort the loop.
@@ -229,32 +266,43 @@ func fetchCatalogue(r *http.Request, client *http.Client, host string) ([]upstre
 	return payload.Tools, nil
 }
 
-func callTool(r *http.Request, client *http.Client, host, fn string, args json.RawMessage) (json.RawMessage, int, error) {
+// callTool performs one tool invocation. approved, when set, is the
+// byte-exact fee consent (`N credits`) the runtime hosting the tool expects;
+// the returned price is the runtime's X-Billing-Price on a refusal.
+func callTool(r *http.Request, client *http.Client, host, fn string, args json.RawMessage, approved string) (json.RawMessage, int, string, error) {
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost,
 		"https://"+host+"/api/v1/mcp/tools/"+fn, bytes.NewReader(args))
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if auth := r.Header.Get("Authorization"); auth != "" {
 		req.Header.Set("Authorization", auth)
 	}
 	// Name the acting user for user-scoped tool apps (Drive requires it on
-	// every tool call). The subject is the relay-asserted sign-in identity
-	// recorded by the ingress front — never anything the model supplied.
+	// every tool call) and, since 2026-09-08, the PAYER of a priced call.
+	// The subject is the relay-asserted sign-in identity recorded by the
+	// ingress front — never anything the model supplied.
 	if sub := currentSubject(); sub != "" {
 		req.Header.Set("X-Privasys-On-Behalf-Of", sub)
 	}
+	// The consent header is set by THIS layer from the user's policy, never
+	// copied from what dsh or the model sent: the model could otherwise
+	// approve a fee on the user's behalf simply by asking.
+	req.Header.Del("X-Billing-Approved")
+	if approved != "" {
+		req.Header.Set("X-Billing-Approved", approved)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, "", err
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
-		return nil, resp.StatusCode, err
+		return nil, resp.StatusCode, "", err
 	}
-	return raw, resp.StatusCode, nil
+	return raw, resp.StatusCode, resp.Header.Get("X-Billing-Price"), nil
 }
 
 func truncate(b []byte, n int) string {

@@ -295,6 +295,10 @@ func main() {
 	// A tenant's policy is their data too: it lives in their Drive folder,
 	// never on this volume (D6'). In memory until they connect one.
 	store.SetTenantBackend(newDriveTenantBackend(broker, client, cfg.toolHosts["drive"]))
+	// Standing consent to per-call tool fees comes from that same document;
+	// the meter turns it into the byte-exact header and keeps the running
+	// total the per-session figure bounds.
+	meter := installSpendMeter(store)
 
 	// Carry the holder's data out to their Drive: session logs mirrored one
 	// file per file, the working tree as a content-addressed snapshot. dsh
@@ -341,7 +345,7 @@ func main() {
 	// to dsh on the loopback upstream, 503 until dsh is listening. Putting
 	// ingress here too means the measured Go layer owns every network edge.
 	if cfg.ingressListen != "" && cfg.dshUpstream != "" {
-		go serveIngress(cfg, deps, store, stamp, broker, syncer)
+		go serveIngress(cfg, deps, store, stamp, broker, syncer, meter)
 	}
 
 	if err := http.ListenAndServe(cfg.listenAddr, mux); err != nil {
@@ -351,7 +355,7 @@ func main() {
 
 // serveIngress fronts the platform port: instant health, the browser
 // attestation summary, and a reverse-proxy to dsh once it is up.
-func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp *stamper, broker *capability.Broker, syncer *capability.Syncer) {
+func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp *stamper, broker *capability.Broker, syncer *capability.Syncer, meter *spendMeter) {
 	listen, upstream := cfg.ingressListen, cfg.dshUpstream
 	target, err := neturl.Parse(upstream)
 	if err != nil {
@@ -458,6 +462,11 @@ func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp 
 	// applying to them, and how a third party checks the product's posture.
 	registerPolicyAPI(mux, store, stamp)
 	registerCapabilityAPI(mux, broker, syncer)
+	toolNames := make([]string, 0, len(cfg.toolHosts))
+	for name := range cfg.toolHosts {
+		toolNames = append(toolNames, name)
+	}
+	registerSpendAPI(mux, store, meter, toolNames)
 	mux.Handle("/", rp)
 	log.Printf("[ingress] listening on %s -> %s", listen, upstream)
 	if err := http.ListenAndServe(listen, mux); err != nil {

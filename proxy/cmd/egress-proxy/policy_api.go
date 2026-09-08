@@ -34,6 +34,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 
 	"github.com/Privasys/attested-harness/proxy/internal/policy"
 )
@@ -41,6 +42,25 @@ import (
 // maxPolicyBytes bounds a submitted document. Policies are small; anything
 // larger is a mistake or an attempt to exhaust the enclave's memory.
 const maxPolicyBytes = 256 << 10
+
+// fillSubject sets `subject` on a tenant document that omits it. The document
+// is re-serialised only in that case; a document that already names a
+// subject is stored byte for byte.
+func fillSubject(raw []byte, sub string) []byte {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil || m == nil {
+		return raw
+	}
+	if v, ok := m["subject"]; ok && len(v) > 0 && string(v) != `""` {
+		return raw
+	}
+	m["subject"] = json.RawMessage(strconv.Quote(sub))
+	out, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return raw
+	}
+	return out
+}
 
 // registerPolicyAPI mounts the verification and tenant-write endpoints.
 func registerPolicyAPI(mux *http.ServeMux, store *policy.Store, stamp *stamper) {
@@ -86,6 +106,11 @@ func registerPolicyAPI(mux *http.ServeMux, store *policy.Store, stamp *stamper) 
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
+		// The panel never learns the raw subject (the GET redacts it), so a
+		// document it submits may omit `subject`; the acting subject is the
+		// only value that could ever be right there, and the store still
+		// refuses a document naming anyone else.
+		raw = fillSubject(raw, sub)
 		d, persisted, err := store.SaveTenant(sub, raw)
 		if err != nil {
 			// Policy errors are user-facing and actionable — surface the

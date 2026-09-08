@@ -178,6 +178,41 @@ type Audit struct {
 	PerStepAssurance bool `json:"per_step_assurance,omitempty"`
 }
 
+// Spend is standing consent to per-call API fees (x-privasys.price). A priced
+// tool call is admitted only when the holder's OWN document admits the
+// exact price the attested runtime quoted, per call and within the running
+// session total; the ceiling may cap these figures but can never grant on a
+// user's behalf, because the fee is charged to the user ("the user pays",
+// api-fees-plan §9). Consent given here is what the proxy turns into the
+// byte-exact X-Billing-Approved header, so a successful priced call remains
+// attestable proof that a person consented to that price — the person is
+// the document's subject, and the document lives in their Drive.
+//
+// Credits are the platform's unit (1 credit = £0.00001 at the time of
+// writing). Zero means "not set": a tenant document without a per-call
+// figure admits no priced call at all.
+type Spend struct {
+	// PerCallMaxCredits admits any single call priced at or below it.
+	PerCallMaxCredits uint64 `json:"per_call_max_credits,omitempty"`
+	// PerSessionMaxCredits bounds the running total this process may charge
+	// the subject; zero leaves the total unbounded (per-call still applies).
+	PerSessionMaxCredits uint64 `json:"per_session_max_credits,omitempty"`
+	// Tools overrides the per-call figure for one attested tool app, by the
+	// name the harness mounts it under (web_search, web_reader, drive, …).
+	Tools map[string]uint64 `json:"tools,omitempty"`
+}
+
+// PerCall returns the per-call figure that applies to one tool.
+func (s *Spend) PerCall(tool string) uint64 {
+	if s == nil {
+		return 0
+	}
+	if v, ok := s.Tools[tool]; ok {
+		return v
+	}
+	return s.PerCallMaxCredits
+}
+
 // Document is one policy at one tier.
 type Document struct {
 	Policy    string    `json:"policy"`
@@ -191,6 +226,7 @@ type Document struct {
 	Egress    Egress    `json:"egress"`
 	Data      Data      `json:"data,omitempty"`
 	Audit     Audit     `json:"audit,omitempty"`
+	Spend     *Spend    `json:"spend,omitempty"`
 
 	// raw is the exact byte sequence this document was parsed from, and the
 	// preimage of Digest. Never re-serialised: see the package comment.

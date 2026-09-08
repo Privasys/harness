@@ -254,6 +254,23 @@ func (s *Store) SaveTenant(sub string, raw []byte) (d *Document, persisted bool,
 			}
 		}
 	}
+	// Spend narrows too: a tenant may not consent to more per call, or more
+	// per session, than the ceiling caps — an enterprise's cap is the
+	// operator's decision. Where the ceiling sets no figure the tenant is
+	// free, since the fee is the user's own money.
+	if d.Spend != nil && ceiling.Spend != nil {
+		if c := ceiling.Spend.PerCallMaxCredits; c > 0 && d.Spend.PerCallMaxCredits > c {
+			return nil, false, fmt.Errorf("policy: per-call spending of %d credits exceeds this harness's cap of %d", d.Spend.PerCallMaxCredits, c)
+		}
+		if c := ceiling.Spend.PerSessionMaxCredits; c > 0 && (d.Spend.PerSessionMaxCredits == 0 || d.Spend.PerSessionMaxCredits > c) {
+			return nil, false, fmt.Errorf("policy: per-session spending must stay within this harness's cap of %d credits", c)
+		}
+		for tool, v := range d.Spend.Tools {
+			if c := ceiling.Spend.PerCall(tool); c > 0 && v > c {
+				return nil, false, fmt.Errorf("policy: per-call spending for %q of %d credits exceeds this harness's cap of %d", tool, v, c)
+			}
+		}
+	}
 	s.mu.RLock()
 	backend := s.backend
 	s.mu.RUnlock()

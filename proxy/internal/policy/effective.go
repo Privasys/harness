@@ -89,6 +89,57 @@ func (e Effective) MCPServers() []MCPServer {
 	return out
 }
 
+// SpendCaps is what applies to one tool for one subject: the holder's own
+// consent figures, narrowed by the ceiling's caps where the ceiling sets any.
+type SpendCaps struct {
+	// Consented is false when the holder has set no spend policy at all: no
+	// priced call is admitted, whatever the ceiling would allow.
+	Consented  bool   `json:"consented"`
+	PerCall    uint64 `json:"per_call_max_credits"`
+	PerSession uint64 `json:"per_session_max_credits"` // 0 = unbounded
+}
+
+// SpendCapsFor resolves the caps for one tool. Conjunction again: the
+// tenant's figure and the ceiling's figure both bound the call, and the
+// tenant must have set one — the ceiling never consents for a user.
+func (e Effective) SpendCapsFor(tool string) SpendCaps {
+	if e.Tenant == nil || e.Tenant.Spend == nil {
+		return SpendCaps{}
+	}
+	caps := SpendCaps{
+		Consented:  e.Tenant.Spend.PerCall(tool) > 0,
+		PerCall:    e.Tenant.Spend.PerCall(tool),
+		PerSession: e.Tenant.Spend.PerSessionMaxCredits,
+	}
+	if e.Ceiling != nil && e.Ceiling.Spend != nil {
+		if c := e.Ceiling.Spend.PerCall(tool); c > 0 && (caps.PerCall == 0 || c < caps.PerCall) {
+			caps.PerCall = c
+		}
+		if c := e.Ceiling.Spend.PerSessionMaxCredits; c > 0 && (caps.PerSession == 0 || c < caps.PerSession) {
+			caps.PerSession = c
+		}
+	}
+	return caps
+}
+
+// AdmitsSpend decides one priced call: credits is the price the attested
+// runtime quoted, spent is the subject's running total this session. The
+// reason is written for the agent to relay to the user, so it names the
+// figure and where to change it.
+func (e Effective) AdmitsSpend(tool string, credits, spent uint64) (bool, string) {
+	caps := e.SpendCapsFor(tool)
+	if !caps.Consented {
+		return false, "this tool charges a fee and you have not approved any spending: set a per-call limit in the harness policy panel"
+	}
+	if credits > caps.PerCall {
+		return false, "this call would charge more than the per-call limit you approved in the harness policy panel"
+	}
+	if caps.PerSession > 0 && spent+credits > caps.PerSession {
+		return false, "this call would take this session past the spending limit you approved in the harness policy panel"
+	}
+	return true, ""
+}
+
 // ToolEnabled reports whether a built-in tool is active. Both tiers must admit
 // it, and the image is the ceiling above both: a tool absent from the bundle
 // cannot be switched on here at all.
