@@ -20,6 +20,7 @@
  * than by a per-user certificate.
  */
 import { useEffect, useState } from 'react'
+import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 
 const MODE_PROSE: Record<string, string> = {
   none: 'No network access at all. Local tools only.',
@@ -159,9 +160,11 @@ function SpendingSection({ policy, onSaved }: { policy: any; onSaved: () => void
             <Field label="Charged this session">
               {total} credits{charges.length ? ` across ${charges.length} call(s)` : ''}
             </Field>
-            <button type="button" className="pv-row" style={{ width: 'auto', marginTop: 6 }} disabled={saving} onClick={save}>
-              {saving ? 'Saving…' : 'Save limits'}
-            </button>
+            <div style={{ marginTop: 6 }}>
+              <Button variant="outline" size="sm" disabled={saving} onClick={save}>
+                {saving ? 'Saving…' : 'Save limits'}
+              </Button>
+            </div>
             {notice ? <div style={{ fontSize: 12, color: '#6b7280', marginTop: 6 }}>{notice}</div> : null}
           </>
         )}

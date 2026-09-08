@@ -1,0 +1,189 @@
+/* Privasys sidebar-foot rows (attested-harness fork).
+
+   ONE occupant of `sidebar.footer.action` renders a column of rows; each row
+   copies the geometry of the two foot controls dsh ships — the Settings
+   trigger (ui-settings-general SettingsRoot.module.css `.trigger`) and the
+   Cordis panel badge (ui-cordis CordisPanel.module.css `.badge`): a 42px row,
+   14px/22px primary label, r12, the interactive hover token, 8px icon gap,
+   and the `calc(100% + 4px) / -2px` overhang that lets the hover surface sit
+   flush with the column edge. In the collapsed rail every row is the same
+   36px circle as the rail controls. Status words ride the tertiary label
+   tone at 12px, pinned right like the Cordis badge count.
+
+   Only tokens dsh's theme defines (--dsw-alias-*) are used, so the rows read
+   as dsh's own in both themes and after a re-pin that moves the palette. */
+
+.column {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  min-width: 0;
+}
+
+.column.rail {
+  width: 36px;
+  align-items: center;
+}
+
+.layer {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 42px;
+}
+
+.rail .layer {
+  width: 36px;
+  height: 36px;
+}
+
+.row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: calc(100% + 4px);
+  height: 42px;
+  margin: 0 -2px;
+  padding: 0 10px 0 8px;
+  border: none;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 22px;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.row:hover,
+.row[aria-expanded='true'] {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.row:focus-visible {
+  outline: 2px solid var(--dsw-alias-border-l3);
+  outline-offset: -2px;
+}
+
+.row svg {
+  flex: none;
+}
+
+.rail .row {
+  justify-content: center;
+  gap: 0;
+  width: 36px;
+  height: 36px;
+  margin: 0;
+  padding: 0;
+  border-radius: 50%;
+  corner-shape: round;
+}
+
+.label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Right-pinned status: dot + word in the caption tone (Cordis `.badgeCount`). */
+.status {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+/* The user menu wraps its anchor row; the Menu primitive's root is an
+   inline-flex box, so it must be told to fill the column. */
+.menuRoot {
+  display: flex;
+  width: 100%;
+}
+
+/* Wide dialogs for the attestation report and the storage explainer: the
+   Modal primitive's card is 380px for confirmations; these carry a report. */
+.reportDialog {
+  width: min(860px, 100%);
+  max-height: calc(100vh - 48px);
+}
+
+.storageDialog {
+  width: min(560px, 100%);
+  max-height: calc(100vh - 48px);
+}
+
+/* Dialog body: scrolls inside the card, keeps the card's 24px inset. */
+.dialogBody {
+  min-height: 0;
+  padding: 0 24px;
+  overflow-y: auto;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.dialogBody p {
+  margin: 0 0 10px;
+}
+
+.dialogBody strong {
+  color: var(--dsw-alias-label-primary);
+  font-weight: 500;
+}
+
+.muted {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.warn {
+  color: var(--dsw-alias-state-warn-primary);
+}
+
+.error {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+/* "Approve on your device" box in the storage dialog. */
+.askBox {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: 12px;
+}
+
+.askTitle {
+  margin-bottom: 4px;
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.askFacts {
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+
+.askFacts code {
+  font-family: var(--dsh-font-mono, monospace);
+  color: var(--dsw-alias-label-primary);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}

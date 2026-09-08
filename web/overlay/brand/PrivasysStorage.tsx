@@ -1,4 +1,3 @@
-// @ts-nocheck -- same vendored-interop reason as PrivasysAttestation.tsx.
 /**
  * "Where your sessions are kept" — the storage row, and the one place a user
  * can ask for their conversations to live in their own Drive.
@@ -22,11 +21,14 @@
  * Still a sidebar row rather than a modal: non-blocking was the commitment, and
  * nobody mid-task should be interrupted. It states the current truth at all
  * times, so "where are my sessions?" is a glance rather than a support
- * question.
+ * question. The row is dsh's foot control (PrivasysFootRow.tsx) with the
+ * state as a dot and a word; the explainer is dsh's Modal.
  */
 import { useEffect, useState } from 'react'
+import { Button, IconFolderOpenOutline16, Modal, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SidebarFooterActionOwnerProps } from '@deepseek-ai/dsh-client-ui-sidebar/client'
-import { ensureRowStyles } from './PrivasysRows.tsx'
+import { FootRow } from './PrivasysFootRow.tsx'
+import css from './PrivasysFoot.module.css'
 
 interface StorageState {
   persistent?: boolean
@@ -54,18 +56,7 @@ function pvFetch(input: string, init?: RequestInit): Promise<Response> {
   return t?.fetch !== undefined ? t.fetch(input, init) : fetch(input, init)
 }
 
-function DriveIcon({ size = 16 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
-      stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"
-      aria-hidden="true">
-      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-    </svg>
-  )
-}
-
 export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
-  useEffect(() => { ensureRowStyles() }, [])
   const [state, setState] = useState<StorageState | undefined>(undefined)
   const [ask, setAsk] = useState<PendingAsk | undefined>(undefined)
   const [busy, setBusy] = useState(false)
@@ -117,111 +108,99 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
   // Not an option with two acceptable answers. Without a Drive this harness
   // cannot keep anything: the session root is a tmpfs and dies with the
   // container. The row says setup is incomplete, not that a preference is unset.
-  const label = withdrawn ? 'Drive access withdrawn' : persistent ? 'Saved to your Drive' : 'Connect your Drive'
-  const colour = persistent ? '#059669' : '#d97706'
+  const dot = persistent ? 'done' as const : withdrawn ? 'error' as const : 'warning' as const
+  const word = persistent ? 'In your Drive' : withdrawn ? 'Withdrawn' : 'Not saved'
+  const folder = state.folder ?? 'AppData/Harness'
 
   return (
     <>
-      <button
-        type="button"
-        className={`pv-row${wide ? '' : ' pv-row-narrow'}`}
-        style={{ color: colour }}
+      <FootRow
+        wide={wide}
+        icon={<IconFolderOpenOutline16 size={wide ? 16 : 18} />}
+        label="Sessions"
+        status={<><StateDot state={dot} size={10} /><span>{word}</span></>}
         title={persistent
           ? 'Your sessions are stored in your own Drive'
           : 'This harness cannot keep your sessions until you connect your Drive'}
-        aria-label="Session storage"
+        ariaLabel="Session storage"
+        haspopup="dialog"
+        expanded={open}
         onClick={() => { setOpen(true) }}
+      />
+      <Modal
+        open={open}
+        onClose={() => { setOpen(false) }}
+        title="Where your sessions are kept"
+        closeLabel="Close"
+        className={css.storageDialog ?? ''}
       >
-        <DriveIcon size={wide ? 16 : 18} />
-        {wide
-          ? <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
-          : null}
-      </button>
-      {open
-        ? (
-          <div className="pv-att-overlay" onClick={() => { setOpen(false) }}>
-            <div className="pv-att-panel pv-att-scope" role="dialog" aria-label="Session storage"
-              style={{ maxWidth: 560 }} onClick={(e) => { e.stopPropagation() }}>
-              <div className="pv-att-head">
-                <h1 className="pv-att-title">Where your sessions are kept</h1>
-                <button type="button" className="pv-att-close" aria-label="Close"
-                  onClick={() => { setOpen(false) }}>×</button>
+        <div className={css.dialogBody}>
+          {persistent
+            ? (
+              <p>
+                Your conversations and workspace are saved to <strong>{folder}</strong> in
+                your own Drive, under your own keys. They survive this enclave being
+                replaced. You can withdraw access at any time in Drive.
+              </p>
+            )
+            : (
+              <>
+                <p>
+                  This harness keeps <strong>no copy of your data</strong>. Your
+                  conversations are held in memory for as long as this enclave runs and
+                  are gone the moment it stops — that is deliberate, not a limitation to
+                  work around.
+                </p>
+                <p>
+                  To keep them, connect your Drive. They are then stored
+                  under <strong>{folder}</strong> in <em>your</em> Drive, under your own
+                  keys, where this harness can reach that one folder and nothing else —
+                  and you can withdraw it at any time in Drive.
+                </p>
+                {withdrawn
+                  ? (
+                    <p className={css.warn}>
+                      Your Drive is refusing this harness: the access was withdrawn there, or
+                      has expired. Nothing has been saved since. Connect your Drive again to
+                      approve it afresh.
+                    </p>
+                  )
+                  : null}
+                {declined
+                  ? <p className={css.muted}>You declined this earlier, so you are not being asked again.</p>
+                  : null}
+                <div className={css.actions}>
+                  <Button variant="primary" size="sm" disabled={busy} onClick={() => { request(declined || withdrawn) }}>
+                    {busy ? 'Preparing…' : withdrawn ? 'Connect again' : declined ? 'Ask me again' : 'Connect my Drive'}
+                  </Button>
+                </div>
+              </>
+            )}
+
+          {ask?.nonce && !persistent
+            ? (
+              <div className={css.askBox}>
+                <div className={css.askTitle}>Approve on your device</div>
+                <p className={css.muted}>
+                  Your wallet verifies this enclave itself and shows you exactly what is
+                  being asked for. A notification is on its way to your device; if it does
+                  not arrive, enter these in the wallet by hand.
+                </p>
+                <div className={css.askFacts}>
+                  <div><span className={css.muted}>host&nbsp;&nbsp;</span><code>{ask.app_host}</code></div>
+                  <div><span className={css.muted}>nonce&nbsp;</span><code>{ask.nonce}</code></div>
+                </div>
+                <div className={css.actions}>
+                  <Button variant="outline" size="sm" onClick={refresh}>I have approved it</Button>
+                </div>
               </div>
-
-              {persistent
-                ? (
-                  <p style={{ fontSize: 13.5 }}>
-                    Your conversations and workspace are saved to <strong>{state.folder ?? 'AppData/Harness'}</strong> in
-                    your own Drive, under your own keys. They survive this enclave being
-                    replaced. You can withdraw access at any time in Drive.
-                  </p>
-                )
-                : (
-                  <>
-                    <p style={{ fontSize: 13.5 }}>
-                      This harness keeps <strong>no copy of your data</strong>. Your
-                      conversations are held in memory for as long as this enclave runs and
-                      are gone the moment it stops — that is deliberate, not a limitation to
-                      work around.
-                    </p>
-                    <p style={{ fontSize: 13.5 }}>
-                      To keep them, connect your Drive. They are then stored
-                      under <strong>{state.folder ?? 'AppData/Harness'}</strong> in{' '}
-                      <em>your</em> Drive, under your own keys, where this harness can reach
-                      that one folder and nothing else — and you can withdraw it at any time
-                      in Drive.
-                    </p>
-                    {withdrawn
-                      ? (
-                        <p style={{ fontSize: 12.5, color: '#b45309' }}>
-                          Your Drive is refusing this harness: the access was withdrawn there, or
-                          has expired. Nothing has been saved since. Connect your Drive again to
-                          approve it afresh.
-                        </p>
-                      )
-                      : null}
-                    {declined
-                      ? (
-                        <p style={{ fontSize: 12.5, color: '#6b7280' }}>
-                          You declined this earlier, so you are not being asked again.
-                        </p>
-                      )
-                      : null}
-                    <button type="button" className="pv-row" style={{ width: 'auto', marginTop: 8 }}
-                      disabled={busy}
-                      onClick={() => { request(declined || withdrawn) }}>
-                      {busy ? 'Preparing…' : withdrawn ? 'Connect again' : declined ? 'Ask me again' : 'Connect my Drive'}
-                    </button>
-                  </>
-                )}
-
-              {ask?.nonce && !persistent
-                ? (
-                  <div style={{ marginTop: 14, border: '1px solid #e5e7eb', borderRadius: 8, padding: '10px 12px' }}>
-                    <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>Approve on your device</div>
-                    <p style={{ fontSize: 12.5, color: '#6b7280', margin: '0 0 8px' }}>
-                      Your wallet verifies this enclave itself and shows you exactly what is
-                      being asked for. A notification is on its way to your device; if it does
-                      not arrive, enter these in the wallet by hand.
-                    </p>
-                    <div style={{ fontSize: 12 }}>
-                      <div><span style={{ color: '#6b7280' }}>host&nbsp;&nbsp;</span><code>{ask.app_host}</code></div>
-                      <div style={{ marginTop: 4, wordBreak: 'break-all' }}>
-                        <span style={{ color: '#6b7280' }}>nonce&nbsp;</span><code>{ask.nonce}</code>
-                      </div>
-                    </div>
-                    <button type="button" className="pv-row" style={{ width: 'auto', marginTop: 10 }}
-                      onClick={refresh}>I have approved it</button>
-                  </div>
-                )
-                : null}
-              {ask?.status === 'declined'
-                ? <p style={{ fontSize: 12.5, color: '#6b7280' }}>Still declined.</p>
-                : null}
-            </div>
-          </div>
-        )
-        : null}
+            )
+            : null}
+          {ask?.status === 'declined'
+            ? <p className={css.muted}>Still declined.</p>
+            : null}
+        </div>
+      </Modal>
     </>
   )
 }

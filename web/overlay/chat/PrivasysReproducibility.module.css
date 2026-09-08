@@ -1,0 +1,60 @@
+/* Reproducibility dialog additions over the shared stat-dialog skin
+   (stat-dialog.module.css): section captions, the one-line replay verdict,
+   the action footer. Everything else — panel, title, rule, details grid —
+   is the Turn-usage dialog's own. */
+
+.panel {
+  max-width: min(480px, calc(100vw - 24px));
+}
+
+.hint {
+  margin: 0 0 10px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.section {
+  margin: 10px 0 6px;
+  color: var(--dsw-alias-label-primary);
+  font-weight: 500;
+}
+
+.mono {
+  font-family: var(--dsh-font-mono, monospace);
+  font-size: 11px;
+}
+
+.verdict {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin: 0 0 6px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.good {
+  color: var(--dsw-alias-state-success-primary);
+}
+
+.bad {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.muted {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.error {
+  margin-top: 6px;
+  color: var(--dsw-alias-state-error-primary);
+}

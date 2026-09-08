@@ -1,0 +1,109 @@
+/* Sampling chip in the composer tool row: the model selector's own chip
+   chrome (ui-model-selection ModelSelect.module.css `.trigger`: 28px,
+   r24, 13/20/500, secondary tone, interactive hover), plus the editor over
+   the shared stat-dialog skin. */
+
+.root {
+  display: inline-flex;
+  min-width: 0;
+}
+
+.chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 220px;
+  height: 28px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 24px;
+  outline: none;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.chip:hover:not(:disabled),
+.chip[aria-expanded='true'] {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.chip:focus-visible {
+  box-shadow: 0 0 0 2px var(--dsw-alias-border-l3);
+}
+
+.chip svg {
+  flex: none;
+}
+
+/* Pinned or armed: the label reads in the primary tone so a demo operator
+   sees at a glance that this session is not on defaults. */
+.chip.active {
+  color: var(--dsw-alias-label-primary);
+}
+
+.label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panel {
+  max-width: min(420px, calc(100vw - 24px));
+}
+
+.hint {
+  margin: 0 0 10px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.armed {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 0 10px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--dsw-alias-state-warn-tertiary);
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 12px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.fieldLabel {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.input {
+  width: 100%;
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.error {
+  margin-top: 6px;
+  color: var(--dsw-alias-state-error-primary);
+}

@@ -83,6 +83,13 @@ put('packages/client/ui-primitives/src/FishLogo.tsx', 'overlay/brand/FishLogo.ts
 put('packages/client/ui-primitives/src/BrandWordmark.tsx', 'overlay/brand/BrandWordmark.tsx')
 put('packages/client/ui-brand-official/src/client/index.ts', 'overlay/brand/index.ts')
 put('packages/client/ui-brand-official/src/client/PrivasysRows.tsx', 'overlay/brand/PrivasysRows.tsx')
+// The foot rows are dsh's own foot control (Settings trigger / Cordis badge
+// geometry, dsh icons, StateDot status, Menu and Modal primitives) — one
+// shared row component and one CSS module. ui-brand-official ships no CSS
+// modules of its own, so the ambient module declaration rides along.
+put('packages/client/ui-brand-official/src/client/PrivasysFootRow.tsx', 'overlay/brand/PrivasysFootRow.tsx')
+put('packages/client/ui-brand-official/src/client/PrivasysFoot.module.css', 'overlay/brand/PrivasysFoot.module.css')
+put('packages/client/ui-brand-official/src/css-modules.d.ts', 'overlay/brand/css-modules.d.ts')
 put('apps/web/public/favicon.svg', 'vendor/privasys-logo.mini.svg')
 
 // --- 2a. gateway mux server: accept binary frames ---------------------------
@@ -751,6 +758,202 @@ edit('packages/preset/agent-presets/presets/cordis/agent.cordis.yml', [
       `    customSkillDirs:\n` +
       `      - /data/skills\n` +
       `    watch: false`,
+  ],
+])
+
+// --- 2h. reproducibility per reply + sampling pins ---------------------------
+// Confidential AI ends every stream with a `data: {"reproducibility":…}`
+// frame the proxy opts into and annotates (proxy sampling.go). dsh's
+// translator drops frames without `choices`, so the block never reached the
+// session log. Three anchored edits fold it into the assistant message's
+// `usage` — the one merge-extensible field the loop persists verbatim and
+// the client already reads for the Turn-usage pill — so the block is durable
+// in the session log, mirrors to Drive, and shows in the trajectory's JSON
+// tab with nothing else changed. The live write path validates only
+// request/header and tool/result shapes (core/session surface.ts), and the
+// Turn-usage fold reads named fields, so an extra key is inert everywhere
+// but here.
+edit('packages/llm/llm-deepseek/src/translate.ts', [
+  [
+    'repro: pending slot',
+    `  let pendingUsage: TokenUsage | undefined\n`,
+    `  let pendingUsage: TokenUsage | undefined\n` +
+      `  // Privasys: Confidential AI's reproducibility trailer, kept beside usage.\n` +
+      `  let pendingReproducibility: unknown\n`,
+  ],
+  [
+    'repro: fold into usage at DONE',
+    `      if (pendingUsage) yield { type: 'usage', usage: pendingUsage }`,
+    `      if (pendingUsage) {\n` +
+      `        yield {\n` +
+      `          type: 'usage',\n` +
+      `          usage: (pendingReproducibility === undefined\n` +
+      `            ? pendingUsage\n` +
+      `            : { ...pendingUsage, reproducibility: pendingReproducibility }) as TokenUsage,\n` +
+      `        }\n` +
+      `      }`,
+  ],
+  [
+    'repro: capture the trailer',
+    `    if (chunk.usage) pendingUsage = mapUsage(chunk.usage)`,
+    `    if (chunk.usage) pendingUsage = mapUsage(chunk.usage)\n` +
+      `    // Privasys: the trailer carries no choices and no usage; keep it.\n` +
+      `    const reproducibility = (chunk as unknown as { reproducibility?: unknown }).reproducibility\n` +
+      `    if (reproducibility !== undefined) pendingReproducibility = reproducibility`,
+  ],
+])
+
+// The two client occupants live in ui-chat, which already depends on
+// everything they need (sessions, the conversation slots, the stat-dialog
+// skin, ui-primitives): a reproducibility action in the turn tail's
+// assistant-actions strip, and a sampling chip in the composer's input.right
+// seat. Registered from ui-chat's apply() via anchored edits, like the
+// trajectory tab (§2f).
+for (const rel of [
+  'PrivasysReproducibility.tsx', 'PrivasysReproducibility.module.css',
+  'PrivasysSampling.tsx', 'PrivasysSampling.module.css', 'privasys-fetch.ts',
+]) {
+  put(`packages/client/ui-chat/src/client/chat/${rel}`, `overlay/chat/${rel}`)
+}
+edit('packages/client/ui-chat/src/client/apply.ts', [
+  [
+    'ui-chat: privasys imports',
+    `import { StatsPills } from './chat/StatsPills.tsx'\n`,
+    `import { StatsPills } from './chat/StatsPills.tsx'\n` +
+      `import { PrivasysReproducibilityAction, replayTurn, type PrivasysReproInjected } from './chat/PrivasysReproducibility.tsx'\n` +
+      `import { PrivasysSamplingChip } from './chat/PrivasysSampling.tsx'\n`,
+  ],
+  [
+    'ui-chat: privasys registrations',
+    `  ctx.slots.inject('conversation.approval.detail', () =>\n` +
+      `    ctx.slots.register({ name: 'conversation.approval.detail' }, ApprovalCommand))\n`,
+    `  ctx.slots.inject('conversation.approval.detail', () =>\n` +
+      `    ctx.slots.register({ name: 'conversation.approval.detail' }, ApprovalCommand))\n` +
+      `\n` +
+      `  // Privasys: the reply's reproducibility block and its faithful replay.\n` +
+      `  ctx.slots.inject('conversation.chat.assistant-actions', () =>\n` +
+      `    ctx.slots.register({\n` +
+      `      name: 'conversation.chat.assistant-actions', id: 'privasys-reproducibility', order: 20, locale: NS,\n` +
+      `      inject: (sessionId: SessionId): PrivasysReproInjected => ({\n` +
+      `        replay: request => replayTurn(ctx, sessionId, request),\n` +
+      `      }),\n` +
+      `    }, PrivasysReproducibilityAction))\n` +
+      `\n` +
+      `  // Privasys: per-session sampling pins, applied by the measured proxy.\n` +
+      `  ctx.slots.inject('conversation.input.right', () =>\n` +
+      `    ctx.slots.register({\n` +
+      `      name: 'conversation.input.right', id: 'privasys-sampling', order: 10, locale: NS,\n` +
+      `    }, PrivasysSamplingChip))\n`,
+  ],
+])
+edit('packages/client/ui-chat/src/client/locale.ts', [
+  [
+    'ui-chat zh: reproducibility keys',
+    `  'message.turnUsage.title': '本轮用量',`,
+    `  'message.turnUsage.title': '本轮用量',\n` +
+      `  'message.repro.pill': '种子 {seed}',\n` +
+      `  'message.repro.pillNoSeed': '可复现性',\n` +
+      `  'message.repro.title': '可复现性',\n` +
+      `  'message.repro.hint': '相同的模型、权重、种子与提示在相同硬件上逐字节复现此回复。',\n` +
+      `  'message.repro.request': '请求',\n` +
+      `  'message.repro.model': '模型',\n` +
+      `  'message.repro.prompt': '提示',\n` +
+      `  'message.repro.seed': '种子',\n` +
+      `  'message.repro.temperature': '温度',\n` +
+      `  'message.repro.topP': 'Top-p',\n` +
+      `  'message.repro.topK': 'Top-k',\n` +
+      `  'message.repro.maxTokens': '最大输出',\n` +
+      `  'message.repro.steps': '模型调用次数',\n` +
+      `  'message.repro.quantization': '量化',\n` +
+      `  'message.repro.vllm': 'vLLM',\n` +
+      `  'message.repro.cuda': 'CUDA',\n` +
+      `  'message.repro.gpu': 'GPU',\n` +
+      `  'message.repro.tee': 'TEE',\n` +
+      `  'message.repro.imageDigest': '镜像摘要',\n` +
+      `  'message.repro.kvCache': 'KV 缓存',\n` +
+      `  'message.repro.batchInvariance': '批次不变性',\n` +
+      `  'message.repro.promptDigest': '提示摘要',\n` +
+      `  'message.repro.dynamicContext': '注入时钟',\n` +
+      `  'message.repro.replay': '重放本轮',\n` +
+      `  'message.repro.replaying': '重放中…',\n` +
+      `  'message.repro.replayUnavailable': '重放需要本轮每次调用都记录了可复现性信息',\n` +
+      `  'message.repro.copy': '复制 JSON',\n` +
+      `  'message.repro.copied': '已复制',\n` +
+      `  'message.repro.replayOf': '第 {turn} 轮的重放',\n` +
+      `  'message.repro.replayStep': '第 {step} 步',\n` +
+      `  'message.repro.promptMatch': '提示一致',\n` +
+      `  'message.repro.promptDiffers': '提示不同',\n` +
+      `  'message.repro.replyMatch': '回复一致',\n` +
+      `  'message.repro.replyDiffers': '回复不同',\n` +
+      `  'message.repro.replySkipped': '此次调用与记录的形状不符',\n` +
+      `  'input.sampling': '采样',\n` +
+      `  'input.sampling.title': '采样固定',\n` +
+      `  'input.sampling.hint': '固定到本会话的每次模型调用。留空则使用默认值。',\n` +
+      `  'input.sampling.apply': '应用',\n` +
+      `  'input.sampling.clear': '清除',\n` +
+      `  'input.sampling.armedShort': '重放已就绪',\n` +
+      `  'input.sampling.armed': '重放已就绪：还有 {remaining} 次调用',\n` +
+      `  'input.sampling.disarm': '取消重放',\n` +
+      `  'input.sampling.seed': '种子',\n` +
+      `  'input.sampling.temperature': '温度',\n` +
+      `  'input.sampling.topP': 'Top-p',\n` +
+      `  'input.sampling.topK': 'Top-k',\n` +
+      `  'input.sampling.maxTokens': '最大输出',\n` +
+      `  'input.sampling.error': '无法保存：{message}',`,
+  ],
+  [
+    'ui-chat en: reproducibility keys',
+    `  'message.turnUsage.title': 'Turn usage',`,
+    `  'message.turnUsage.title': 'Turn usage',\n` +
+      `  'message.repro.pill': 'Seed {seed}',\n` +
+      `  'message.repro.pillNoSeed': 'Reproducibility',\n` +
+      `  'message.repro.title': 'Reproducibility',\n` +
+      `  'message.repro.hint': 'The same model, weights, seed and prompt on the same hardware reproduce this reply byte for byte.',\n` +
+      `  'message.repro.request': 'Request',\n` +
+      `  'message.repro.model': 'Model',\n` +
+      `  'message.repro.prompt': 'Prompt',\n` +
+      `  'message.repro.seed': 'Seed',\n` +
+      `  'message.repro.temperature': 'Temperature',\n` +
+      `  'message.repro.topP': 'Top-p',\n` +
+      `  'message.repro.topK': 'Top-k',\n` +
+      `  'message.repro.maxTokens': 'Max tokens',\n` +
+      `  'message.repro.steps': 'Model calls',\n` +
+      `  'message.repro.quantization': 'Quantization',\n` +
+      `  'message.repro.vllm': 'vLLM',\n` +
+      `  'message.repro.cuda': 'CUDA',\n` +
+      `  'message.repro.gpu': 'GPU',\n` +
+      `  'message.repro.tee': 'TEE',\n` +
+      `  'message.repro.imageDigest': 'Image digest',\n` +
+      `  'message.repro.kvCache': 'KV cache',\n` +
+      `  'message.repro.batchInvariance': 'Batch invariance',\n` +
+      `  'message.repro.promptDigest': 'Prompt digest',\n` +
+      `  'message.repro.dynamicContext': 'Clock injected',\n` +
+      `  'message.repro.replay': 'Replay this turn',\n` +
+      `  'message.repro.replaying': 'Replaying…',\n` +
+      `  'message.repro.replayUnavailable': 'Replay needs a recorded block for every model call of this turn',\n` +
+      `  'message.repro.copy': 'Copy JSON',\n` +
+      `  'message.repro.copied': 'Copied',\n` +
+      `  'message.repro.replayOf': 'Replay of turn {turn}',\n` +
+      `  'message.repro.replayStep': 'step {step}',\n` +
+      `  'message.repro.promptMatch': 'prompt identical',\n` +
+      `  'message.repro.promptDiffers': 'prompt differs',\n` +
+      `  'message.repro.replyMatch': 'reply identical',\n` +
+      `  'message.repro.replyDiffers': 'reply differs',\n` +
+      `  'message.repro.replySkipped': 'this call did not match the recorded shape',\n` +
+      `  'input.sampling': 'Sampling',\n` +
+      `  'input.sampling.title': 'Sampling pins',\n` +
+      `  'input.sampling.hint': 'Pinned for every model call of this session. Leave a field empty to keep the default.',\n` +
+      `  'input.sampling.apply': 'Apply',\n` +
+      `  'input.sampling.clear': 'Clear',\n` +
+      `  'input.sampling.armedShort': 'Replay armed',\n` +
+      `  'input.sampling.armed': 'Replay armed: {remaining} call(s) pending',\n` +
+      `  'input.sampling.disarm': 'Disarm',\n` +
+      `  'input.sampling.seed': 'Seed',\n` +
+      `  'input.sampling.temperature': 'Temperature',\n` +
+      `  'input.sampling.topP': 'Top-p',\n` +
+      `  'input.sampling.topK': 'Top-k',\n` +
+      `  'input.sampling.maxTokens': 'Max tokens',\n` +
+      `  'input.sampling.error': 'Could not save: {message}',`,
   ],
 ])
 
