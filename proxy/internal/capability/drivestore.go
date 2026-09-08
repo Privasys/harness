@@ -4,13 +4,15 @@
 package capability
 
 // Exercising an approved capability: reading and writing the holder's own
-// Drive folder with a token minted by the sealed key they bound.
+// Drive folder with a token signed by the binding key they approved. The key
+// is the runtime's (per app, sealed on the manager's data volume); this
+// process asks the runtime for each signature and never sees the private half.
 //
 // Two properties make this safe, and both are enforced on Drive's side:
 //
 //   - The token is a holder-of-key capability. Drive checks the embedded
 //     public key against the binding the holder fixed at approval, so only
-//     this enclave — which alone has the private half — can use the grant.
+//     this app, on this runtime, can use the grant.
 //   - The calls go out over the proxy's ATTESTED client identity. Drive then
 //     also matches the enclave-os-verified peer app id against the grant's
 //     subject, so a leaked key presented by a different app is refused. That
@@ -65,19 +67,25 @@ type envelope struct {
 // The caller supplies an http.Client whose transport is the proxy's attested
 // RA-TLS client — see the package comment for why that is not optional.
 type DriveStore struct {
-	client   *http.Client
-	host     string
-	identity *Identity
-	granted  *Granted
+	client  *http.Client
+	host    string
+	signer  Signer
+	granted *Granted
 }
 
 // NewDriveStore binds a store to one holder's approved capability.
-func NewDriveStore(client *http.Client, host string, id *Identity, g *Granted) (*DriveStore, error) {
+func NewDriveStore(client *http.Client, host string, signer Signer, g *Granted) (*DriveStore, error) {
 	if !g.Usable() {
 		return nil, errors.New("capability: no usable storage capability for this user")
 	}
-	return &DriveStore{client: client, host: host, identity: id, granted: g}, nil
+	if signer == nil {
+		return nil, errors.New("capability: no signer for the capability's binding key")
+	}
+	return &DriveStore{client: client, host: host, signer: signer, granted: g}, nil
 }
+
+// RootID is the granted folder's node id.
+func (d *DriveStore) RootID() string { return d.nodeID() }
 
 func (d *DriveStore) tenantID() string { return d.granted.ServiceResult["tenant_id"] }
 func (d *DriveStore) nodeID() string   { return d.granted.ServiceResult["node_id"] }
@@ -104,13 +112,16 @@ func (d *DriveStore) token(scopes []string) (string, error) {
 		JTI:   d.grantID(),
 		Iat:   now.Unix(),
 		Exp:   now.Add(tokenTTL).Unix(),
-		PK:    d.identity.PublicKeyB64(),
+		PK:    d.signer.PublicKeyB64(),
+	}
+	if env.PK == "" {
+		return "", errors.New("capability: the binding key's public half is not available from the runtime")
 	}
 	body, err := json.Marshal(env)
 	if err != nil {
 		return "", err
 	}
-	sig, err := d.identity.Sign(body)
+	sig, err := d.signer.Sign(body)
 	if err != nil {
 		return "", err
 	}
@@ -134,6 +145,60 @@ type Node struct {
 	Name string `json:"name"`
 	Kind string `json:"kind"`
 	Size int64  `json:"size"`
+	Rev  int64  `json:"rev"`
+}
+
+// IsFolder reports whether a listed entry is a folder.
+func (n Node) IsFolder() bool {
+	return strings.EqualFold(n.Kind, "folder") || strings.EqualFold(n.Kind, "dir")
+}
+
+// ResolvePath looks a slash-separated path up under root (Drive D2). found is
+// false when the path does not exist; any other failure is an error.
+func (d *DriveStore) ResolvePath(root, path string) (Node, bool, error) {
+	u := fmt.Sprintf("https://%s/v1/tenants/%s/path?root=%s&path=%s",
+		d.host, url.PathEscape(d.tenantID()), url.QueryEscape(root), url.QueryEscape(path))
+	req, err := http.NewRequest(http.MethodGet, u, nil)
+	if err != nil {
+		return Node{}, false, err
+	}
+	resp, err := d.do(req, []string{"read"})
+	if err != nil {
+		return Node{}, false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return Node{}, false, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return Node{}, false, driveError("resolve "+path, resp)
+	}
+	var n Node
+	if err := json.NewDecoder(resp.Body).Decode(&n); err != nil {
+		return Node{}, false, err
+	}
+	return n, true, nil
+}
+
+// ReplaceContent overwrites one file's bytes in place (Drive D1), keeping the
+// node — and therefore its id, its place in listings and its no-index mark.
+func (d *DriveStore) ReplaceContent(fileID string, data []byte) error {
+	u := fmt.Sprintf("https://%s/v1/tenants/%s/nodes/%s/content",
+		d.host, url.PathEscape(d.tenantID()), url.PathEscape(fileID))
+	req, err := http.NewRequest(http.MethodPut, u, bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	resp, err := d.do(req, []string{"read", "write"})
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return driveError("replace content", resp)
+	}
+	return nil
 }
 
 // List returns the approved folder's direct children.
@@ -247,6 +312,23 @@ func (d *DriveStore) put(parentID, name string, data []byte) (string, error) {
 		return "", err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusConflict {
+		// A file of that name exists. Drive's create is create-only (the
+		// (parent, name) pair is unique), so a changed file is REPLACED in
+		// place rather than duplicated or, as before D1 existed, silently
+		// left at its first version.
+		existing, found, rerr := d.ResolvePath(parentID, name)
+		if rerr != nil {
+			return "", rerr
+		}
+		if !found {
+			return "", driveError("upload "+name, resp)
+		}
+		if err := d.ReplaceContent(existing.ID, data); err != nil {
+			return "", err
+		}
+		return existing.ID, nil
+	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		return "", driveError("upload "+name, resp)
 	}

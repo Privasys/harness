@@ -154,8 +154,8 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
                     <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>Approve on your device</div>
                     <p style={{ fontSize: 12.5, color: '#6b7280', margin: '0 0 8px' }}>
                       Your wallet verifies this enclave itself and shows you exactly what is
-                      being asked for. Until the notification is wired up, enter these in the
-                      wallet by hand.
+                      being asked for. A notification is on its way to your device; if it does
+                      not arrive, enter these in the wallet by hand.
                     </p>
                     <div style={{ fontSize: 12 }}>
                       <div><span style={{ color: '#6b7280' }}>host&nbsp;&nbsp;</span><code>{ask.app_host}</code></div>

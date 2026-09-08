@@ -269,36 +269,30 @@ func main() {
 	}
 	stamp.Stamp(ceiling)
 
-	// The capability identity and store: how this harness asks the holder for
-	// authority over a folder of their own Drive, so their sessions persist
-	// under their keys rather than inside this enclave (D6').
-	capIdentity, err := capability.NewIdentity(envOr("HARNESS_POLICY_DIR", "/data/policy"))
-	if err != nil {
-		log.Fatalf("[capability] %v", err)
+	// Storage consent is brokered by the enclave runtime (P2 of the
+	// drive-as-remote-disk plan): it holds this app's sealed binding key,
+	// keeps the pending ask, pushes the holder's wallet and answers the
+	// wallet's attested fetch on this hostname. The resource name must match
+	// the `resources` entry in the measured manifest (Dockerfile LABEL).
+	broker := capability.NewBroker(envOr("HARNESS_STORAGE_RESOURCE", "storage"))
+	if !broker.Enabled() {
+		log.Printf("[capability] no runtime broker in the environment: storage consent and persistence are unavailable off-platform")
 	}
-	capStore := capability.NewStore(envOr("HARNESS_POLICY_DIR", "/data/policy"), capIdentity)
 	// The storage leg rides the ATTESTED client (same transport as the tool
 	// shims): Drive matches the verified peer app id against the grant subject,
 	// and an unattested connection would silently get the weaker key-only check.
-	registerStorageAPI(mux, capStore, capIdentity, client, cfg.toolHosts["drive"])
+	registerStorageAPI(mux, broker, client, cfg.toolHosts["drive"])
 
-	// Mirror the session store into the holder's approved Drive folder. dsh keeps
-	// its own JSONL store (single-writer, torn-tail recovery, revisions) exactly
-	// as upstream wrote it; this carries the bytes out to where they belong.
+	// Carry the holder's data out to their Drive: session logs mirrored one
+	// file per file, the working tree as a content-addressed snapshot. dsh
+	// keeps its own JSONL store exactly as upstream wrote it. Both roots are
+	// tmpfs: the enclave holds no durable user data, so this is not a backup,
+	// it is where the data actually lives.
 	capability.SetSubjectSource(currentSubject)
-	// Two roots, kept apart in Drive so a person opening the folder sees their
-	// conversations and their files as separate things. Both are tmpfs: the
-	// enclave holds no durable user data, so the mirror is not a backup, it is
-	// where the data actually lives.
-	syncer := capability.NewSyncer(capStore, capIdentity, client, cfg.toolHosts["drive"],
-		map[string]string{
-			"sessions":  envOr("HARNESS_SESSION_ROOT", "/dev/shm/privasys-sessions"),
-			"workspace": envOr("HARNESS_WORKSPACE_ROOT", "/dev/shm/privasys-workspace"),
-		})
+	syncer := capability.NewSyncer(broker, client, cfg.toolHosts["drive"], os.Getenv("HARNESS_APP_ID"),
+		envOr("HARNESS_SESSION_ROOT", "/dev/shm/privasys-sessions"),
+		envOr("HARNESS_WORKSPACE_ROOT", "/dev/shm/privasys-workspace"))
 	syncer.LoadState()
-	if err := syncer.Restore(); err != nil {
-		log.Printf("[sync] restore skipped: %v", err)
-	}
 	// 15s, not a minute. The session root is now MEMORY: anything not yet
 	// mirrored is lost if the container dies, so the interval IS the exposure
 	// window. Uploads are content-addressed, so a quiet harness still sends
@@ -321,7 +315,7 @@ func main() {
 	// to dsh on the loopback upstream, 503 until dsh is listening. Putting
 	// ingress here too means the measured Go layer owns every network edge.
 	if cfg.ingressListen != "" && cfg.dshUpstream != "" {
-		go serveIngress(cfg, deps, store, stamp, capStore)
+		go serveIngress(cfg, deps, store, stamp, broker)
 	}
 
 	if err := http.ListenAndServe(cfg.listenAddr, mux); err != nil {
@@ -331,7 +325,7 @@ func main() {
 
 // serveIngress fronts the platform port: instant health, the browser
 // attestation summary, and a reverse-proxy to dsh once it is up.
-func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp *stamper, capStore *capability.Store) {
+func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp *stamper, broker *capability.Broker) {
 	listen, upstream := cfg.ingressListen, cfg.dshUpstream
 	target, err := neturl.Parse(upstream)
 	if err != nil {
@@ -437,7 +431,7 @@ func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp 
 	// The verification API: how a user checks which policy this enclave is
 	// applying to them, and how a third party checks the product's posture.
 	registerPolicyAPI(mux, store, stamp)
-	registerCapabilityAPI(mux, capStore)
+	registerCapabilityAPI(mux, broker)
 	mux.Handle("/", rp)
 	log.Printf("[ingress] listening on %s -> %s", listen, upstream)
 	if err := http.ListenAndServe(listen, mux); err != nil {

@@ -51,7 +51,9 @@ case "${PRIVASYS_APP_ID:-}" in
     # The user was also, reasonably, looking at drive.test.privasys.org and
     # wondering where their sessions had gone.
     export HARNESS_TOOL_HOSTS="${HARNESS_TOOL_HOSTS/drive=privasys-drive.apps.privasys.org/drive=drive-demo.apps.test.privasys.org}"
-    export HARNESS_DRIVE_APP_ID="02104572ca2f41e8ae2d24c0294e6f5e"
+    # Which Drive brokers the storage CONSENT is the runtime's decision
+    # (its StorageResourceApp: the fleet's Drive, the dev id on the test
+    # control plane), not this script's — the harness no longer names it.
     ;;
 esac
 export HARNESS_APP_ID="${PRIVASYS_APP_ID:-590ebdc3-1b63-401f-bbb8-22d5f3886c5e}"

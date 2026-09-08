@@ -3,102 +3,26 @@
 
 package main
 
-// The requesting-app half of the wallet's resource-capability protocol.
+// The harness-facing half of storage consent, on the sealed ingress:
 //
-//	GET  /.well-known/privasys/capability-request?nonce=…   what the holder is being asked
-//	POST /.well-known/privasys/capability-result            the outcome, quoting the nonce
+//	POST /privasys/capability/request   begin an ask (the UI, on a user gesture)
+//	GET  /privasys/capability/status    where this holder's data is kept, truthfully
 //
-// Both are fetched by the wallet over RA-TLS, so the far end has attested this
-// enclave before reading a byte. That is the point of putting the binding key
-// HERE rather than in the push: the push carries only a nonce and a host, and
-// a key that rode it could be anyone's while the identity on the holder's
-// screen was genuine.
-//
-// A third, harness-facing route starts the flow:
-//
-//	POST /privasys/capability/request   (sealed session; begins an ask)
-//
-// which the UI calls when the user chooses to enable storage.
+// Everything that authorises lives in the enclave runtime (P2 of
+// plans/drive-as-remote-disk.md): the per-app sealed binding key, the pending
+// ask, the wallet push, and the well-known endpoints the wallet fetches over
+// RA-TLS on this app's hostname — which the runtime answers itself for any
+// app whose measured manifest declares a resource. This process only relays
+// the acting subject and reports what the runtime says.
 
 import (
-	"encoding/json"
-	"io"
 	"log"
 	"net/http"
-	"os"
 
 	"github.com/Privasys/attested-harness/proxy/internal/capability"
 )
 
-// driveAppID names the resource service by IDENTITY, so the wallet resolves it
-// rather than following a URL out of our payload. Sourced from the measured
-// image environment; it is also a declared dependency, so the same identity is
-// pinned in OID 7.1.
-func driveAppID() string {
-	return envOr("HARNESS_DRIVE_APP_ID", "cf7a0d585468416884c341ebe0ce4025")
-}
-
-// storageFolder is the folder LABEL the harness asks for. A NAME, never a path
-// with an ownership boundary in it: Drive derives the tenant from the
-// authenticated holder and refuses any request that names one. Drive places
-// the folder under AppData/ in the holder's personal tenant and returns the
-// path it chose in service_result.path (the label is suffixed when another app
-// already owns it), so the path is read from the grant, never assumed.
-func storageFolder() string { return envOr("HARNESS_STORAGE_FOLDER", "Harness") }
-
-func registerCapabilityAPI(mux *http.ServeMux, store *capability.Store) {
-	// What the holder is being asked. Served to the wallet inside RA-TLS.
-	mux.HandleFunc("GET /.well-known/privasys/capability-request", func(w http.ResponseWriter, r *http.Request) {
-		nonce := r.URL.Query().Get("nonce")
-		p, ok := store.Get(nonce)
-		if !ok {
-			// Unknown or expired. Deliberately indistinguishable: telling a
-			// caller which of the two it is would let them probe for live
-			// nonces.
-			writeJSON(w, http.StatusNotFound, map[string]string{
-				"error": "no such capability request",
-			})
-			return
-		}
-		writeJSON(w, http.StatusOK, p)
-	})
-
-	// The outcome. Approved or denied — denial is delivered too, so the app
-	// stops asking rather than re-prompting forever.
-	mux.HandleFunc("POST /.well-known/privasys/capability-result", func(w http.ResponseWriter, r *http.Request) {
-		var body struct {
-			Nonce         string            `json:"nonce"`
-			Status        string            `json:"status"`
-			CapabilityID  string            `json:"capability_id"`
-			ServiceResult map[string]string `json:"service_result"`
-		}
-		raw, err := io.ReadAll(io.LimitReader(r.Body, 64<<10))
-		if err != nil || json.Unmarshal(raw, &body) != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
-			return
-		}
-		if body.Status != "approved" && body.Status != "denied" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "status must be approved or denied"})
-			return
-		}
-		// The nonce is the authorisation here. This route is on a publicly
-		// reachable mux and carries no holder credential by design — the
-		// wallet must not hand this enclave one. What bounds the damage is
-		// that a forged result can only ever point us at coordinates we
-		// cannot use: the capability it names is bound to OUR public key, and
-		// a grant we do not hold simply fails on first use. So a bogus POST
-		// costs a failed write and a log line, not access.
-		//
-		// The first real use of a capability is therefore also its
-		// verification, and that is where a mismatch surfaces.
-		g, err := store.Resolve(body.Nonce, body.Status, body.CapabilityID, body.ServiceResult)
-		if err != nil {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"status": g.Status})
-	})
-
+func registerCapabilityAPI(mux *http.ServeMux, broker *capability.Broker) {
 	// Begin an ask. Called by the harness UI over the sealed session, so the
 	// relay-asserted subject names the holder this capability will belong to.
 	mux.HandleFunc("POST /privasys/capability/request", func(w http.ResponseWriter, r *http.Request) {
@@ -110,68 +34,56 @@ func registerCapabilityAPI(mux *http.ServeMux, store *capability.Store) {
 			return
 		}
 		recordSubject(sub)
-		existing := store.Granted(sub)
-		if existing.Usable() {
-			writeJSON(w, http.StatusOK, map[string]any{
-				"status":        "already_granted",
-				"capability_id": existing.CapabilityID,
+		if !broker.Enabled() {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+				"error": "this harness is not running on the platform, so there is no Drive to connect",
 			})
 			return
 		}
-		// A previous refusal stands until the user deliberately reopens it.
-		// Delivering deny exists so the app stops asking; re-prompting on the
-		// next page load would make the decision meaningless. ?retry=1 is the
-		// user changing their mind, never the app trying again.
-		if existing.Denied() && r.URL.Query().Get("retry") != "1" {
-			writeJSON(w, http.StatusOK, map[string]any{
-				"status": "declined",
-				"at":     existing.At,
-			})
-			return
-		}
-		p, err := store.Create(sub, driveAppID(), storageFolder(),
-			// A VALUE, not a sentence: the wallet composes the prose and
-			// translates it into 25 locales. Prose supplied here could not be
-			// translated, and an app that writes the words on the approval
-			// screen can describe itself however it likes.
-			storageFolder(),
-			[]string{capability.PermRead, capability.PermWrite})
+		// A previous refusal stands until the user deliberately reopens it:
+		// ?retry=1 is the user changing their mind, never the app trying again.
+		out, err := broker.Request(sub, r.URL.Query().Get("retry") == "1")
 		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			log.Printf("[capability] request: %v", err)
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 			return
 		}
-		// The push carries ONLY the nonce and this host. Everything else the
-		// wallet learns from the attested fetch above.
-		writeJSON(w, http.StatusOK, map[string]any{
-			"status":   "pending",
-			"nonce":    p.Nonce,
-			"app_host": os.Getenv("HARNESS_PUBLIC_HOST"),
-		})
+		writeJSON(w, http.StatusOK, out)
 	})
 
-	// Whether this harness can persist for the acting holder, so the UI can
-	// show the memory-only banner honestly.
+	// Whether this harness can persist for the acting holder, and where.
 	mux.HandleFunc("GET /privasys/capability/status", func(w http.ResponseWriter, r *http.Request) {
 		sub := r.Header.Get("X-Privasys-Sub")
-		g := store.Granted(sub)
-		// Drive confines app folders to AppData/<label>/ (2026-09-07) and
-		// reports the path it actually chose in service_result.path; the
-		// label can be suffixed on collision, so once granted the reported
-		// path wins over our request. Before a grant exists, the default
-		// confinement is what the user will see.
-		folder := "AppData/" + storageFolder()
-		if g.Usable() {
-			if p := g.ServiceResult["path"]; p != "" {
-				folder = p
-			}
+		resp := map[string]any{
+			"persistent": false,
+			"declined":   false,
+			"folder":     "AppData/Harness",
 		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"persistent":   g.Usable(),
-			"declined":     g.Denied(),
-			"resource_app": driveAppID(),
-			"folder":       folder,
-		})
+		if sub == "" || !broker.Enabled() {
+			writeJSON(w, http.StatusOK, resp)
+			return
+		}
+		st, err := broker.Status(sub)
+		if err != nil {
+			log.Printf("[capability] status: %v", err)
+			writeJSON(w, http.StatusOK, resp)
+			return
+		}
+		resp["persistent"] = st.Persistent
+		resp["declined"] = st.Declined
+		resp["resource_app"] = st.ResourceApp
+		resp["permissions"] = st.Permissions
+		// Drive confines app folders to AppData/<label>/ and reports the path
+		// it actually chose (the label can be suffixed on collision), so once
+		// granted the reported path wins over the declared label.
+		if st.Label != "" {
+			resp["folder"] = "AppData/" + st.Label
+		}
+		if p := st.Granted.Path(); p != "" {
+			resp["folder"] = p
+		}
+		writeJSON(w, http.StatusOK, resp)
 	})
 
-	log.Printf("[capability] endpoints mounted (resource_app=%s folder=%s)", driveAppID(), storageFolder())
+	log.Printf("[capability] endpoints mounted (runtime broker enabled=%v resource=%s)", broker.Enabled(), broker.Resource())
 }
