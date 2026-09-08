@@ -24,10 +24,12 @@ package capability
 // window. Uploads are content-addressed, so a quiet harness sends nothing.
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
@@ -37,6 +39,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 const (
@@ -57,6 +61,14 @@ var snapshotSkipDirs = map[string]bool{
 	"node_modules": true, ".venv": true, "venv": true, "__pycache__": true,
 	".pnpm-store": true, ".cache": true, ".mypy_cache": true, ".pytest_cache": true,
 	".turbo": true, ".next": true, "target": true,
+}
+
+// isLockFile recognises dsh's per-session `session.lock` (a kernel flock
+// target with no content of its own) and any other lock marker. Mirroring
+// one is pointless and restoring one is misleading: the lock's meaning is
+// the process holding it, which never crosses machines.
+func isLockFile(name string) bool {
+	return name == "session.lock" || strings.HasSuffix(name, ".lock")
 }
 
 // Syncer mirrors a local session root and snapshots a workspace root into one
@@ -90,6 +102,51 @@ type Syncer struct {
 	// restoredFor is the subject whose data was already restored this
 	// process, so a restore is attempted once per sign-in rather than per tick.
 	restoredFor string
+	// ready flips once the boot-time restore has run (or been found
+	// inapplicable), so the entrypoint can hold dsh back until the holder's
+	// data is on disk: dsh builds its workspace list ONCE at start and never
+	// re-bootstraps, so a session restored after that start is invisible.
+	ready bool
+}
+
+// Ready reports whether the boot-time restore has completed.
+func (s *Syncer) Ready() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ready
+}
+
+// SetReady marks the boot-time restore as done, whatever its outcome.
+func (s *Syncer) SetReady() {
+	s.mu.Lock()
+	s.ready = true
+	s.mu.Unlock()
+}
+
+// RestoreFor pulls one holder's data down before dsh starts, for the subject
+// this deployment remembered from its last sign-in. Returns how many files
+// came back. Best-effort: a Drive outage or a revoked grant leaves the roots
+// empty, exactly as a fresh harness would be, and the mirror's normal restore
+// retries when the holder signs in.
+func (s *Syncer) RestoreFor(subject string) (int, error) {
+	if subject == "" || s.driveHost == "" || !s.broker.Enabled() {
+		return 0, nil
+	}
+	g := s.broker.Granted(subject)
+	if !g.Usable() {
+		return 0, nil
+	}
+	ds, err := NewDriveStore(s.client, s.driveHost, s.broker, g)
+	if err != nil {
+		return 0, err
+	}
+	n, err := s.restore(ds)
+	if err == nil {
+		s.mu.Lock()
+		s.restoredFor = subject
+		s.mu.Unlock()
+	}
+	return n, err
 }
 
 // NewSyncer wires the two local roots to the holder's Drive folder. appID is
@@ -195,7 +252,7 @@ func (s *Syncer) SyncOnce() error {
 	needRestore := s.restoredFor != sub
 	s.mu.Unlock()
 	if needRestore {
-		if err := s.restore(ds); err != nil {
+		if _, err := s.restore(ds); err != nil {
 			log.Printf("[sync] restore: %v", err)
 		} else {
 			s.mu.Lock()
@@ -239,6 +296,9 @@ func (s *Syncer) mirrorSessions(ds *DriveStore) error {
 			return nil
 		}
 		rel = sessionsFolder + "/" + filepath.ToSlash(rel)
+		if isLockFile(d.Name()) {
+			return nil
+		}
 		data, readErr := os.ReadFile(path)
 		if readErr != nil {
 			return nil
@@ -336,21 +396,37 @@ type manifest struct {
 	App     string         `json:"app"`
 	SavedAt string         `json:"saved_at"`
 	Files   []manifestFile `json:"files"`
+	// Dirs lists every directory of the tree, including empty ones. Drive's
+	// contract carries only files; this addition is what lets a workspace
+	// that holds no file yet (a project just created, a session's cwd) come
+	// back as a directory dsh can list a session under — a session whose
+	// working directory does not exist is invisible in the sidebar.
+	Dirs []string `json:"dirs,omitempty"`
 }
 
 // scanWorkspace walks the local tree and returns its manifest entries (blob
-// hashes computed) plus a hash of the whole tree, cheap to compare tick to
-// tick.
-func (s *Syncer) scanWorkspace() ([]manifestFile, map[string][]byte, string) {
+// hashes computed), the directories, plus a hash of the whole tree, cheap to
+// compare tick to tick.
+func (s *Syncer) scanWorkspace() ([]manifestFile, []string, map[string][]byte, string) {
 	var files []manifestFile
+	var dirs []string
 	contents := map[string][]byte{}
 	walkErr := filepath.WalkDir(s.workspace, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
 		if d.IsDir() {
-			if path != s.workspace && snapshotSkipDirs[d.Name()] {
+			if path == s.workspace {
+				return nil
+			}
+			if snapshotSkipDirs[d.Name()] {
 				return filepath.SkipDir
+			}
+			if rel, relErr := filepath.Rel(s.workspace, path); relErr == nil {
+				rel = filepath.ToSlash(rel)
+				if rel != blobsFolder {
+					dirs = append(dirs, rel)
+				}
 			}
 			return nil
 		}
@@ -388,19 +464,23 @@ func (s *Syncer) scanWorkspace() ([]manifestFile, map[string][]byte, string) {
 		log.Printf("[sync] walking %s: %v", s.workspace, walkErr)
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	sort.Strings(dirs)
 	h := sha256.New()
+	for _, dir := range dirs {
+		fmt.Fprintf(h, "d\x00%s\n", dir)
+	}
 	for _, f := range files {
 		fmt.Fprintf(h, "%s\x00%s\x00%s\n", f.Path, f.Mode, f.Blob)
 	}
-	return files, contents, hex.EncodeToString(h.Sum(nil))
+	return files, dirs, contents, hex.EncodeToString(h.Sum(nil))
 }
 
 // snapshotWorkspace uploads the blobs Drive does not yet hold and then the
 // manifest, once the tree has held still for one tick.
 func (s *Syncer) snapshotWorkspace(ds *DriveStore) error {
-	files, contents, tree := s.scanWorkspace()
-	if len(files) == 0 {
-		return nil // an empty workspace is not a snapshot worth taking
+	files, dirs, contents, tree := s.scanWorkspace()
+	if len(files) == 0 && len(dirs) == 0 {
+		return nil // an empty workspace root is not a snapshot worth taking
 	}
 	s.mu.Lock()
 	settled := s.treeSeen == tree
@@ -459,7 +539,10 @@ func (s *Syncer) snapshotWorkspace(ds *DriveStore) error {
 	}
 
 	now := time.Now().UTC()
-	body, err := json.MarshalIndent(manifest{Version: 1, App: s.appID, SavedAt: now.Format(time.RFC3339), Files: files}, "", " ")
+	if files == nil {
+		files = []manifestFile{} // the contract's `files` is a list, never null
+	}
+	body, err := json.MarshalIndent(manifest{Version: 1, App: s.appID, SavedAt: now.Format(time.RFC3339), Files: files, Dirs: dirs}, "", " ")
 	if err != nil {
 		return err
 	}
@@ -478,15 +561,17 @@ func (s *Syncer) snapshotWorkspace(ds *DriveStore) error {
 
 // restore pulls the holder's stored data back down when the local roots are
 // empty — a redeployed enclave, or a new one. This is what makes the Drive
-// copy the record rather than a backup nobody ever reads.
-func (s *Syncer) restore(ds *DriveStore) error {
+// copy the record rather than a backup nobody ever reads. Returns the number
+// of files materialised.
+func (s *Syncer) restore(ds *DriveStore) (int, error) {
 	if !dirEmpty(s.sessions) && !dirEmpty(s.workspace) {
 		// Local content exists. Restoring over it could resurrect a session
 		// the holder deleted, or overwrite a newer local file with an older
 		// remote one — neither is a call this code should make silently.
-		return nil
+		return 0, nil
 	}
 	var firstErr error
+	total := 0
 	if dirEmpty(s.sessions) {
 		if id, err := s.folderIfExists(ds, sessionsFolder); err != nil {
 			firstErr = err
@@ -497,6 +582,16 @@ func (s *Syncer) restore(ds *DriveStore) error {
 			}
 			if n > 0 {
 				log.Printf("[sync] restored %d session file(s) from the holder's Drive", n)
+				total += n
+				// What came down is exactly what Drive holds: remember its
+				// hashes so the next tick does not send it all straight back.
+				s.rememberSessions()
+				// A session whose working directory is missing is invisible
+				// to dsh, and a workspace that held no file has no snapshot
+				// to bring the directory back — recreate it from the header.
+				if made := s.ensureSessionCwds(); made > 0 {
+					log.Printf("[sync] recreated %d session working director%s", made, map[bool]string{true: "y", false: "ies"}[made == 1])
+				}
 			}
 		}
 	}
@@ -512,10 +607,103 @@ func (s *Syncer) restore(ds *DriveStore) error {
 			}
 			if n > 0 {
 				log.Printf("[sync] restored %d workspace file(s) from the holder's Drive", n)
+				total += n
 			}
 		}
 	}
-	return firstErr
+	return total, firstErr
+}
+
+// ensureSessionCwds recreates, under the workspace root, the working
+// directory each restored session log names in its header. dsh's session
+// directory name is only a readable rendering of the cwd, so the header is
+// read: the first line of the log, in the first Zstandard frame of a
+// compressed log or plain in a raw one. Only paths inside the workspace root
+// are created; a session that ran elsewhere is left as it is.
+func (s *Syncer) ensureSessionCwds() int {
+	root := filepath.Clean(s.workspace)
+	made := 0
+	seen := map[string]bool{}
+	_ = filepath.WalkDir(s.sessions, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		name := d.Name()
+		if !strings.HasPrefix(name, "session") || !strings.Contains(name, ".jsonl") {
+			return nil
+		}
+		cwd := sessionCwd(path)
+		if cwd == "" {
+			return nil
+		}
+		cwd = filepath.Clean(cwd)
+		if cwd != root && !strings.HasPrefix(cwd, root+string(filepath.Separator)) {
+			return nil
+		}
+		if seen[cwd] {
+			return nil
+		}
+		seen[cwd] = true
+		if _, statErr := os.Stat(cwd); statErr == nil {
+			return nil
+		}
+		if os.MkdirAll(cwd, 0o700) == nil {
+			made++
+		}
+		return nil
+	})
+	return made
+}
+
+// sessionCwd returns the `cwd` of a session log's header line, or "".
+func sessionCwd(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	var r io.Reader = f
+	if strings.HasSuffix(path, ".zstd") {
+		dec, derr := zstd.NewReader(f)
+		if derr != nil {
+			return ""
+		}
+		defer dec.Close()
+		r = dec
+	}
+	line, err := bufio.NewReaderSize(r, 64<<10).ReadBytes('\n')
+	if err != nil && len(line) == 0 {
+		return ""
+	}
+	var header struct {
+		Cwd string `json:"cwd"`
+	}
+	if json.Unmarshal(line, &header) != nil || !filepath.IsAbs(header.Cwd) {
+		return ""
+	}
+	return header.Cwd
+}
+
+// rememberSessions seeds the uploaded-hash map from the local session root.
+func (s *Syncer) rememberSessions() {
+	_ = filepath.WalkDir(s.sessions, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || isLockFile(d.Name()) {
+			return nil
+		}
+		rel, relErr := filepath.Rel(s.sessions, path)
+		if relErr != nil {
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return nil
+		}
+		sum := sha256.Sum256(data)
+		s.mu.Lock()
+		s.uploaded[sessionsFolder+"/"+filepath.ToSlash(rel)] = hex.EncodeToString(sum[:])
+		s.mu.Unlock()
+		return nil
+	})
 }
 
 func dirEmpty(dir string) bool {
@@ -547,7 +735,7 @@ func (s *Syncer) restoreTree(ds *DriveStore, nodeID, dir string) (int, error) {
 	}
 	count := 0
 	for _, c := range children {
-		if c.Name == manifestName || c.Name == blobsFolder {
+		if c.Name == manifestName || c.Name == blobsFolder || isLockFile(c.Name) {
 			continue
 		}
 		target := filepath.Join(dir, c.Name)
@@ -616,6 +804,15 @@ func (s *Syncer) restoreWorkspace(ds *DriveStore, wsID string) (int, error) {
 	}
 	fetched := map[string][]byte{}
 	count := 0
+	for _, dir := range m.Dirs {
+		rel := filepath.Clean(filepath.FromSlash(dir))
+		if rel == "." || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Join(s.workspace, rel), 0o700); err != nil {
+			return count, err
+		}
+	}
 	for _, f := range m.Files {
 		rel := filepath.Clean(filepath.FromSlash(f.Path))
 		if rel == "." || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {

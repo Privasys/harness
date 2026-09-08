@@ -7,6 +7,8 @@ package main
 //
 //	GET  /storage/sync    where the holder's sessions are, and whether they got there
 //	POST /storage/sync    mirror now (called at session end rather than waiting a tick)
+//	GET  /storage/ready   200 once the boot-time restore has run; the entrypoint
+//	                      holds dsh back until then (dsh lists sessions once at start)
 
 import (
 	"log"
@@ -16,6 +18,13 @@ import (
 )
 
 func registerSyncAPI(mux *http.ServeMux, syncer *capability.Syncer) {
+	mux.HandleFunc("GET /storage/ready", func(w http.ResponseWriter, _ *http.Request) {
+		if syncer.Ready() {
+			writeJSON(w, http.StatusOK, map[string]bool{"ready": true})
+			return
+		}
+		writeJSON(w, http.StatusServiceUnavailable, map[string]bool{"ready": false})
+	})
 	mux.HandleFunc("GET /storage/sync", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, syncer.Status())
 	})

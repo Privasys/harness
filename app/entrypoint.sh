@@ -155,6 +155,17 @@ for i in $(seq 1 50); do
   kill -0 "$PROXY_PID" 2>/dev/null || { echo "[harness] egress-proxy died at startup" >&2; exit 1; }
   sleep 0.2
 done
+# Hold dsh back until the holder's data is back on the tmpfs roots. dsh
+# builds its workspace list ONCE at start and never re-bootstraps, so a
+# session restored from the Drive after that start stays invisible until the
+# next restart. The proxy restores for the subject it remembered from the last
+# sign-in and reports /storage/ready; a slow or unreachable Drive is bounded
+# here so a Drive outage delays boot by at most this window, never blocks it.
+for i in $(seq 1 450); do
+  curl -sf --max-time 2 http://127.0.0.1:9411/storage/ready >/dev/null 2>&1 && break
+  kill -0 "$PROXY_PID" 2>/dev/null || { echo "[harness] egress-proxy died during restore" >&2; exit 1; }
+  sleep 0.2
+done
 
 # The model leg rides the proxy; the stock adapter reads these.
 export DEEPSEEK_BASE_URL=http://127.0.0.1:9411/model/v1

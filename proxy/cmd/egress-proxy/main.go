@@ -293,6 +293,19 @@ func main() {
 		envOr("HARNESS_SESSION_ROOT", "/dev/shm/privasys-sessions"),
 		envOr("HARNESS_WORKSPACE_ROOT", "/dev/shm/privasys-workspace"))
 	syncer.LoadState()
+	// Boot-time restore for the subject this deployment remembered: dsh
+	// builds its workspace list once at start and never re-bootstraps, so
+	// the holder's sessions must be on disk BEFORE it starts. The entrypoint
+	// waits on /storage/ready for exactly this.
+	if remembered := loadRememberedSubject(); remembered != "" {
+		recordSubject(remembered)
+		if n, err := syncer.RestoreFor(remembered); err != nil {
+			log.Printf("[sync] boot restore for %.8s…: %v", remembered, err)
+		} else if n > 0 {
+			log.Printf("[sync] boot restore for %.8s…: %d file(s)", remembered, n)
+		}
+	}
+	syncer.SetReady()
 	// 15s, not a minute. The session root is now MEMORY: anything not yet
 	// mirrored is lost if the container dies, so the interval IS the exposure
 	// window. Uploads are content-addressed, so a quiet harness still sends
