@@ -150,6 +150,20 @@ DSH_PORT=3080
 # legacy single-user layout (this script exec'ing one dsh) stays reachable
 # with HARNESS_WORKERS=0 for a deployment that must roll back.
 export HARNESS_WORKERS="${HARNESS_WORKERS:-1}"
+if [[ "$HARNESS_WORKERS" == "1" ]]; then
+  # Volume layout for unprivileged worker uids, settled BEFORE the proxy
+  # starts (it lays out the per-user trees itself, and a root it finds
+  # already there keeps the mode it has). Workers must traverse /data to
+  # reach their own 0700 tree and must read the deployment's skills; the
+  # legacy single-user stores and the proxy's own state stay root-only.
+  chmod 711 /data 2>/dev/null || true
+  mkdir -p /data/users && chmod 711 /data/users
+  for private in /data/sessions /data/workspace /data/policy; do
+    [[ -d "$private" ]] && chmod 700 "$private"
+  done
+  mkdir -p /data/skills && chmod -R a+rX /data/skills
+  echo "[harness] volume layout for workers: /data $(stat -c '%a uid=%u' /data), /data/users $(stat -c '%a' /data/users), /data/skills $(stat -c '%a' /data/skills)"
+fi
 EGRESS_PROXY_LISTEN=127.0.0.1:9411 \
 EGRESS_FORWARD_LISTEN=127.0.0.1:9412 \
 INGRESS_LISTEN="0.0.0.0:${PORT}" \
@@ -296,9 +310,9 @@ cd "$WORKSPACE_ROOT"
 if [[ "$HARNESS_WORKERS" == "1" ]]; then
   # The proxy runs one dsh per user; this script only keeps the container
   # alive and forwards a stop to it (its workers die with their process
-  # groups). Per-user caches live under /data/users/<key>; their owning
-  # uids are unprivileged and never see another user's directory.
-  mkdir -p /data/users
+  # groups). Per-user caches live under /data/users/<key> (laid out above,
+  # before the proxy started); their owning uids are unprivileged and never
+  # see another user's directory.
   trap 'kill -TERM "$PROXY_PID" 2>/dev/null' TERM INT
   echo "[harness] per-user dsh workers under the proxy (pid ${PROXY_PID}); proxy fronts 0.0.0.0:${PORT} (trusted-host ${HARNESS_PUBLIC_HOST:-none})"
   wait "$PROXY_PID"

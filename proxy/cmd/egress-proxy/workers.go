@@ -54,6 +54,8 @@ const (
 	workerBaseUID     = 10000
 	workerReadyWait   = 180 * time.Second
 	workerIdleDefault = 30 * time.Minute
+	// After a failed start, how long before the next request may retry it.
+	workerRestartCooldown = 20 * time.Second
 	systemSubject     = "" // the subject-less worker
 )
 
@@ -104,12 +106,14 @@ type WorkerManager struct {
 	useUIDs   bool
 	idle      time.Duration
 
-	mu       sync.Mutex
-	bySub    map[string]*Worker
-	byToken  map[string]*Worker
-	byUID    map[int]*Worker
-	nextPort int
-	nextUID  int
+	mu        sync.Mutex
+	bySub     map[string]*Worker
+	byToken   map[string]*Worker
+	byUID     map[int]*Worker
+	freePorts []int
+	cooldown  map[string]time.Time // key -> earliest next start after a failed one
+	nextPort  int
+	nextUID   int
 }
 
 func newWorkerManager(cfg config, broker *capability.Broker, client *http.Client) *WorkerManager {
@@ -128,8 +132,22 @@ func newWorkerManager(cfg config, broker *capability.Broker, client *http.Client
 		driveHost: cfg.toolHosts["drive"], appID: os.Getenv("HARNESS_APP_ID"),
 		useUIDs: useUIDs, idle: idle,
 		bySub: map[string]*Worker{}, byToken: map[string]*Worker{}, byUID: map[int]*Worker{},
+		cooldown: map[string]time.Time{},
 		nextPort: workerBasePort, nextUID: workerBaseUID,
 	}
+}
+
+// allocPort hands out the lowest free loopback port; a stopped worker's port
+// is reused, so a restart does not walk up the range. Caller holds m.mu.
+func (m *WorkerManager) allocPort() int {
+	if n := len(m.freePorts); n > 0 {
+		p := m.freePorts[n-1]
+		m.freePorts = m.freePorts[:n-1]
+		return p
+	}
+	p := m.nextPort
+	m.nextPort++
+	return p
 }
 
 // workersEnabled reports whether this process supervises dsh itself. Off
@@ -180,15 +198,21 @@ func (m *WorkerManager) Ensure(sub string) *Worker {
 		return w
 	}
 	key := workerKey(sub)
+	if until, held := m.cooldown[key]; held && time.Now().Before(until) {
+		// A start just failed; do not hammer it. The caller sees a worker
+		// that is not ready and answers "starting"; the next request after
+		// the cooldown retries the start.
+		m.mu.Unlock()
+		return &Worker{Subject: sub, Key: key, exited: make(chan struct{})}
+	}
 	w := &Worker{
 		Subject: sub, Key: key,
-		Port:     m.nextPort,
+		Port:     m.allocPort(),
 		Token:    randomToken(),
 		Dir:      filepath.Join(envOr("HARNESS_USERS_DIR", "/data/users"), key),
 		exited:   make(chan struct{}),
 		lastSeen: time.Now(), started: time.Now(),
 	}
-	m.nextPort++
 	if m.useUIDs {
 		w.UID = m.loadOrAssignUID(w)
 	}
@@ -241,7 +265,14 @@ func randomToken() string {
 func (m *WorkerManager) start(w *Worker) {
 	if err := m.prepare(w); err != nil {
 		log.Printf("[workers] %s: prepare: %v", w.Key, err)
-		m.forget(w)
+		m.failed(w)
+		return
+	}
+	if err := m.preflight(w); err != nil {
+		// Named here, once, instead of as an EACCES stack trace from dsh on
+		// every restart: the fix is in the volume layout, not in dsh.
+		log.Printf("[workers] %s: uid %d cannot use its roots: %v", w.Key, w.UID, err)
+		m.failed(w)
 		return
 	}
 	if w.Subject != systemSubject {
@@ -262,13 +293,13 @@ func (m *WorkerManager) start(w *Worker) {
 	cmd, err := m.command(w)
 	if err != nil {
 		log.Printf("[workers] %s: %v", w.Key, err)
-		m.forget(w)
+		m.failed(w)
 		return
 	}
 	w.cmd = cmd
 	if err := cmd.Start(); err != nil {
 		log.Printf("[workers] %s: start dsh: %v", w.Key, err)
-		m.forget(w)
+		m.failed(w)
 		return
 	}
 	log.Printf("[workers] %s: dsh started (pid %d, port %d, uid %d, subject %.8s…)", w.Key, cmd.Process.Pid, w.Port, w.UID, w.Subject)
@@ -276,6 +307,11 @@ func (m *WorkerManager) start(w *Worker) {
 		err := cmd.Wait()
 		log.Printf("[workers] %s: dsh exited: %v", w.Key, err)
 		close(w.exited)
+		if !w.isReady() {
+			// Died before serving: a crash loop, not an idle stop.
+			m.failed(w)
+			return
+		}
 		m.forget(w)
 	}()
 	// Readiness: dsh serves its index once booted.
@@ -304,13 +340,27 @@ func (m *WorkerManager) start(w *Worker) {
 	}
 	log.Printf("[workers] %s: dsh did not become ready within %s; stopping it", w.Key, workerReadyWait)
 	m.Stop(w)
+	m.failed(w)
 }
 
 // prepare lays out the worker's directories. The dsh home is per worker so
 // settings, the KV store and attachments never mix between users; the
 // measured profiles are shared read-only through a symlink.
 func (m *WorkerManager) prepare(w *Worker) error {
-	for _, d := range []string{w.Dir, w.Sessions, w.Workspace, w.Home} {
+	// The roots ABOVE the worker's directories stay root-owned, and every
+	// worker uid must traverse them to reach its own: execute-only (0711), so
+	// a worker can neither list the other users' keys nor open their trees
+	// (each of those is 0700 and theirs). MkdirAll would create them 0700
+	// like the leaf, which is exactly the EACCES a first boot showed.
+	for _, root := range []string{filepath.Dir(w.Dir), filepath.Dir(filepath.Dir(w.Sessions))} {
+		if err := os.MkdirAll(root, 0o711); err != nil {
+			return err
+		}
+		if err := os.Chmod(root, 0o711); err != nil {
+			return fmt.Errorf("%s: %w", root, err)
+		}
+	}
+	for _, d := range []string{w.Dir, filepath.Dir(w.Sessions), w.Sessions, w.Workspace, w.Home} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			return err
 		}
@@ -328,20 +378,54 @@ func (m *WorkerManager) prepare(w *Worker) error {
 		return err
 	}
 	if w.UID != 0 {
-		chownTree(w.Dir, w.UID)
-		chownTree(w.Sessions, w.UID)
+		if err := chownTree(w.Dir, w.UID); err != nil {
+			return err
+		}
+		if err := chownTree(filepath.Dir(w.Sessions), w.UID); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-func chownTree(root string, uid int) {
+// chownTree hands a tree to the worker's uid. The first failure is returned
+// rather than swallowed: a chown the runtime refuses is a layout problem the
+// operator must see, not something dsh should discover as EACCES.
+func chownTree(root string, uid int) error {
+	var first error
 	_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
 		}
-		_ = os.Lchown(path, uid, uid)
+		if err := os.Lchown(path, uid, uid); err != nil && first == nil {
+			first = fmt.Errorf("chown %s to %d: %w", path, uid, err)
+		}
 		return nil
 	})
+	return first
+}
+
+// preflight proves, AS the worker's uid, that dsh will be able to read its
+// profile and write its roots before dsh is started. Under root it is a
+// plain access check.
+func (m *WorkerManager) preflight(w *Worker) error {
+	script := `test -r "$1/profiles/web/package.json" || { echo "profile unreadable: $1/profiles/web/package.json"; exit 1; }
+test -w "$2" || { echo "workspace not writable: $2"; exit 1; }
+test -w "$3" || { echo "session root not writable: $3"; exit 1; }
+test -w "$1" || { echo "home not writable: $1"; exit 1; }`
+	args := []string{"sh", "-c", script, "preflight", w.Home, w.Workspace, w.Sessions}
+	var cmd *exec.Cmd
+	if w.UID != 0 {
+		full := append([]string{"--reuid=" + strconv.Itoa(w.UID), "--regid=" + strconv.Itoa(w.UID), "--clear-groups", "--"}, args...)
+		cmd = exec.Command("setpriv", full...)
+	} else {
+		cmd = exec.Command(args[0], args[1:]...)
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s (%v)", strings.TrimSpace(string(out)), err)
+	}
+	return nil
 }
 
 // command builds the dsh launch: the measured profile plus the worker's own
@@ -402,7 +486,8 @@ func (m *WorkerManager) command(w *Worker) (*exec.Cmd, error) {
 	return cmd, nil
 }
 
-// forget drops a worker from the maps (its cache stays on disk).
+// forget drops a worker from the maps (its cache stays on disk) and frees
+// its port.
 func (m *WorkerManager) forget(w *Worker) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -413,9 +498,23 @@ func (m *WorkerManager) forget(w *Worker) {
 	if w.UID != 0 && m.byUID[w.UID] == w {
 		delete(m.byUID, w.UID)
 	}
+	if w.Port != 0 {
+		m.freePorts = append(m.freePorts, w.Port)
+		w.Port = 0
+	}
 	if w.syncer != nil {
 		w.syncer.SaveState()
 	}
+}
+
+// failed is forget for a start that did not get to "ready": the subject is
+// held back for a while so a broken layout does not restart dsh every
+// request, and the log says so once per attempt rather than once per second.
+func (m *WorkerManager) failed(w *Worker) {
+	m.forget(w)
+	m.mu.Lock()
+	m.cooldown[w.Key] = time.Now().Add(workerRestartCooldown)
+	m.mu.Unlock()
 }
 
 // Stop ends a worker: a last mirror pass, then SIGTERM to its process group.
