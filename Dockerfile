@@ -19,8 +19,8 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
 
 # ---- dsh at the pin -------------------------------------------------------
 FROM node:22-bookworm AS dsh-builder
-# dsh-v0.1.3-alpha.2 (2026-09-07)
-ARG DSH_PIN=82a5fd61a7cf5c293cec4bdff68f455398d685e9
+# dsh-v0.1.5-alpha.1 (2026-09-08)
+ARG DSH_PIN=5dda764ed3aa172535a7967b06ff95d9cbfe536a
 RUN corepack enable \
  && git clone https://github.com/deepseek-ai/deepseek-harness /dsh \
  && git -C /dsh checkout "${DSH_PIN}"
@@ -164,6 +164,15 @@ ENV HARNESS_TOOL_HOSTS=web_search=web-search-brave.apps.privasys.org,web_reader=
 # are served unsealed. enclave-os requires tdx runtime with the static-unsealed
 # exemption (manager.go isStaticUnsealedPath).
 LABEL org.privasys.static-unsealed-prefixes="/,/assets/,/privasys/,/plugins/,/favicon.svg,/manifest.webmanifest"
+# The measured manifest. The harness exposes no tools of its own; it declares
+# the one user-owned RESOURCE it wants: a folder in the holder's Drive, which
+# the enclave runtime brokers (consent on the holder's device, per-app sealed
+# binding key, wallet push) and Drive places under AppData/<label>/. The
+# control plane reads this label on every version and hands the declaration
+# to the runtime at deploy; what a user is told the app wants is therefore
+# attested. The resource NAME must match HARNESS_STORAGE_RESOURCE (default
+# "storage") in the proxy.
+LABEL org.privasys.manifest='{"tools":[],"resources":[{"kind":"storage.folder","name":"storage","label":"Harness","permissions":["read","write"]}]}'
 # Link the GHCR package to this repo so its Actions inherit write access
 # (avoids a personal access token — the package is published by CI).
 LABEL org.opencontainers.image.source="https://github.com/Privasys/attested-harness"
