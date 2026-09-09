@@ -249,6 +249,7 @@ func fetchCatalogue(r *http.Request, client *http.Client, host, sub string) ([]u
 	// naming the subject when one is bound is harmless and consistent.
 	if sub != "" {
 		req.Header.Set("X-Privasys-On-Behalf-Of", sub)
+		decorateSpend(req, sub)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -290,6 +291,9 @@ func callTool(r *http.Request, client *http.Client, host, fn string, args json.R
 	// ingress front — never anything the model supplied.
 	if sub != "" {
 		req.Header.Set("X-Privasys-On-Behalf-Of", sub)
+		// The spend token + proof are what the tool's runtime verifies to
+		// name the payer; the header above is the transitional twin.
+		decorateSpend(req, sub)
 	}
 	// The consent header is set by THIS layer from the user's policy, never
 	// copied from what dsh or the model sent: the model could otherwise

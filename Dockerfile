@@ -9,7 +9,7 @@
 
 # ---- egress proxy (attestation authority; never Node) ---------------------
 FROM golang:1.26-bookworm AS proxy-builder
-ARG RA_TLS_CLIENTS_REF=c6c63216dc5a0915569826e3ba2c1efdf44de6b0
+ARG RA_TLS_CLIENTS_REF=a5c458d7601eb88ff4eec357037a9421294d8619
 RUN git clone https://github.com/Privasys/ra-tls-clients /build/attested-harness/ra-tls-clients \
  && git -C /build/attested-harness/ra-tls-clients checkout "${RA_TLS_CLIENTS_REF}"
 COPY proxy /build/attested-harness/proxy

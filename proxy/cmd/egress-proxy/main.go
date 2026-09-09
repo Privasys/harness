@@ -28,6 +28,8 @@
 package main
 
 import (
+	"enclave-os-mini/clients/go/spend"
+
 	"context"
 	"encoding/json"
 	"fmt"
@@ -198,6 +200,10 @@ func forward(w http.ResponseWriter, r *http.Request, client *http.Client, host, 
 func main() {
 	cfg := loadConfig()
 
+	// Spend tokens: the key that names the paying user on every attested
+	// leg, published at the well-known path on the ingress port.
+	initSpendSigner(cfg.onPlatform)
+
 	// The declared dependency set is the proxy's routing authority: refresh
 	// it from the enclave manager for the life of the process. Off platform
 	// (no PRIVASYS_MANAGER_URL) it stays disabled and only the legacy
@@ -240,6 +246,9 @@ func main() {
 			if sub != "" {
 				r.Header.Set("X-Privasys-On-Behalf-Of", sub)
 			}
+			// The spend token + proof name the payer to CAI's runtime
+			// (spendtoken.go); the header above is the transitional twin.
+			decorateSpend(r, sub)
 		} else if forwardableAuthorization(r) == "" {
 			r.Header.Del("Authorization") // a worker's bearer never leaves this proxy
 		}
@@ -488,6 +497,16 @@ func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp 
 	}
 	mux.HandleFunc("GET /health", health)
 	mux.HandleFunc("GET /healthz", health)
+	// The spend-key JWKS the identity provider fetches from this origin
+	// before issuing a spend token to this harness (spendtoken.go). Public,
+	// unsealed, no user data: one P-256 public key.
+	mux.HandleFunc("GET "+spend.WellKnownPath, func(w http.ResponseWriter, r *http.Request) {
+		if spendSigner == nil {
+			http.NotFound(w, r)
+			return
+		}
+		spendSigner.ServeJWKS(w, r)
+	})
 	// Browser attestation summary (reached over the sealed session by the
 	// Privasys shell): the harness's own identity plus the live attested
 	// dependency set the agent loop is fenced to. Read-only, no secrets.

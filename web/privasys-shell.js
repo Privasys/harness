@@ -169,6 +169,11 @@ async function run() {
         // the attestation quote signature) rides the session's own granted
         // scopes as of sdk-v0.11.1, so nothing forces a wider grant here.
         scope: ['openid', 'profile', 'offline_access'],
+        // Spend consent (acting-subject plan v2): the harness pays for the
+        // user's inference and priced tools with the USER's credits, under
+        // a monthly cap the wallet asks them to approve at sign-in.
+        // Suggested cap £5 (credits, 1 credit = £0.000001).
+        spend: { cap: 5000000 },
         container: gate,
         presentation: 'page',
         // Sealed instance: the end-to-end encrypted session is established only
