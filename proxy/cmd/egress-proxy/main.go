@@ -30,6 +30,7 @@ package main
 import (
 	"enclave-os-mini/clients/go/spend"
 
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -160,7 +161,16 @@ func forward(w http.ResponseWriter, r *http.Request, client *http.Client, host, 
 	}
 	defer resp.Body.Close()
 	body := resp.Body
-	if repro {
+	if repro && resp.StatusCode >= 400 {
+		// A refused model leg used to log its status alone, and dsh shows
+		// the user a generic "API key is invalid" for any 4xx, so the
+		// callee's reason was visible nowhere. Errors are small JSON
+		// bodies, never streams: read, log, and pass along.
+		peek, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		log.Printf("[egress-proxy] model leg: %s %s -> %d %s: %s", r.Method, path, resp.StatusCode,
+			resp.Header.Get("Content-Type"), truncate(peek, 300))
+		body = io.NopCloser(bytes.NewReader(peek))
+	} else if repro {
 		log.Printf("[egress-proxy] model leg: %s %s -> %d %s", r.Method, path, resp.StatusCode, resp.Header.Get("Content-Type"))
 	} else if resp.StatusCode >= 400 {
 		// Tool legs were silent unless the DIAL was refused, so a shim that
@@ -248,6 +258,12 @@ func main() {
 			}
 			// The spend token + proof name the payer to CAI's runtime
 			// (spendtoken.go); the header above is the transitional twin.
+			// The proof's audience is the request's Host, and here that is
+			// still this proxy's loopback listener (dsh dialled 127.0.0.1):
+			// name the callee first, or CAI's runtime refuses the proof as
+			// "audience is not this host" and dsh shows "API key is
+			// invalid" (found 2026-09-09; forward() sets the same Host).
+			r.Host = cfg.modelHost
 			decorateSpend(r, sub)
 		} else if forwardableAuthorization(r) == "" {
 			r.Header.Del("Authorization") // a worker's bearer never leaves this proxy
