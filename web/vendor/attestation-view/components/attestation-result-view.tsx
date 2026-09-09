@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type {
     AttestationExpectations,
     AttestationExtension,
+    AttestationMode,
     AttestationResult,
     GPUAttestationResult,
     OsRelease,
@@ -25,7 +26,8 @@ import { Badge } from './badge';
 //   1. Challenge-mode banner (only when result.challenge_mode)
 //   2. TLS connection summary
 //   3. x.509 certificate fields
-//   4. Attestation quote fields (with auto-verified ReportData)
+//   4. Attestation quote fields (with the RA-TLS v2 report_data recipe
+//      reproduced in the browser, in both deterministic and challenge mode)
 //   5. Platform OID extensions
 //   6. Workload OID extensions (if app_extensions present)
 //
@@ -72,8 +74,10 @@ const OID_DESCRIPTIONS: Record<string, string> = {
         'Build flavor of the enclave VM image: "production" or "dev". Verifiers reject dev images unless explicitly opted in.',
     'Attested Dependency Set':
         'The fixed set of cross-enclave dependency identities this workload is pinned to, written by the runtime.',
-    'NVIDIA GPU Evidence':
-        'NVIDIA Confidential-Computing attestation evidence (SPDM report + certificate chain) collected from the GPU and bound to this certificate.'
+    'Enclave Instance ID':
+        'Platform-assigned identity of this enclave instance, stamped by the measured runtime.',
+    'Authenticated State Root':
+        'Root of the enclave\'s authenticated persistent state at the time the certificate was issued.'
 };
 
 export function AttestationResultView({
@@ -110,10 +114,10 @@ export function AttestationResultView({
      * portal to drop in its RTMR event-log replay component.
      */
     extra?: React.ReactNode;
-    /** Current challenge nonce. When provided alongside
+    /** Current challenge (hex). When provided alongside
      *  onChallengeChange / onRegenerateChallenge, an inline editor is
      *  rendered next to the action bar so the user can replay or
-     *  modify the nonce without leaving the result view. */
+     *  modify the challenge without leaving the result view. */
     challenge?: string;
     onChallengeChange?: (next: string) => void;
     onRegenerateChallenge?: () => void;
@@ -218,7 +222,7 @@ export function AttestationResultView({
             {result.extensions.length > 0 && (
                 <ExtensionsSection
                     title='Platform Attestation Extensions'
-                    description='Platform-level x.509 extensions (OIDs 1.x/2.x). These bind the enclave configuration and runtime to the attestation.'
+                    description='Platform-level x.509 extensions (OIDs 1.x, 2.x and 3.x). These bind the enclave runtime, configuration and state to the certificate key the quote commits to.'
                     extensions={result.extensions}
                     expectations={expectations}
                     cwasmHash={result.cwasm_hash}
@@ -228,7 +232,7 @@ export function AttestationResultView({
             {result.app_extensions && result.app_extensions.length > 0 && (
                 <ExtensionsSection
                     title='Workload Attestation Extensions'
-                    description='Per-workload x.509 extensions (OIDs 3.x). These bind the specific application code, model and permissions to a dedicated attestation.'
+                    description='Per-workload x.509 extensions (OIDs 4.x to 7.x). These bind the specific application code, model and permissions to a dedicated attestation.'
                     extensions={result.app_extensions}
                     accent
                     expectations={expectations}
@@ -256,12 +260,15 @@ export function AttestationResultView({
                 />
             )}
 
-            {result.challenge_mode && result.challenge && result.certificate?.public_key_sha256 && result.quote?.report_data && (
+            {result.certificate?.public_key_sha256 && result.quote?.report_data && attestationModeOf(result) && (
                 <VerificationCodeSection
                     pubKeySha256={result.certificate.public_key_sha256}
-                    challenge={result.challenge}
+                    mode={attestationModeOf(result)!}
+                    quoteTime={result.quote.quote_time}
+                    contextHex={result.quote.context}
+                    hctxB64={result.quote.hctx}
+                    gpuEvidenceB64={result.quote.gpu_evidence_base64}
                     reportData={result.quote.report_data}
-                    binderB64={result.quote.channel_binder}
                 />
             )}
 
@@ -284,29 +291,47 @@ type ReportDataCheck =
     | { state: 'mismatch'; computed: string; actual: string }
     | { state: 'error' };
 
+// The attestation mode the verifying service used. `quote.attestation` is
+// authoritative; older payloads without it are inferred from challenge_mode.
+function attestationModeOf(result: AttestationResult): AttestationMode | undefined {
+    const q = result.quote;
+    if (!q) return undefined;
+    if (q.attestation === 'challenge' || q.attestation === 'deterministic') return q.attestation;
+    if (result.challenge_mode) return q.context && q.hctx ? 'challenge' : undefined;
+    return q.quote_time ? 'deterministic' : undefined;
+}
+
 function useReportDataCheck(result: AttestationResult): ReportDataCheck {
     const [check, setCheck] = useState<ReportDataCheck>({ state: 'idle' });
 
     useEffect(() => {
-        const reportData = result.quote?.report_data;
+        const quote = result.quote;
+        const reportData = quote?.report_data;
         const pubKey = result.certificate?.public_key_sha256;
-        const challenge = result.challenge;
-        if (!result.challenge_mode || !reportData || !pubKey || !challenge) {
+        const mode = attestationModeOf(result);
+        if (!quote || !reportData || !pubKey || !mode) {
             setCheck({ state: 'idle' });
             return;
         }
+        // In challenge mode the context is the challenge the browser chose
+        // (when it is 32 bytes) and hctx is the TLS exporter value of the
+        // verifying service's connection. Prefer the browser's own challenge
+        // as the context so a service that echoed a different one mismatches.
+        const contextHex = mode === 'challenge'
+            ? (result.challenge && result.challenge.length === 64 ? result.challenge : quote.context)
+            : undefined;
         let cancelled = false;
         setCheck({ state: 'verifying' });
         verifyReportData({
             pubKeySha256Hex: pubKey,
-            challengeHex: challenge,
             reportDataHex: reportData,
-            binderB64: result.quote?.channel_binder,
-            // GPU enclaves (confidential-ai) fold SHA-256(GPU evidence) into the
-            // binding; without it the check falsely reports a mismatch.
-            gpuEvidenceHex: [...(result.extensions ?? []), ...(result.app_extensions ?? [])].find(
-                (e) => e.oid === PRIVASYS_OID.GPU_EVIDENCE
-            )?.value_hex
+            mode,
+            quoteTime: quote.quote_time,
+            contextHex,
+            hctxB64: quote.hctx,
+            // GPU enclaves (confidential-ai) append SHA-256(GPU evidence) to
+            // the binding; without it the check falsely reports a mismatch.
+            gpuEvidenceB64: quote.gpu_evidence_base64
         }).then((r) => {
             if (cancelled) return;
             if (r.status === 'match') {
@@ -357,7 +382,7 @@ function ChallengeBanner({
                             </Badge>
                         )}
                         {reportDataCheck.state === 'match' && (
-                            <Badge tone='ok'>{'\u2713 Match - freshness verified'}</Badge>
+                            <Badge tone='ok'>{'\u2713 Match - connection binding verified'}</Badge>
                         )}
                         {reportDataCheck.state === 'mismatch' && (
                             <Badge tone='err'>✗ Mismatch</Badge>
@@ -369,14 +394,17 @@ function ChallengeBanner({
                     {reportDataCheck.state === 'mismatch' || reportDataCheck.state === 'error' ? (
                         <p className='mb-2 text-[11px] font-medium'>
                             {reportDataCheck.state === 'error'
-                                ? 'The report data could not be verified in your browser. The quote’s binding to this session could not be confirmed — do not trust this enclave’s identity until this is resolved.'
-                                : 'Report data mismatch. The quote’s ReportData is not SHA-512( SHA-256(public_key) || nonce || channel_binder ) for this certificate and challenge, so the quote was not freshly bound to this TLS session. This is a serious failure: do not trust this enclave’s identity. See the hash comparison in the quote section below.'}
+                                ? 'The report data could not be verified in your browser (the response is missing the context or the exporter value, or they have the wrong length). The quote’s binding to the verifier’s connection could not be confirmed: do not trust this enclave’s identity until this is resolved.'
+                                : 'Report data mismatch. The quote’s ReportData is not SHA-512( SHA-256(public_key) || context || hctx ) for this certificate, your challenge and the exporter value the verifying service supplied, so the quote was not bound to that connection. This is a serious failure: do not trust this enclave’s identity. See the hash comparison in the quote section below.'}
                         </p>
                     ) : (
                         <p className='mb-2 text-[11px] opacity-70'>
-                            This certificate was freshly generated in response to your challenge nonce.
-                            The enclave bound your nonce and this TLS session&rsquo;s channel binder into the
-                            quote&rsquo;s ReportData field.
+                            The verifying service opened a TLS 1.3 connection to the enclave and asked for
+                            evidence using your challenge as the context. The enclave folded that context
+                            and the connection&rsquo;s TLS exporter value (hctx) into the quote&rsquo;s ReportData.
+                            Your browser reproduces ReportData from the context you chose and the exporter
+                            value the service supplied, which shows the quote was bound to that
+                            verifier&rsquo;s connection and to this certificate key.
                         </p>
                     )}
                     <div className='mb-1 text-[11px] opacity-70'>Challenge sent:</div>
@@ -420,7 +448,7 @@ function ChallengeEditor({
     return (
         <div className='rounded-lg border border-black/10 p-3 dark:border-white/10'>
             <label className='block text-[10px] uppercase tracking-wide text-black/40 dark:text-white/40'>
-                Challenge nonce (hex)
+                Challenge context (hex)
             </label>
             <div className='mt-1 flex items-center gap-2'>
                 <input
@@ -465,8 +493,29 @@ function QuoteSection({
 }) {
     const fields = useMemo(() => {
         const rows: Array<{ label: string; value: string; description?: string }> = [
-            { label: 'Quote Type', value: quote.type, description: 'Attestation quote format embedded in the certificate.' }
+            { label: 'Quote Type', value: quote.type, description: 'Attestation evidence format exchanged on the TLS connection after the handshake (RA-TLS v2).' }
         ];
+        if (quote.tee) rows.push({ label: 'TEE', value: quote.tee, description: 'Evidence family reported by the enclave.' });
+        if (quote.attestation) {
+            rows.push({
+                label: 'Attestation Mode',
+                value: quote.attestation,
+                description: quote.attestation === 'challenge'
+                    ? 'Challenge mode: the quote is bound to the challenge context and to the TLS exporter value of the verifying service\'s connection.'
+                    : 'Deterministic mode: the quote is bound to the certificate key and the quote minute, and may be served from the enclave\'s cache for up to 24 hours.'
+            });
+        }
+        if (quote.quote_time) {
+            rows.push({
+                label: 'Quote Time',
+                value: quote.quote_time,
+                description: challengeMode
+                    ? 'Minute at which the quote was minted (UTC).'
+                    : 'Minute at which the quote was minted (UTC). In deterministic mode these exact bytes are folded into ReportData.'
+            });
+        }
+        if (quote.context) rows.push({ label: 'Context', value: quote.context, description: 'The 32-byte challenge context the enclave used; equals the challenge you sent when it is 32 bytes.' });
+        if (quote.hctx) rows.push({ label: 'Exporter Value (hctx)', value: quote.hctx, description: 'TLS exporter value (RFC 8446 section 7.5) of the verifying service\'s connection for this context, base64. Browsers expose no TLS exporter, so the service that held the connection supplies it.' });
         if (quote.format) rows.push({ label: 'Format', value: quote.format });
         if (quote.version != null) rows.push({ label: 'Version', value: String(quote.version) });
         if (quote.mr_enclave) rows.push({ label: 'MRENCLAVE', value: quote.mr_enclave, description: 'Hash of the enclave code and initial data.' });
@@ -480,12 +529,19 @@ function QuoteSection({
             rows.push({
                 label: 'Report Data',
                 value: quote.report_data,
-                description: challengeMode
-                    ? 'SHA-512( SHA-256(public_key_DER) || challenge_nonce || channel_binder ).'
-                    : 'SHA-512( SHA-256(public_key_DER) || timestamp ). Deterministic mode - the certificate\'s NotBefore is the nonce.'
+                description: (challengeMode
+                    ? 'SHA-512( SHA-256(public_key_DER) || context || hctx )'
+                    : 'SHA-512( SHA-256(public_key_DER) || quote_time )')
+                    + (quote.gpu_evidence_base64 ? ' with SHA-256(gpu_evidence) appended.' : '.')
             });
         }
-        rows.push({ label: 'OID', value: quote.oid, description: 'Object Identifier of the x.509 extension containing the quote.' });
+        if (quote.gpu_evidence_base64) {
+            rows.push({
+                label: 'GPU Evidence',
+                value: quote.gpu_evidence_base64,
+                description: 'NVIDIA Confidential-Computing evidence envelope (SPDM report + certificate chain), base64, exchanged with the quote; its SHA-256 is folded into ReportData.'
+            });
+        }
         if (quoteVerify?.tcbStatus) {
             rows.push({
                 label: 'TCB Status',
@@ -567,12 +623,14 @@ function QuoteSection({
                         {f.label === 'Report Data' && reportDataCheck.state === 'mismatch' && (
                             <div className='mt-2 space-y-1.5 rounded-lg border border-red-200/50 bg-red-50/50 p-3 dark:border-red-800/30 dark:bg-red-900/10'>
                                 <p className='text-[11px] font-medium text-red-700 dark:text-red-400'>
-                                    Report data does not match this certificate + challenge.
+                                    {challengeMode
+                                        ? 'Report data does not match this certificate, your challenge and the supplied exporter value.'
+                                        : 'Report data does not match this certificate and quote time.'}
                                 </p>
                                 <p className='text-[11px] text-red-700/80 dark:text-red-400/80'>
-                                    Expected SHA-512( SHA-256(public_key) || nonce || channel_binder ). A mismatch
-                                    means the quote was not freshly bound to this TLS session; do not trust this
-                                    enclave&rsquo;s identity.
+                                    {challengeMode
+                                        ? 'Expected SHA-512( SHA-256(public_key) || context || hctx ). A mismatch means the quote was not bound to the verifying service\'s connection; do not trust this enclave\'s identity.'
+                                        : 'Expected SHA-512( SHA-256(public_key) || quote_time ). A mismatch means the quote does not commit to this certificate key and quote minute; do not trust this enclave\'s identity.'}
                                 </p>
                                 <DebugLine label='Computed' value={reportDataCheck.computed} />
                                 <DebugLine label='Actual' value={reportDataCheck.actual} />
@@ -657,7 +715,7 @@ function ExtensionsSection({
                 {extensions.map((ext) => {
                     const printable = TEXT_OIDS.has(ext.oid) ? hexToPrintableText(ext.value_hex) : null;
                     const display = printable ? `${printable}  (${ext.value_hex})` : ext.value_hex;
-                    // OID 3.2 (Workload Image Digest): show the published-package
+                    // OID 4.2 (Workload Image Digest): show the published-package
                     // link + digest-match verdict (the app-code analogue of the
                     // Enclave OS release link), when management-service resolved it.
                     const isImageDigest = ext.oid === PRIVASYS_OID.APP_CODE_HASH;
@@ -702,13 +760,13 @@ function checkExpectation(
         expected = norm(expectations?.workloadImageDigest) || norm(cwasmHash);
         label = expectations?.labels?.workloadImageDigest
             || (cwasmHash ? 'matches uploaded CWASM hash' : 'matches expected workload image digest');
-    } else if (ext.oid === PRIVASYS_OID.MODEL_DIGEST || ext.oid === PRIVASYS_OID.MODEL_DIGEST_LEGACY) {
+    } else if (ext.oid === PRIVASYS_OID.MODEL_DIGEST) {
         expected = norm(expectations?.modelDigest);
         label = expectations?.labels?.modelDigest || 'matches expected AI model digest';
     } else if (ext.oid === PRIVASYS_OID.APP_ID) {
         expected = norm(expectations?.appId);
         label = expectations?.labels?.appId || 'matches expected app identity';
-    } else if (ext.oid === PRIVASYS_OID.TOOLS_DIGEST || ext.oid === PRIVASYS_OID.TOOLS_DIGEST_LEGACY) {
+    } else if (ext.oid === PRIVASYS_OID.TOOLS_DIGEST) {
         expected = norm(expectations?.toolsDigest);
         label = expectations?.labels?.toolsDigest || 'matches expected AI tool set';
     }
@@ -760,7 +818,7 @@ function OsReleaseBadge({ osRelease }: { osRelease: OsRelease }) {
 }
 
 // WorkloadReleaseBadge renders ONE merged pill for the Workload Image Digest
-// (OID 3.2): whether the deployed workload matches the build it came from, plus
+// (OID 4.2): whether the deployed workload matches the build it came from, plus
 // a link to that build \u2014 the published GHCR package / GitHub release for
 // containers, or the reproducible-app-builder Actions run for wasm. Colour
 // follows the verdict (green only on match, red on mismatch, neutral when
@@ -925,30 +983,58 @@ function PemSection({
 
 function VerificationCodeSection({
     pubKeySha256,
-    challenge,
-    reportData,
-    binderB64
+    mode,
+    quoteTime,
+    contextHex,
+    hctxB64,
+    gpuEvidenceB64,
+    reportData
 }: {
     pubKeySha256: string;
-    challenge: string;
+    mode: AttestationMode;
+    /** Deterministic mode: the exact quote_time string ("YYYY-MM-DDTHH:MMZ"). */
+    quoteTime?: string;
+    /** Challenge mode: hex of the 32-byte challenge context. */
+    contextHex?: string;
+    /** Challenge mode: base64 TLS exporter value of the verifying service's connection. */
+    hctxB64?: string;
+    /** Base64 GPU evidence envelope; SHA-256 of it is appended when present. */
+    gpuEvidenceB64?: string;
     reportData: string;
-    /** Base64 RA-TLS channel binder folded into report_data after the nonce. */
-    binderB64?: string;
 }) {
+    const challenge = mode === 'challenge';
+    const formula = challenge
+        ? 'SHA-512( SHA-256(public_key_DER) || context || hctx )'
+        : 'SHA-512( SHA-256(public_key_DER) || quote_time )';
     const snippet = [
-        '// Report Data verification - paste in your browser console',
-        `const pubkeySha256 = "${pubKeySha256}";`,
-        `const challenge   = "${challenge}";`,
-        `const binderB64   = "${binderB64 || ''}";  // RA-TLS channel binder (base64, 32 bytes)`,
-        `const reportData  = "${reportData}";`,
+        '// Report Data verification (RA-TLS v2) - paste in your browser console',
+        `const pubkeySha256 = "${pubKeySha256}";  // SHA-256 of the certificate's SubjectPublicKeyInfo DER`,
+        ...(challenge
+            ? [
+                `const context      = "${contextHex || ''}";  // 32-byte challenge context (hex)`,
+                `const hctxB64      = "${hctxB64 || ''}";  // TLS exporter value of the verifier's connection (base64, 32 bytes)`
+            ]
+            : [
+                `const quoteTime    = "${quoteTime || ''}";  // quote minute, exact ASCII bytes`
+            ]),
+        `const gpuEvidence  = "${gpuEvidenceB64 || ''}";  // base64 GPU evidence envelope, empty when the enclave has no GPU`,
+        `const reportData   = "${reportData}";`,
         '',
-        'const hex2buf = h => new Uint8Array(h.match(/.{2}/g).map(b => parseInt(b, 16)));',
+        'const hex2buf = h => new Uint8Array((h.match(/.{2}/g) || []).map(b => parseInt(b, 16)));',
         'const b642buf = b => b ? Uint8Array.from(atob(b), c => c.charCodeAt(0)) : new Uint8Array(0);',
         'const buf2hex = b => [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, \'0\')).join(\'\');',
         '',
         '(async () => {',
-        '  // report_data = SHA-512( SHA-256(public_key_DER) || nonce || binder )',
-        '  const input = new Uint8Array([...hex2buf(pubkeySha256), ...hex2buf(challenge), ...b642buf(binderB64)]);',
+        `  // report_data = ${formula}`,
+        '  //               with SHA-256(gpu_evidence) appended when GPU evidence is present',
+        challenge
+            ? '  let binding = new Uint8Array([...hex2buf(context), ...b642buf(hctxB64)]);'
+            : '  let binding = new TextEncoder().encode(quoteTime);',
+        '  if (gpuEvidence) {',
+        '    const gpuFold = await crypto.subtle.digest(\'SHA-256\', b642buf(gpuEvidence));',
+        '    binding = new Uint8Array([...binding, ...new Uint8Array(gpuFold)]);',
+        '  }',
+        '  const input = new Uint8Array([...hex2buf(pubkeySha256), ...binding]);',
         '  const hash  = await crypto.subtle.digest(\'SHA-512\', input);',
         '  const computed = buf2hex(hash);',
         '  const actual   = reportData.toLowerCase();',
@@ -965,7 +1051,10 @@ function VerificationCodeSection({
             </div>
             <p className='mb-3 text-xs text-black/40 dark:text-white/40'>
                 Copy this snippet and paste it in your browser&rsquo;s developer console to
-                independently verify that <code className='text-[11px]'>SHA-512(pubkey_sha256 || challenge || channel_binder) == report_data</code>.
+                independently verify that <code className='text-[11px]'>{formula} == report_data</code>
+                {challenge
+                    ? '. The context is the challenge you chose; the exporter value is supplied by the verifying service that held the TLS connection, since browsers expose no TLS exporter.'
+                    : '. This shows the quote commits to the certificate key and to the quote minute.'}
             </p>
             <pre className='max-h-56 overflow-y-auto whitespace-pre-wrap break-all rounded-lg bg-black/5 p-3 font-mono text-[11px] dark:bg-white/5'>
                 {snippet}

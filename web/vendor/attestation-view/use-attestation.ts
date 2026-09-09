@@ -61,9 +61,9 @@ export interface AttestationActions {
     verifyQuoteSignature: () => Promise<void>;
     regenerateChallenge: () => void;
     /** Generate a fresh challenge AND attest with it in one step, so the
-     *  editable nonce field and the "challenge sent" the enclave echoes
+     *  editable challenge field and the "challenge sent" the enclave echoes
      *  never desync (which they would if you regenerated then inspected
-     *  separately — inspect would still read the pre-update challenge). */
+     *  separately: inspect would still read the pre-update challenge). */
     newChallenge: () => Promise<void>;
     setChallenge: (next: string) => void;
     reset: () => void;
@@ -157,7 +157,7 @@ export function useAttestation(target: AttestationTarget): [AttestationState, At
                 // reads as an error they caused.
                 throw new Error(tokenValue
                     ? 'The attestation server rejected the request: token missing or invalid.'
-                    : 'The attestation server requires a signed-in session. Everything above — certificate, measurements, freshness — is verified locally in your browser; sign in to have the server check the quote signature too.');
+                    : 'The attestation server requires a signed-in session. Everything above (certificate, measurements, report data binding) is verified locally in your browser; sign in to have the server check the quote signature too.');
             }
             if (!res.ok) {
                 throw new Error(`Verify request failed: ${res.status} ${res.statusText}`);
@@ -177,7 +177,7 @@ export function useAttestation(target: AttestationTarget): [AttestationState, At
 
     // Fresh challenge + attest atomically: set the field to `next` AND
     // inspect with `next` in the same call, so the "challenge sent" the
-    // enclave binds into ReportData matches the nonce shown in the field.
+    // enclave uses as its context matches the value shown in the field.
     const newChallenge = useCallback(async () => {
         const next = generateChallenge();
         setChallenge(next);
@@ -230,50 +230,81 @@ export function useAttestation(target: AttestationTarget): [AttestationState, At
     ];
 }
 
+/** Length of the RA-TLS v2 quote_time string, "YYYY-MM-DDTHH:MMZ". */
+const QUOTE_TIME_LEN = 17;
+/** Byte length of the challenge context and of the TLS exporter value. */
+const CONTEXT_LEN = 32;
+const HCTX_LEN = 32;
+
+export interface VerifyReportDataArgs {
+    /** SHA-256 of the certificate's SubjectPublicKeyInfo DER, hex
+     *  (`certificate.public_key_sha256` in the attest result). */
+    pubKeySha256Hex: string;
+    /** The quote's report_data, hex (64 bytes). */
+    reportDataHex: string;
+    /** The attestation mode the verifying service used (`quote.attestation`). */
+    mode: 'deterministic' | 'challenge';
+    /** Deterministic mode: the exact `quote.quote_time` string,
+     *  "YYYY-MM-DDTHH:MMZ". Its ASCII bytes are the binding value. */
+    quoteTime?: string;
+    /** Challenge mode: hex of the 32-byte challenge context (`quote.context`). */
+    contextHex?: string;
+    /** Challenge mode: base64 of the 32-byte TLS exporter value of the
+     *  verifying service's connection for that context (`quote.hctx`). */
+    hctxB64?: string;
+    /** Base64 GPU evidence envelope (`quote.gpu_evidence_base64`). GPU
+     *  enclaves append SHA-256(gpu_evidence) to the binding in both modes;
+     *  omitting it makes GPU quotes falsely report a mismatch. */
+    gpuEvidenceB64?: string;
+}
+
 /**
- * Verifies that the quote's report_data field equals
- *   SHA-512( SHA-256(pubkey) || nonce || binder )
- * which proves the quote was generated for the certificate the client
- * actually saw on the wire AND is bound to this exact TLS session.
+ * Verifies that the quote's report_data equals the RA-TLS v2 recipe for
+ * the given mode (ra-tls-clients docs/ratls-v2.md section 3.5):
  *
- * `binderB64` is the base64 RA-TLS channel binder (32 bytes) the enclave
- * folds into report_data on the challenge path.
+ *   deterministic: SHA-512( SHA-256(SPKI_DER) || quote_time )
+ *   challenge:     SHA-512( SHA-256(SPKI_DER) || context || hctx )
+ *
+ * with SHA-256(gpu_evidence) appended to the bound value when GPU evidence
+ * is present. SHA-256(SPKI_DER) is the certificate's public_key_sha256.
+ *
+ * A match shows the quote commits to the certificate key the verifying
+ * service saw and, in deterministic mode, to the quote minute; in challenge
+ * mode, to the context the browser chose and to the exporter value of the
+ * verifying service's connection, which no other connection can produce.
  *
  * Returns 'match' | 'mismatch' | 'error'. Computed and actual values
  * are also returned so the UI can surface the diff.
  */
-export async function verifyReportData(args: {
-    pubKeySha256Hex: string;
-    challengeHex: string;
-    reportDataHex: string;
-    binderB64?: string;
-    /**
-     * Raw NVIDIA GPU-evidence extension value (OID 1.3.6.1.4.1.65230.5.1),
-     * hex. GPU enclaves (e.g. confidential-ai) fold SHA-256(gpu_evidence)
-     * into the binding after the channel binder — the management-service does
-     * the same in gpuFoldBinding. When present the report_data is
-     * SHA-512(SHA-256(pubkey) || nonce || binder || SHA-256(gpu_evidence));
-     * omitting it makes GPU quotes falsely report a mismatch.
-     */
-    gpuEvidenceHex?: string;
-}): Promise<{ status: 'match' | 'mismatch' | 'error'; computed?: string; actual?: string }> {
+export async function verifyReportData(
+    args: VerifyReportDataArgs
+): Promise<{ status: 'match' | 'mismatch' | 'error'; computed?: string; actual?: string }> {
     try {
         const pub = hexToBytes(args.pubKeySha256Hex);
-        const nonce = hexToBytes(args.challengeHex);
-        const binder = args.binderB64 ? base64ToBytes(args.binderB64) : new Uint8Array(0);
-        let gpuFold = new Uint8Array(0);
-        if (args.gpuEvidenceHex) {
-            const gpuBytes = hexToBytes(args.gpuEvidenceHex);
-            const gpuInput = new Uint8Array(gpuBytes.length);
-            gpuInput.set(gpuBytes);
-            gpuFold = new Uint8Array(await crypto.subtle.digest('SHA-256', gpuInput));
+        if (pub.length !== 32) throw new Error('public_key_sha256 must be 32 bytes');
+        let binding: Uint8Array<ArrayBuffer>;
+        if (args.mode === 'deterministic') {
+            if (!args.quoteTime || args.quoteTime.length !== QUOTE_TIME_LEN) {
+                throw new Error('deterministic evidence needs a quote_time');
+            }
+            binding = asciiToBytes(args.quoteTime);
+        } else if (args.mode === 'challenge') {
+            const context = args.contextHex ? hexToBytes(args.contextHex) : new Uint8Array(0);
+            const hctx = args.hctxB64 ? base64ToBytes(args.hctxB64) : new Uint8Array(0);
+            if (context.length !== CONTEXT_LEN || hctx.length !== HCTX_LEN) {
+                throw new Error('challenge evidence needs a 32-byte context and a 32-byte exporter value');
+            }
+            binding = concat(context, hctx);
+        } else {
+            throw new Error(`unknown attestation mode ${String(args.mode)}`);
         }
-        const buf = new Uint8Array(pub.length + nonce.length + binder.length + gpuFold.length);
-        buf.set(pub);
-        buf.set(nonce, pub.length);
-        buf.set(binder, pub.length + nonce.length);
-        buf.set(gpuFold, pub.length + nonce.length + binder.length);
-        const hash = await crypto.subtle.digest('SHA-512', buf);
+        if (args.gpuEvidenceB64) {
+            const gpuFold = new Uint8Array(
+                await crypto.subtle.digest('SHA-256', base64ToBytes(args.gpuEvidenceB64))
+            );
+            binding = concat(binding, gpuFold);
+        }
+        const hash = await crypto.subtle.digest('SHA-512', concat(pub, binding));
         const computed = bytesToHex(new Uint8Array(hash));
         const actual = args.reportDataHex.toLowerCase();
         return {
@@ -286,13 +317,31 @@ export async function verifyReportData(args: {
     }
 }
 
-function hexToBytes(hex: string): Uint8Array {
-    const m = hex.match(/.{1,2}/g);
+function concat(a: Uint8Array, b: Uint8Array): Uint8Array<ArrayBuffer> {
+    const out = new Uint8Array(a.length + b.length);
+    out.set(a);
+    out.set(b, a.length);
+    return out;
+}
+
+function asciiToBytes(s: string): Uint8Array<ArrayBuffer> {
+    const out = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) {
+        const c = s.charCodeAt(i);
+        if (c > 0x7f) throw new Error('non-ASCII quote_time');
+        out[i] = c;
+    }
+    return out;
+}
+
+function hexToBytes(hex: string): Uint8Array<ArrayBuffer> {
+    if (hex.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(hex)) throw new Error('invalid hex');
+    const m = hex.match(/.{2}/g);
     if (!m) throw new Error('invalid hex');
     return new Uint8Array(m.map((b) => parseInt(b, 16)));
 }
 
-function base64ToBytes(b64: string): Uint8Array {
+function base64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
     const bin = atob(b64);
     const out = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);

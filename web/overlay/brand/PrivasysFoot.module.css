@@ -127,6 +127,12 @@
 /* Dialog body: scrolls inside the card, keeps the card's 24px inset. */
 .dialogBody {
   min-height: 0;
+  /* dsh's Modal clips its card (overflow hidden) and its content wrapper
+   * is a flex child without min-height: 0, so the body never learns the
+   * card's height and a long report is cut off with no way to scroll. A
+   * viewport-bound height on the body itself does not depend on that
+   * chain; the header and paddings take the rest. */
+  max-height: calc(100vh - 200px);
   padding: 0 24px;
   overflow-y: auto;
   font-size: 13px;

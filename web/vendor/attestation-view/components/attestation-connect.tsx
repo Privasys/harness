@@ -5,14 +5,14 @@
 
 import type { AttestationActions, AttestationState } from '../use-attestation';
 
-// Connect form. Renders a challenge nonce input and an
+// Connect form. Renders a challenge (context) input and an
 // "Inspect Certificate" button. Hides itself once a result is present
 // (the parent renders <AttestationResultView> instead).
 export function AttestationConnect({
     state,
     actions,
     title = 'Remote Attestation',
-    description = 'Connect via RA-TLS and inspect the x.509 certificate, attestation quote, and all custom attestation extensions.',
+    description = 'Connect via RA-TLS and inspect the x.509 certificate, attestation quote, and all custom attestation extensions.'
 }: {
     state: AttestationState;
     actions: AttestationActions;
@@ -31,7 +31,7 @@ export function AttestationConnect({
             <div className='mx-auto mb-5 max-w-lg'>
                 <div className='mb-1.5 flex items-center justify-between'>
                     <label className='text-xs font-medium' htmlFor='attestation-challenge'>
-                        Challenge Nonce
+                        Challenge (hex)
                     </label>
                     <button
                         type='button'
@@ -53,7 +53,7 @@ export function AttestationConnect({
                     className='w-full rounded-lg border border-black/10 dark:border-white/10 bg-black/5 dark:bg-white/5 px-3 py-2 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-black/20 dark:focus:ring-white/20'
                 />
                 <p className='mt-1.5 text-[11px] text-black/35 dark:text-white/35'>
-                    A random nonce proves the certificate was generated <em>just now</em> for your request. Edit the field to replay a specific challenge.
+                    A random challenge becomes the context of the evidence exchange: the enclave binds it, together with the verifying service&rsquo;s TLS connection, into the quote. Edit the field to replay a specific challenge.
                 </p>
             </div>
 

@@ -7,7 +7,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { AttestationResultView } from './attestation-result-view';
 import { AttestationStatusBadge, attestationStatusOf } from './badge';
 import { useAttestation, type AttestationState } from '../use-attestation';
-import type { AttestationExpectations } from '../types';
+import { PRIVASYS_OID, type AttestationExpectations } from '../types';
 
 // One target the composite view should attest. Mirrors the inputs to
 // useAttestation, plus a human label and an optional kind hint used for
@@ -304,14 +304,13 @@ export function computeAttestationSummary(
             list.find((e) => e.oid === oid)?.value_hex?.toLowerCase();
         const get = (oid: string) => find(appExts, oid) ?? find(exts, oid);
         const norm = (v?: string) => (v || '').toLowerCase().replace(/^0x/, '');
-        // Each check may match at more than one OID: the AI model and tools
-        // digests moved into the app arc (3.5 -> 3.5.5, 3.7 -> 3.5.7), and
-        // older fleet images still emit the legacy slots.
+        // RA-TLS v2 OID scheme: app code hash 4.2, app id 4.1, and the
+        // app-registered AI model / tools digests under the 5.4.* arc.
         const checks: Array<[string[], string | undefined]> = [
-            [['1.3.6.1.4.1.65230.3.2'], expectations.workloadImageDigest],
-            [['1.3.6.1.4.1.65230.3.5.5', '1.3.6.1.4.1.65230.3.5'], expectations.modelDigest],
-            [['1.3.6.1.4.1.65230.3.6'], expectations.appId],
-            [['1.3.6.1.4.1.65230.3.5.7', '1.3.6.1.4.1.65230.3.7'], expectations.toolsDigest]
+            [[PRIVASYS_OID.APP_CODE_HASH], expectations.workloadImageDigest],
+            [[PRIVASYS_OID.MODEL_DIGEST], expectations.modelDigest],
+            [[PRIVASYS_OID.APP_ID], expectations.appId],
+            [[PRIVASYS_OID.TOOLS_DIGEST], expectations.toolsDigest]
         ];
         for (const [oids, want] of checks) {
             if (!want) continue;
