@@ -31,6 +31,14 @@ package main
 // says so in the reproducibility block, so the UI can claim "prompt
 // identical" only when it is.
 //
+// A turn that used tools is only reproducible if the tools answer the same:
+// a weather page fetched again is a different prompt on the next model call.
+// So a plan also carries the turn's recorded TOOL RESULTS, in order, and the
+// MCP shim (mcpshim.go) serves the next recorded result to a tool call that
+// matches it (same server, same tool, same canonical arguments) instead of
+// dialling the tool. A call that matches nothing is made live, as usual. A
+// replay therefore reaches no tool app and incurs no tool fee.
+//
 // Process-local: a restart drops the pins, which is the right reading for a
 // harness that restarts on every deploy. The durable record is the
 // reproducibility block itself, which the dsh translator folds into the
@@ -145,6 +153,17 @@ type replayStep struct {
 	ToolsCount     int    `json:"tools_count"`
 }
 
+// replayTool is one recorded tool call of the turn being replayed: which
+// tool, the canonical digest of the arguments the model gave it, and the
+// result it produced. The shim hands the result back to an identical call.
+type replayTool struct {
+	Server     string          `json:"server"`
+	Name       string          `json:"name"`
+	ArgsDigest string          `json:"args_digest"`
+	Content    json.RawMessage `json:"content"`
+	IsError    bool            `json:"is_error,omitempty"`
+}
+
 // replayPlan is an armed replay: the steps still to consume, in order.
 type replayPlan struct {
 	Of    replayOf     `json:"of"`
@@ -152,6 +171,10 @@ type replayPlan struct {
 	// Consumed counts the steps already applied, so the panel can say
 	// "step 2 of 3" while the plan is in flight.
 	Consumed int `json:"consumed"`
+	// Tools are the recorded tool results still to serve, in order;
+	// ToolsConsumed counts those already served.
+	Tools         []replayTool `json:"tools,omitempty"`
+	ToolsConsumed int          `json:"tools_consumed"`
 }
 
 // sessionSampling is the book entry for one (subject, dsh session).
@@ -199,6 +222,7 @@ func (e *sessionSampling) clone() *sessionSampling {
 	if e.Replay != nil {
 		r := *e.Replay
 		r.Steps = append([]replayStep(nil), e.Replay.Steps...)
+		r.Tools = append([]replayTool(nil), e.Replay.Tools...)
 		c.Replay = &r
 	}
 	return &c
@@ -232,6 +256,7 @@ func (b *samplingBook) merge(sub, session string, pins *samplingPins, pinsSet bo
 			// into the caller's slice.
 			r := *replay
 			r.Steps = append([]replayStep(nil), replay.Steps...)
+			r.Tools = append([]replayTool(nil), replay.Tools...)
 			e.Replay = &r
 		}
 	}
@@ -288,12 +313,61 @@ func (b *samplingBook) takeReplayStep(sub, session string, messages, tools int) 
 	o := e.Replay.Of
 	idx := e.Replay.Consumed
 	if len(e.Replay.Steps) == 0 {
+		// The last model call of the turn: any recorded tool result still
+		// unserved belongs to a call the model did not make this time,
+		// which the prompt verdict already says. Nothing else may consume it.
 		e.Replay = nil
 		if e.Pins == nil {
 			delete(b.book, samplingKey(sub, session))
 		}
 	}
 	return &next, &o, idx, false
+}
+
+// takeReplayTool serves the next recorded tool result of any replay the
+// subject has armed, when the call matches it exactly: same tool server and
+// tool, same canonical arguments. Tool calls carry no session id on the
+// wire, so the match is what ties a call to its plan; a call that matches
+// nothing is made live. Returns nil when nothing matched.
+func (b *samplingBook) takeReplayTool(sub, server, name, argsDigest string) *replayTool {
+	if sub == "" {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	prefix := sub + "\x00"
+	for k, e := range b.book {
+		if !strings.HasPrefix(k, prefix) || e.Replay == nil || len(e.Replay.Tools) == 0 {
+			continue
+		}
+		next := e.Replay.Tools[0]
+		if next.Server != server || next.Name != name || next.ArgsDigest != argsDigest {
+			continue
+		}
+		e.Replay.Tools = e.Replay.Tools[1:]
+		e.Replay.ToolsConsumed++
+		return &next
+	}
+	return nil
+}
+
+// argsDigest is the SHA-256 of a tool call's arguments in canonical JSON:
+// object keys sorted, no HTML escaping, no insignificant whitespace. The UI
+// computes the same digest from the recorded call, so a replayed call and
+// its record meet on content, whatever key order the model emitted.
+func argsDigest(args json.RawMessage) string {
+	var v any
+	if err := json.Unmarshal(args, &v); err != nil {
+		v = string(args)
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(bytes.TrimRight(buf.Bytes(), "\n"))
+	return hex.EncodeToString(sum[:])
 }
 
 // modelCall is what the proxy knows about one chat completion it forwarded:
@@ -312,6 +386,9 @@ type modelCall struct {
 	ReplaySkipped  bool
 	PromptMatch    *bool
 	ExpectedDigest string
+	// ToolsReplayed counts the recorded tool results served so far in
+	// this replay, at the time of this call.
+	ToolsReplayed int
 }
 
 // annotation is the `harness` object merged into the reproducibility block.
@@ -339,6 +416,9 @@ func (c *modelCall) annotation() map[string]any {
 		} else {
 			r["prompt_match"] = c.PromptMatch != nil && *c.PromptMatch
 			r["expected_prompt_digest"] = c.ExpectedDigest
+		}
+		if c.ToolsReplayed > 0 {
+			r["tools_replayed"] = c.ToolsReplayed
 		}
 		m["replay"] = r
 	}
@@ -397,6 +477,7 @@ func prepareModelCall(r *http.Request, book *samplingBook, sub string) *http.Req
 
 	entry := book.get(sub, call.Session)
 	if entry != nil && entry.Replay != nil {
+		call.ToolsReplayed = entry.Replay.ToolsConsumed
 		step, of, idx, skipped := book.takeReplayStep(sub, call.Session, call.MessagesCount, call.ToolsCount)
 		call.Replay = of
 		call.ReplayStep = idx
@@ -603,9 +684,11 @@ func registerSamplingAPI(mux *http.ServeMux, book *samplingBook) {
 			}
 			if e.Replay != nil {
 				out["replay"] = map[string]any{
-					"of":        e.Replay.Of,
-					"remaining": len(e.Replay.Steps),
-					"consumed":  e.Replay.Consumed,
+					"of":              e.Replay.Of,
+					"remaining":       len(e.Replay.Steps),
+					"consumed":        e.Replay.Consumed,
+					"tools_remaining": len(e.Replay.Tools),
+					"tools_consumed":  e.Replay.ToolsConsumed,
 				}
 			}
 		}
@@ -656,6 +739,17 @@ func registerSamplingAPI(mux *http.ServeMux, book *samplingBook) {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "replay: " + err.Error()})
 				return
 			}
+			if len(replay.Tools) > 64 {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "replay: at most 64 recorded tool results"})
+				return
+			}
+			for i, tool := range replay.Tools {
+				if tool.Server == "" || tool.Name == "" || len(tool.ArgsDigest) != 64 || len(tool.Content) == 0 {
+					writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("replay: tools[%d] needs server, name, a 64-hex args_digest and content", i)})
+					return
+				}
+			}
+			replay.ToolsConsumed = 0
 			if len(replay.Steps) == 0 || len(replay.Steps) > 64 {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "replay: between 1 and 64 steps"})
 				return

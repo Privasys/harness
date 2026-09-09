@@ -887,6 +887,7 @@ edit('packages/client/ui-chat/src/client/locale.ts', [
       `  'message.repro.replyMatch': '回复一致',\n` +
       `  'message.repro.replyDiffers': '回复不同',\n` +
       `  'message.repro.replySkipped': '此次调用与记录的形状不符',\n` +
+      `  'message.repro.toolsReplayed': '已重放 {count} 次工具结果',\n` +
       `  'input.sampling': '采样',\n` +
       `  'input.sampling.title': '采样固定',\n` +
       `  'input.sampling.hint': '固定到本会话的每次模型调用。留空则使用默认值。',\n` +
@@ -941,6 +942,7 @@ edit('packages/client/ui-chat/src/client/locale.ts', [
       `  'message.repro.replyMatch': 'reply identical',\n` +
       `  'message.repro.replyDiffers': 'reply differs',\n` +
       `  'message.repro.replySkipped': 'this call did not match the recorded shape',\n` +
+      `  'message.repro.toolsReplayed': '{count} tool result(s) replayed from the record',\n` +
       `  'input.sampling': 'Sampling',\n` +
       `  'input.sampling.title': 'Sampling pins',\n` +
       `  'input.sampling.hint': 'Pinned for every model call of this session. Leave a field empty to keep the default.',\n` +

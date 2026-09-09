@@ -135,6 +135,18 @@ func mcpShim(w http.ResponseWriter, r *http.Request, client *http.Client, toolNa
 			args = json.RawMessage(`{}`)
 		}
 		args = applyDocumentedDefaults(toolName, p.Name, args)
+		// A replay in flight for this user (sampling.go): a call identical
+		// to the next recorded one gets the recorded result, so the turn
+		// sees the same tool answers it saw the first time and the tool
+		// app is neither dialled nor charged. Anything else goes live.
+		if rec := sampling.takeReplayTool(sub, toolName, p.Name, argsDigest(args)); rec != nil {
+			log.Printf("[mcp %s] replay: served the recorded result of %s (%d bytes)", toolName, p.Name, len(rec.Content))
+			rpcResult(w, req.ID, map[string]any{
+				"content": rec.Content,
+				"isError": rec.IsError,
+			})
+			return
+		}
 		result, status, price, err := callTool(r, client, host, p.Name, args, "", sub)
 		if err != nil {
 			rpcError(w, req.ID, -32000, fmt.Sprintf("tool call: %v", err))

@@ -25,7 +25,7 @@ import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-cli
 import { Button, writeClipboard } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {} from '@deepseek-ai/dsh-api-session-controller/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
-import type { AssistantMessageNode, ConversationNode } from '../contract/snapshot.ts'
+import type { AssistantMessageNode, ConversationNode, ToolResultNode } from '../contract/snapshot.ts'
 import type { ChatViewSlotProps } from '../contract/slots.ts'
 import { MEASURE_STYLE, useStatDialog } from './stat-dialog.ts'
 import { pvSendJson } from './privasys-fetch.ts'
@@ -58,6 +58,8 @@ export interface HarnessAnnotation {
     skipped?: string
     prompt_match?: boolean
     expected_prompt_digest?: string
+    /** Recorded tool results served so far in this replay (sampling.go). */
+    tools_replayed?: number
   }
 }
 
@@ -93,6 +95,22 @@ export interface ReplayStep extends SamplingPins {
   tools_count: number
 }
 
+/**
+ * One recorded tool call of the turn, as the proxy expects it back: the
+ * attested tool app (`mcp__<server>__<name>` on the model's side), the
+ * canonical digest of the arguments the model gave it, and the result it
+ * produced. The proxy serves this result to an identical call during the
+ * replay instead of dialling the tool, so the next model call sees the same
+ * prompt it saw the first time.
+ */
+export interface ReplayTool {
+  server: string
+  name: string
+  args_digest: string
+  content: { type: string; text?: string }[]
+  is_error?: boolean
+}
+
 export interface ReplayRequest {
   messageId: string
   turn: number
@@ -100,8 +118,50 @@ export interface ReplayRequest {
   prevTurnEndSeq: number | undefined
   prompt: string
   steps: ReplayStep[]
+  /** The turn's attested tool results, in call order. */
+  tools: ReplayTool[]
   /** The final reply's text, hashed and kept locally to judge the replay. */
   replyText: string
+}
+
+/**
+ * Canonical JSON for a tool call's arguments, the way the proxy digests
+ * them (sampling.go argsDigest: keys sorted, no escaping beyond JSON's own,
+ * no whitespace), so a replayed call and its record meet on content.
+ */
+function canonicalJson(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(',')}]`
+  if (v !== null && typeof v === 'object') {
+    const o = v as Record<string, unknown>
+    return `{${Object.keys(o).sort().map(k => `${JSON.stringify(k)}:${canonicalJson(o[k])}`).join(',')}}`
+  }
+  return JSON.stringify(v)
+}
+
+/** The turn's attested tool results as replay records; local tools are not proxied and stay live. */
+async function replayToolsOf(results: readonly ToolResultNode[]): Promise<ReplayTool[]> {
+  const out: ReplayTool[] = []
+  for (const r of results) {
+    if (r.call === null) continue
+    const m = /^mcp__([A-Za-z0-9_-]+?)__(.+)$/.exec(r.call.name)
+    if (m === null) continue
+    let args: unknown
+    try {
+      args = JSON.parse(r.call.argsRaw)
+    } catch {
+      args = r.call.argsRaw
+    }
+    out.push({
+      server: m[1] as string,
+      name: m[2] as string,
+      args_digest: await sha256Hex(canonicalJson(args)),
+      content: r.content
+        .filter(b => (b as { type?: string }).type === 'text')
+        .map(b => ({ type: 'text', text: (b as { text: string }).text })),
+      ...(r.isError ? { is_error: true } : {}),
+    })
+  }
+  return out
 }
 
 type Props = PropsRuntime<'conversation.chat.assistant-actions'>
@@ -148,10 +208,12 @@ function readStoredReplay(sessionId: string): StoredReplay | undefined {
   }
 }
 
-/** The turn's assistant steps, the prompt that opened it, and the fork anchor. */
+/** The turn's assistant steps, its tool results, the prompt that opened it, and the fork anchor. */
 interface Located {
   node: AssistantMessageNode
   steps: AssistantMessageNode[]
+  /** The turn's tool results, in call order (logged between its steps). */
+  toolResults: ToolResultNode[]
   prompt: string | undefined
   prevTurnMaxSeq: number | undefined
 }
@@ -163,6 +225,16 @@ function locate(nodes: readonly ConversationNode[], messageId: string): Located 
   const steps = nodes
     .filter((n): n is AssistantMessageNode => n.kind === 'assistant' && n.turn === node.turn)
     .sort((a, b) => a.step - b.step)
+  // Tool results carry no turn number: the turn's are the ones logged after
+  // its first step and before its final reply.
+  const seqOf = (n: unknown): number | undefined => (n as { seq?: number }).seq
+  const firstSeq = seqOf(steps[0])
+  const lastSeq = seqOf(node)
+  const toolResults = firstSeq === undefined || lastSeq === undefined
+    ? []
+    : nodes
+      .filter((n): n is ToolResultNode => n.kind === 'tool-result' && n.seq > firstSeq && n.seq < lastSeq)
+      .sort((a, b) => a.seq - b.seq)
   // The prompt is the last human message before this turn's first node;
   // steering and plugin-injected context also carry kind 'user', so take the
   // FIRST user node of the turn: walk back past this turn's nodes and take
@@ -178,7 +250,7 @@ function locate(nodes: readonly ConversationNode[], messageId: string): Located 
     }
     if (n.kind === 'user') prompt = userText(n)
   }
-  return { node, steps, prompt, prevTurnMaxSeq }
+  return { node, steps, toolResults, prompt, prevTurnMaxSeq }
 }
 
 function fmt(v: unknown): string {
@@ -252,6 +324,7 @@ export function PrivasysReproducibilityAction({ messageId, sessionId, useChat, r
         prevTurnEndSeq: located.node.turn <= 1 ? undefined : prevTurnEndSeq,
         prompt: located.prompt,
         replyText,
+        tools: await replayToolsOf(located.toolResults),
         steps: stepsRecorded.map((b) => {
           const block = b as ReproBlock
           const h = block.harness as HarnessAnnotation
@@ -389,6 +462,9 @@ function ReplayVerdict({ info, reply, t }: { info: NonNullable<HarnessAnnotation
         : { text: t('message.repro.replyDiffers'), tone: 'bad' })
     }
   }
+  if (info.tools_replayed !== undefined && info.tools_replayed > 0) {
+    parts.push({ text: t('message.repro.toolsReplayed', { count: String(info.tools_replayed) }), tone: 'muted' })
+  }
   return (
     <div className={css.verdict}>
       <span>{t('message.repro.replayOf', { turn: String(info.of?.turn ?? '?') })}</span>
@@ -435,6 +511,7 @@ export async function replayTurn(ctx: Context, sessionId: SessionId, request: Re
     replay: {
       of: { session: sessionId, message_id: request.messageId, turn: request.turn },
       steps: request.steps,
+      ...(request.tools.length === 0 ? {} : { tools: request.tools }),
     },
   })
   try {
