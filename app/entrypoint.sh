@@ -135,10 +135,16 @@ done
 DIST_INDEX=/dsh/apps/web/dist/index.html
 if [[ ! -f "$DIST_INDEX" ]]; then
   echo "[harness] WARNING: ${DIST_INDEX} not found — browser shell keeps dev defaults" >&2
-elif ! grep -q "__PRIVASYS_CFG__" "$DIST_INDEX"; then
+elif ! grep -q "window.__PRIVASYS_CFG__=" "$DIST_INDEX"; then
+  # The guard tests for the INJECTED assignment, not the bare name: the
+  # shell's index mentions window.__PRIVASYS_CFG__ in a comment, and a
+  # name-only test saw it, skipped the injection, and left production
+  # serving the shell with its dev defaults (dev control plane, dev
+  # harness host, dev Drive) — found 2026-09-09.
   CFG_TAG="<script>window.__PRIVASYS_CFG__={appId:\"${HARNESS_APP_ID}\",appHost:\"${HARNESS_PUBLIC_HOST}\",attestBase:\"${PV_ATTEST_BASE}\",apiBase:\"${PV_API_BASE}\"};</script>"
   sed -i "s|<head>|<head>${CFG_TAG}|" "$DIST_INDEX"
-  grep -q "__PRIVASYS_CFG__" "$DIST_INDEX" || echo "[harness] WARNING: __PRIVASYS_CFG__ injection failed" >&2
+  grep -q "window.__PRIVASYS_CFG__=" "$DIST_INDEX" || echo "[harness] WARNING: __PRIVASYS_CFG__ injection failed" >&2
+  echo "[harness] browser shell configured for ${HARNESS_PUBLIC_HOST} (api ${PV_API_BASE})"
 fi
 
 mkdir -p "${DSH_HOME:-/dsh-home}"
