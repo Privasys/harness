@@ -818,6 +818,15 @@ for (const rel of [
 }
 edit('packages/client/ui-chat/src/client/apply.ts', [
   [
+    // cordis hands a plugin only the services it declares: the replay reads
+    // Workspace membership to open the replay session in the source's
+    // Workspace, and without this line the read throws "cannot get property
+    // workspaces without inject" (seen on prod v21, replay dead).
+    'ui-chat: privasys inject workspaces',
+    `  'settingsScope', 'remote', 'remote.session', 'sidebarRight',\n]`,
+    `  'settingsScope', 'remote', 'remote.session', 'sidebarRight',\n  'workspaces',\n]`,
+  ],
+  [
     'ui-chat: privasys imports',
     `import { StatsPills } from './chat/StatsPills.tsx'\n`,
     `import { StatsPills } from './chat/StatsPills.tsx'\n` +
@@ -888,6 +897,7 @@ edit('packages/client/ui-chat/src/client/locale.ts', [
       `  'message.repro.replyDiffers': '回复不同',\n` +
       `  'message.repro.replySkipped': '此次调用与记录的形状不符',\n` +
       `  'message.repro.toolsReplayed': '已重放 {count} 次工具结果',\n` +
+      `  'message.repro.replyBeyond': '此次调用超出了记录的步骤：模型走了更长的路径，种子为新生成',\n` +
       `  'input.sampling': '采样',\n` +
       `  'input.sampling.title': '采样固定',\n` +
       `  'input.sampling.hint': '固定到本会话的每次模型调用。留空则使用默认值。',\n` +
@@ -943,6 +953,7 @@ edit('packages/client/ui-chat/src/client/locale.ts', [
       `  'message.repro.replyDiffers': 'reply differs',\n` +
       `  'message.repro.replySkipped': 'this call did not match the recorded shape',\n` +
       `  'message.repro.toolsReplayed': '{count} tool result(s) replayed from the record',\n` +
+      `  'message.repro.replyBeyond': 'beyond the recorded steps: the model took a longer path, this call has a fresh seed',\n` +
       `  'input.sampling': 'Sampling',\n` +
       `  'input.sampling.title': 'Sampling pins',\n` +
       `  'input.sampling.hint': 'Pinned for every model call of this session. Leave a field empty to keep the default.',\n` +

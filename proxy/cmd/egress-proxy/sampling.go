@@ -175,7 +175,23 @@ type replayPlan struct {
 	// ToolsConsumed counts those already served.
 	Tools         []replayTool `json:"tools,omitempty"`
 	ToolsConsumed int          `json:"tools_consumed"`
+	// done is when the last step was consumed. An exhausted plan stays
+	// for replayGrace so a model call the record did not have (the model
+	// took a longer path this time) is still annotated as part of the
+	// replay, and named as beyond it, instead of looking like an ordinary
+	// unpinned call. Zero while steps remain.
+	done time.Time
 }
+
+// replayGrace is how long an exhausted plan keeps annotating the session's
+// further model calls.
+const replayGrace = 10 * time.Minute
+
+// Skip reasons a replayed call reports.
+const (
+	replaySkipShape  = "shape"  // the call's shape differs from the next recorded step
+	replaySkipBeyond = "beyond" // the recorded turn had no more steps
+)
 
 // sessionSampling is the book entry for one (subject, dsh session).
 type sessionSampling struct {
@@ -295,33 +311,47 @@ func (b *samplingBook) evictLocked() {
 
 // takeReplayStep consumes the next armed step when the incoming call has
 // the recorded shape. A call of another shape (dsh's session-title request,
-// say) leaves the plan untouched and is reported as skipped.
-func (b *samplingBook) takeReplayStep(sub, session string, messages, tools int) (step *replayStep, of *replayOf, index int, skipped bool) {
+// say) leaves the plan untouched and is reported as skipped with the
+// reason; so is a call made after the recorded turn's last step, for a
+// while, since a model that took a longer path this time still belongs to
+// the replay and its fresh seed must be named as such.
+func (b *samplingBook) takeReplayStep(sub, session string, messages, tools int) (step *replayStep, of *replayOf, index int, skipped string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	e := b.book[samplingKey(sub, session)]
-	if e == nil || e.Replay == nil || len(e.Replay.Steps) == 0 {
-		return nil, nil, 0, false
+	k := samplingKey(sub, session)
+	e := b.book[k]
+	if e == nil || e.Replay == nil {
+		return nil, nil, 0, ""
+	}
+	if len(e.Replay.Steps) == 0 {
+		o := e.Replay.Of
+		if time.Since(e.Replay.done) > replayGrace {
+			e.Replay = nil
+			if e.Pins == nil {
+				delete(b.book, k)
+			}
+			return nil, nil, 0, ""
+		}
+		return nil, &o, e.Replay.Consumed, replaySkipBeyond
 	}
 	next := e.Replay.Steps[0]
 	if next.MessagesCount != messages || next.ToolsCount != tools {
 		o := e.Replay.Of
-		return nil, &o, e.Replay.Consumed, true
+		return nil, &o, e.Replay.Consumed, replaySkipShape
 	}
 	e.Replay.Steps = e.Replay.Steps[1:]
 	e.Replay.Consumed++
 	o := e.Replay.Of
 	idx := e.Replay.Consumed
 	if len(e.Replay.Steps) == 0 {
-		// The last model call of the turn: any recorded tool result still
+		// The last model call of the turn. Any recorded tool result still
 		// unserved belongs to a call the model did not make this time,
-		// which the prompt verdict already says. Nothing else may consume it.
-		e.Replay = nil
-		if e.Pins == nil {
-			delete(b.book, samplingKey(sub, session))
-		}
+		// which the prompt verdict already says: drop them so nothing else
+		// can consume them, and keep the plan itself for the grace period.
+		e.Replay.Tools = nil
+		e.Replay.done = time.Now()
 	}
-	return &next, &o, idx, false
+	return &next, &o, idx, ""
 }
 
 // takeReplayTool serves the next recorded tool result of any replay the
@@ -383,7 +413,7 @@ type modelCall struct {
 	Pins           *samplingPins
 	Replay         *replayOf
 	ReplayStep     int
-	ReplaySkipped  bool
+	ReplaySkipped  string // "" when a step was applied; else replaySkipShape or replaySkipBeyond
 	PromptMatch    *bool
 	ExpectedDigest string
 	// ToolsReplayed counts the recorded tool results served so far in
@@ -411,8 +441,8 @@ func (c *modelCall) annotation() map[string]any {
 	}
 	if c.Replay != nil {
 		r := map[string]any{"of": c.Replay, "step": c.ReplayStep}
-		if c.ReplaySkipped {
-			r["skipped"] = "request shape differs from the recorded step"
+		if c.ReplaySkipped != "" {
+			r["skipped"] = c.ReplaySkipped
 		} else {
 			r["prompt_match"] = c.PromptMatch != nil && *c.PromptMatch
 			r["expected_prompt_digest"] = c.ExpectedDigest
@@ -517,7 +547,7 @@ func prepareModelCall(r *http.Request, book *samplingBook, sub string) *http.Req
 	r.ContentLength = int64(len(out))
 	r.Header.Set("Content-Length", fmt.Sprint(len(out)))
 	if call.Replay != nil || !call.Pins.empty() {
-		log.Printf("[egress-proxy sampling] request %s session=%.8s pins=%v replay=%v skipped=%v",
+		log.Printf("[egress-proxy sampling] request %s session=%.8s pins=%v replay=%v skipped=%q",
 			call.RequestID, call.Session, !call.Pins.empty(), call.Replay != nil, call.ReplaySkipped)
 	}
 	return r.WithContext(context.WithValue(r.Context(), modelCallKey{}, call))
@@ -682,7 +712,9 @@ func registerSamplingAPI(mux *http.ServeMux, book *samplingBook) {
 			if e.Pins != nil {
 				out["pins"] = e.Pins
 			}
-			if e.Replay != nil {
+			// An exhausted plan (kept for the grace period so late calls
+			// are still named) is not "armed": the chip must not say so.
+			if e.Replay != nil && len(e.Replay.Steps) > 0 {
 				out["replay"] = map[string]any{
 					"of":              e.Replay.Of,
 					"remaining":       len(e.Replay.Steps),

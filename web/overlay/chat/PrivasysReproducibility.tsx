@@ -24,6 +24,7 @@ import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { Button, writeClipboard } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {} from '@deepseek-ai/dsh-api-session-controller/client'
+import type {} from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { AssistantMessageNode, ConversationNode, ToolResultNode } from '../contract/snapshot.ts'
 import type { ChatViewSlotProps } from '../contract/slots.ts'
@@ -451,7 +452,11 @@ export function PrivasysReproducibilityAction({ messageId, sessionId, useChat, r
 function ReplayVerdict({ info, reply, t }: { info: NonNullable<HarnessAnnotation['replay']>; reply: 'match' | 'differs' | undefined; t: T }) {
   const parts: { text: string; tone: 'good' | 'bad' | 'muted' }[] = []
   if (info.skipped !== undefined) {
-    parts.push({ text: t('message.repro.replySkipped'), tone: 'muted' })
+    // 'beyond': the model took more steps than the record has; this call's
+    // seed is fresh. Anything else: the call's shape was not the recorded one.
+    parts.push(info.skipped === 'beyond'
+      ? { text: t('message.repro.replyBeyond'), tone: 'bad' }
+      : { text: t('message.repro.replySkipped'), tone: 'muted' })
   } else {
     parts.push(info.prompt_match === true
       ? { text: t('message.repro.promptMatch'), tone: 'good' }
@@ -504,8 +509,21 @@ function ReproIcon() {
  * @param request - the recorded turn.
  */
 export async function replayTurn(ctx: Context, sessionId: SessionId, request: ReplayRequest): Promise<void> {
+  // Turn 1 has nothing to fork from, so a new session opens: in the SAME
+  // Workspace as the recorded one. The workspace shapes the prompt (its
+  // instructions, the paths the model is told about), so a session
+  // elsewhere would be a different prompt before the first token. The
+  // browser groups sessions by Workspace MEMBERSHIP, not by directory: a
+  // session created with a bare cwd lands under Ungrouped even in the
+  // same directory (seen 2026-09-10), so the membership is what is passed,
+  // and the directory only when the source belongs to no Workspace.
+  const workspaceId = ctx.workspaces.list.getSnapshot().items
+    .find(w => w.sessionIds.includes(sessionId))?.workspaceId
+  const cwd = ctx.sessions.list.getSnapshot().byId[sessionId]?.cwd
   const child = request.prevTurnEndSeq === undefined
-    ? await ctx.sessions.create({})
+    ? await ctx.sessions.create(
+      workspaceId !== undefined ? { workspaceId } : cwd === undefined ? {} : { cwd },
+    )
     : await ctx.sessions.fork({ sessionId, atSeq: request.prevTurnEndSeq, increaseTitle: true })
   await pvSendJson('PUT', `/privasys/sampling?session=${encodeURIComponent(child)}`, {
     replay: {

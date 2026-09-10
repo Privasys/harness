@@ -56,7 +56,7 @@ const (
 	workerIdleDefault = 30 * time.Minute
 	// After a failed start, how long before the next request may retry it.
 	workerRestartCooldown = 20 * time.Second
-	systemSubject     = "" // the subject-less worker
+	systemSubject         = "" // the subject-less worker
 )
 
 // Worker is one dsh process bound to one subject.

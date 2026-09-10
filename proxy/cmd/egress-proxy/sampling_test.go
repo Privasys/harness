@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func i64(v int64) *int64     { return &v }
@@ -202,7 +203,7 @@ func TestReplay_ConsumesMatchingStepsOnly(t *testing.T) {
 	title := []byte(`{"model":"qwen36-35b-a3b-fp8","messages":[{"role":"user","content":"title this"}]}`)
 	r := prepareModelCall(completionRequest(t, "child", title), book, "alice")
 	call := modelCallOf(r)
-	if call.Replay == nil || !call.ReplaySkipped {
+	if call.Replay == nil || call.ReplaySkipped != replaySkipShape {
 		t.Fatalf("title call should be reported as skipped: %+v", call)
 	}
 	if _, ok := bodyOf(t, r)["seed"]; ok {
@@ -228,13 +229,83 @@ func TestReplay_ConsumesMatchingStepsOnly(t *testing.T) {
 	if call.ReplayStep != 1 || call.Replay.Turn != 3 {
 		t.Fatalf("replay bookkeeping: %+v", call)
 	}
-	if e := book.get("alice", "child"); e != nil {
-		t.Fatalf("a fully consumed plan should leave no entry: %+v", e)
+	// A fully consumed plan stays, without steps, for the grace period: a
+	// call the record did not have is still part of the replay and must be
+	// named as beyond it, never left looking like an ordinary call.
+	if e := book.get("alice", "child"); e == nil || e.Replay == nil || len(e.Replay.Steps) != 0 {
+		t.Fatalf("a fully consumed plan should stay, exhausted, for the grace period: %+v", e)
 	}
 	ann := call.annotation()
 	rep, _ := ann["replay"].(map[string]any)
 	if rep == nil || rep["prompt_match"] != true {
 		t.Fatalf("annotation: %v", ann)
+	}
+	r = prepareModelCall(completionRequest(t, "child", completionBody(t, timeText)), book, "alice")
+	call = modelCallOf(r)
+	if call.Replay == nil || call.ReplaySkipped != replaySkipBeyond || call.Pins != nil {
+		t.Fatalf("a call beyond the recorded steps must be annotated as such and left unpinned: %+v", call)
+	}
+	// Past the grace period the exhausted plan is gone.
+	book.mu.Lock()
+	book.book[samplingKey("alice", "child")].Replay.done = time.Now().Add(-2 * replayGrace)
+	book.mu.Unlock()
+	r = prepareModelCall(completionRequest(t, "child", completionBody(t, timeText)), book, "alice")
+	if call = modelCallOf(r); call.Replay != nil {
+		t.Fatalf("an exhausted plan past its grace period must not annotate: %+v", call)
+	}
+	if e := book.get("alice", "child"); e != nil {
+		t.Fatalf("an exhausted plan past its grace period should leave no entry: %+v", e)
+	}
+}
+
+func TestReplay_ServesRecordedToolResults(t *testing.T) {
+	book := newSamplingBook()
+	recorded := json.RawMessage(`[{"type":"text","text":"sunny, 21C"}]`)
+	plan := &replayPlan{
+		Of:    replayOf{Session: "p"},
+		Steps: []replayStep{{MessagesCount: 3, ToolsCount: 1}, {MessagesCount: 5, ToolsCount: 1}},
+		Tools: []replayTool{
+			{Server: "web_search", Name: "search", ArgsDigest: argsDigest(json.RawMessage(`{"q":"weather London","count":0}`)), Content: recorded},
+		},
+	}
+	book.merge("alice", "child", nil, false, plan, true)
+
+	// Another user, another tool, other arguments: nothing is served.
+	if got := book.takeReplayTool("bob", "web_search", "search", argsDigest(json.RawMessage(`{"count":0,"q":"weather London"}`))); got != nil {
+		t.Fatal("a recorded result must never serve another user")
+	}
+	if got := book.takeReplayTool("alice", "web_reader", "browse", argsDigest(json.RawMessage(`{"count":0,"q":"weather London"}`))); got != nil {
+		t.Fatal("a recorded result must not serve a different tool")
+	}
+	if got := book.takeReplayTool("alice", "web_search", "search", argsDigest(json.RawMessage(`{"q":"weather Paris"}`))); got != nil {
+		t.Fatal("a recorded result must not serve different arguments")
+	}
+	// The same call, whatever key order the model emitted: served once.
+	got := book.takeReplayTool("alice", "web_search", "search", argsDigest(json.RawMessage(`{"count":0,"q":"weather London"}`)))
+	if got == nil || string(got.Content) != string(recorded) {
+		t.Fatalf("the identical call must get the recorded result: %+v", got)
+	}
+	if again := book.takeReplayTool("alice", "web_search", "search", argsDigest(json.RawMessage(`{"count":0,"q":"weather London"}`))); again != nil {
+		t.Fatal("a recorded result is served once")
+	}
+	if e := book.get("alice", "child"); e == nil || e.Replay == nil || e.Replay.ToolsConsumed != 1 || len(e.Replay.Tools) != 0 {
+		t.Fatalf("tool bookkeeping: %+v", e)
+	}
+	// The model call after it reports how many results were replayed.
+	r := prepareModelCall(completionRequest(t, "child", completionBody(t, timeText)), book, "alice")
+	if rep, _ := modelCallOf(r).annotation()["replay"].(map[string]any); rep == nil || rep["tools_replayed"] != 1 {
+		t.Fatalf("annotation must count the replayed tool results: %v", rep)
+	}
+}
+
+func TestArgsDigest_IsCanonical(t *testing.T) {
+	a := argsDigest(json.RawMessage(`{"b": [1, 2], "a": "x<y&z"}`))
+	b := argsDigest(json.RawMessage(`{"a":"x<y&z","b":[1,2]}`))
+	if a == "" || a != b {
+		t.Fatalf("key order and whitespace must not change the digest: %s vs %s", a, b)
+	}
+	if c := argsDigest(json.RawMessage(`{"a":"x<y&z","b":[2,1]}`)); c == a {
+		t.Fatal("different content must change the digest")
 	}
 }
 
