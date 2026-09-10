@@ -274,6 +274,19 @@ func main() {
 		r = prepareModelCall(r, sampling, sub)
 		forward(w, r, client, cfg.modelHost, strings.TrimPrefix(r.URL.Path, "/model"), true)
 	})
+	// dsh's time-context plugin asks, before each step, whether an armed
+	// replay pins the time text of that step (sampling.go); the worker is
+	// named by its own bearer, so it can only read its own user's plans.
+	mux.HandleFunc("GET /privasys/replay/time-context", func(w http.ResponseWriter, r *http.Request) {
+		sub := subjectOfEgress(r)
+		if sub == "" {
+			http.Error(w, `{"error":"egress-proxy: no subject"}`, http.StatusUnauthorized)
+			return
+		}
+		text, pinned := sampling.peekReplayTimeContext(sub, strings.TrimSpace(r.URL.Query().Get("session")))
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"pinned": pinned, "text": text})
+	})
 	mux.HandleFunc("/tool/", func(w http.ResponseWriter, r *http.Request) {
 		rest := strings.TrimPrefix(r.URL.Path, "/tool/")
 		name, path, _ := strings.Cut(rest, "/")

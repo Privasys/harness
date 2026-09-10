@@ -229,6 +229,22 @@ func (b *samplingBook) get(sub, session string) *sessionSampling {
 	return e.clone()
 }
 
+// peekReplayTimeContext returns the time-context text the next replay
+// step of (sub, session) will impose, without consuming the step. dsh's
+// own time-context plugin asks for it before it samples the clock, so the
+// SESSION RECORD (the trajectory a user reads) carries the recorded time
+// rather than a fresh one; the proxy still normalises the model leg, so a
+// worker that never asked gets the same prompt bytes either way.
+func (b *samplingBook) peekReplayTimeContext(sub, session string) (text string, pinned bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	e := b.book[samplingKey(sub, session)]
+	if e == nil || e.Replay == nil || e.Replay.Consumed >= len(e.Replay.Steps) {
+		return "", false
+	}
+	return e.Replay.Steps[e.Replay.Consumed].TimeContext, true
+}
+
 func (e *sessionSampling) clone() *sessionSampling {
 	c := *e
 	if e.Pins != nil {

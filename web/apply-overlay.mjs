@@ -168,6 +168,56 @@ edit('packages/client/connection/src/rpc-host.ts', [
 //          one per worker), the webserver refuses any request or upgrade that
 //          does not carry it, before routing. Unset (legacy single-user
 //          layout) nothing changes.
+// 2c. Replayed time context. dsh's time-context plugin samples the clock at
+//     every step and injects it as a user message, so the session record
+//     carries the sampled time. On a replay the measured proxy normalises the
+//     model leg to the RECORDED text (the model sees the original time), but
+//     the record still showed a fresh clock, which reads as a broken replay
+//     (2026-09-10, three times). The plugin now asks the proxy for the pinned
+//     text of the next step before sampling, and injects that verbatim: the
+//     record and the model leg agree. Any failure falls back to a fresh clock.
+edit('packages/context/time-context/src/index.ts', [
+  [
+    'time-context: privasys pinned-time helper',
+    `export const name = 'time-context'\n`,
+    `export const name = 'time-context'\n` +
+      `\n` +
+      `// Privasys: an armed replay pins the time text of the next step (the\n` +
+      `// measured proxy holds the recorded turn). Loopback only; the worker's own\n` +
+      `// bearer names the user, so it can read nobody else's plan.\n` +
+      `async function privasysPinnedTimeContext(session: string, signal: AbortSignal): Promise<string | undefined> {\n` +
+      `  const base = process.env.DEEPSEEK_BASE_URL ?? ''\n` +
+      `  const at = base.indexOf('/model/v1')\n` +
+      `  const token = process.env.PRIVASYS_BEARER ?? ''\n` +
+      `  if (at < 0 || token === '') return undefined\n` +
+      `  const controller = new AbortController()\n` +
+      `  const timer = setTimeout(() => { controller.abort() }, 2000)\n` +
+      `  const stop = (): void => { controller.abort() }\n` +
+      `  signal.addEventListener('abort', stop, { once: true })\n` +
+      `  try {\n` +
+      `    const url = base.slice(0, at) + '/privasys/replay/time-context?session=' + encodeURIComponent(session)\n` +
+      `    const res = await fetch(url, { headers: { authorization: 'Bearer ' + token }, signal: controller.signal })\n` +
+      `    if (!res.ok) return undefined\n` +
+      `    const data = await res.json() as { pinned?: boolean; text?: string }\n` +
+      `    return data.pinned === true && typeof data.text === 'string' && data.text !== '' ? data.text : undefined\n` +
+      `  } catch {\n` +
+      `    return undefined\n` +
+      `  } finally {\n` +
+      `    clearTimeout(timer)\n` +
+      `    signal.removeEventListener('abort', stop)\n` +
+      `  }\n` +
+      `}\n`,
+  ],
+  [
+    'time-context: inject the pinned text on a replay',
+    `    const text = renderText(\n` +
+      `      now,\n`,
+    `    const pinned = await privasysPinnedTimeContext(agent.session.id, signal)\n` +
+      `    const text = pinned ?? renderText(\n` +
+      `      now,\n`,
+  ],
+])
+
 edit('packages/host/webserver/src/index.ts', [
   [
     'ingress token helper (after injections import)',
