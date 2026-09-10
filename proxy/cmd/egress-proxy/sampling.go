@@ -416,6 +416,11 @@ type modelCall struct {
 	ReplaySkipped  string // "" when a step was applied; else replaySkipShape or replaySkipBeyond
 	PromptMatch    *bool
 	ExpectedDigest string
+	// ExpectedDynamicContext is the clock the replay step handed back to
+	// Confidential AI; DynamicContextMatch says whether the trailer shows
+	// that same clock was stamped (repro.go), or is nil off replay.
+	ExpectedDynamicContext string
+	DynamicContextMatch    *bool
 	// ToolsReplayed counts the recorded tool results served so far in
 	// this replay, at the time of this call.
 	ToolsReplayed int
@@ -446,6 +451,9 @@ func (c *modelCall) annotation() map[string]any {
 		} else {
 			r["prompt_match"] = c.PromptMatch != nil && *c.PromptMatch
 			r["expected_prompt_digest"] = c.ExpectedDigest
+			if c.DynamicContextMatch != nil {
+				r["dynamic_context_match"] = *c.DynamicContextMatch
+			}
 		}
 		if c.ToolsReplayed > 0 {
 			r["tools_replayed"] = c.ToolsReplayed
@@ -517,6 +525,7 @@ func prepareModelCall(r *http.Request, book *samplingBook, sub string) *http.Req
 			step.samplingPins.apply(body)
 			if step.DynamicContext != "" {
 				r.Header.Set("X-Privasys-Dynamic-Context", step.DynamicContext)
+				call.ExpectedDynamicContext = step.DynamicContext
 			}
 			call.ExpectedDigest = step.PromptDigest
 			p := step.samplingPins
@@ -537,6 +546,17 @@ func prepareModelCall(r *http.Request, book *samplingBook, sub string) *http.Req
 		match := call.ExpectedDigest == call.PromptDigest
 		call.PromptMatch = &match
 	}
+	// A pinned call (a replay step, or a session whose sampling the user
+	// pinned) asks Confidential AI for its strict KV-cache mode: a
+	// single-use cache salt, so the whole prompt is prefilled fresh.
+	// CAI's default salt is per CALLER, so a replay by the same user
+	// would otherwise reuse the original's cached prefix while the
+	// original computed it cold, and with batch-invariant kernels still
+	// absent that difference alone can move a near-tie (seen 2026-09-10:
+	// prompt identical, seed identical, 97% cache hit, reply differs).
+	if !call.Pins.empty() {
+		r.Header.Set("X-Privasys-Reproducibility", "strict")
+	}
 
 	out, err := json.Marshal(body)
 	if err != nil {
@@ -547,8 +567,13 @@ func prepareModelCall(r *http.Request, book *samplingBook, sub string) *http.Req
 	r.ContentLength = int64(len(out))
 	r.Header.Set("Content-Length", fmt.Sprint(len(out)))
 	if call.Replay != nil || !call.Pins.empty() {
-		log.Printf("[egress-proxy sampling] request %s session=%.8s pins=%v replay=%v skipped=%q",
-			call.RequestID, call.Session, !call.Pins.empty(), call.Replay != nil, call.ReplaySkipped)
+		match := "n/a"
+		if call.PromptMatch != nil {
+			match = fmt.Sprint(*call.PromptMatch)
+		}
+		log.Printf("[egress-proxy sampling] request %s session=%.8s pins=%v replay=%v skipped=%q prompt_match=%s digest=%.12s dynctx=%s",
+			call.RequestID, call.Session, !call.Pins.empty(), call.Replay != nil, call.ReplaySkipped, match, call.PromptDigest,
+			shortDigest(r.Header.Get("X-Privasys-Dynamic-Context")))
 	}
 	return r.WithContext(context.WithValue(r.Context(), modelCallKey{}, call))
 }

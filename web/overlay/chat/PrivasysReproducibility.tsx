@@ -59,6 +59,8 @@ export interface HarnessAnnotation {
     skipped?: string
     prompt_match?: boolean
     expected_prompt_digest?: string
+    /** Whether the model stamped the recorded clock, not a fresh one (repro.go). */
+    dynamic_context_match?: boolean
     /** Recorded tool results served so far in this replay (sampling.go). */
     tools_replayed?: number
   }
@@ -461,6 +463,13 @@ function ReplayVerdict({ info, reply, t }: { info: NonNullable<HarnessAnnotation
     parts.push(info.prompt_match === true
       ? { text: t('message.repro.promptMatch'), tone: 'good' }
       : { text: t('message.repro.promptDiffers'), tone: 'bad' })
+    // The clock Confidential AI stamps is the one prompt element the
+    // digest cannot see; the trailer says whether the recorded one was used.
+    if (info.dynamic_context_match !== undefined) {
+      parts.push(info.dynamic_context_match
+        ? { text: t('message.repro.clockMatch'), tone: 'good' }
+        : { text: t('message.repro.clockDiffers'), tone: 'bad' })
+    }
     if (reply !== undefined) {
       parts.push(reply === 'match'
         ? { text: t('message.repro.replyMatch'), tone: 'good' }

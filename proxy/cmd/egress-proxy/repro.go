@@ -5,6 +5,8 @@ package main
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -41,9 +43,27 @@ type reproFields struct {
 	VLLMVersion    string `json:"vllm_version"`
 	CachedTokens   *int64 `json:"cached_tokens"`
 	DependencyFold string `json:"dependency_fold"`
+	KVCacheMode    string `json:"kv_cache_mode"`
+	// DynamicContext is the clock Confidential AI stamped into the prompt:
+	// the one prompt element the proxy's digest cannot see, and the one a
+	// replay must hand back through X-Privasys-Dynamic-Context. A clock a
+	// few seconds apart changes the whole reply (measured 2026-09-10), so
+	// its digest is logged and, under a replay step, checked.
+	DynamicContext string `json:"dynamic_context"`
 }
 
-func logRepro(where string, raw json.RawMessage) {
+// shortDigest is the first 12 hex digits of SHA-256(s), "-" for "".
+func shortDigest(s string) string {
+	if s == "" {
+		return "-"
+	}
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])[:12]
+}
+
+// logRepro writes the audit line for one reproducibility block and returns
+// the parsed fields.
+func logRepro(where string, raw json.RawMessage, call *modelCall) {
 	var f reproFields
 	if err := json.Unmarshal(raw, &f); err != nil {
 		return
@@ -56,8 +76,16 @@ func logRepro(where string, raw json.RawMessage) {
 	if f.CachedTokens != nil {
 		cached = *f.CachedTokens
 	}
-	log.Printf("[egress-proxy repro] %s request_id=%s model=%s seed=%d vllm=%s cached_tokens=%d",
-		where, f.RequestID, f.Model, seed, f.VLLMVersion, cached)
+	log.Printf("[egress-proxy repro] %s request_id=%s model=%s seed=%d vllm=%s cached_tokens=%d kv=%s dynctx=%s",
+		where, f.RequestID, f.Model, seed, f.VLLMVersion, cached, f.KVCacheMode, shortDigest(f.DynamicContext))
+	if call != nil && call.ExpectedDynamicContext != "" {
+		match := f.DynamicContext == call.ExpectedDynamicContext
+		call.DynamicContextMatch = &match
+		if !match {
+			log.Printf("[egress-proxy repro] request %s replayed with dynamic context %s but the model stamped %s",
+				call.RequestID, shortDigest(call.ExpectedDynamicContext), shortDigest(f.DynamicContext))
+		}
+	}
 }
 
 // reproScanBody wraps an SSE response body: it streams every byte through
@@ -176,7 +204,7 @@ func (b *reproScanBody) scan(line []byte) []byte {
 	if err := json.Unmarshal([]byte(payload), &frame); err != nil || frame.Reproducibility == nil {
 		return line
 	}
-	logRepro("stream", frame.Reproducibility)
+	logRepro("stream", frame.Reproducibility, b.call)
 	b.logged = true
 	if b.call == nil {
 		return line

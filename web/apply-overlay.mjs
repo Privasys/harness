@@ -893,6 +893,8 @@ edit('packages/client/ui-chat/src/client/locale.ts', [
       `  'message.repro.replayStep': '第 {step} 步',\n` +
       `  'message.repro.promptMatch': '提示一致',\n` +
       `  'message.repro.promptDiffers': '提示不同',\n` +
+      `  'message.repro.clockMatch': '注入时钟一致',\n` +
+      `  'message.repro.clockDiffers': '模型注入了不同的时钟',\n` +
       `  'message.repro.replyMatch': '回复一致',\n` +
       `  'message.repro.replyDiffers': '回复不同',\n` +
       `  'message.repro.replySkipped': '此次调用与记录的形状不符',\n` +
@@ -949,6 +951,8 @@ edit('packages/client/ui-chat/src/client/locale.ts', [
       `  'message.repro.replayStep': 'step {step}',\n` +
       `  'message.repro.promptMatch': 'prompt identical',\n` +
       `  'message.repro.promptDiffers': 'prompt differs',\n` +
+      `  'message.repro.clockMatch': 'injected clock identical',\n` +
+      `  'message.repro.clockDiffers': 'the model stamped a different clock',\n` +
       `  'message.repro.replyMatch': 'reply identical',\n` +
       `  'message.repro.replyDiffers': 'reply differs',\n` +
       `  'message.repro.replySkipped': 'this call did not match the recorded shape',\n` +
