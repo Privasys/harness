@@ -172,7 +172,15 @@ LABEL org.privasys.static-unsealed-prefixes="/,/assets/,/privasys/,/plugins/,/fa
 # to the runtime at deploy; what a user is told the app wants is therefore
 # attested. The resource NAME must match HARNESS_STORAGE_RESOURCE (default
 # "storage") in the proxy.
-LABEL org.privasys.manifest='{"tools":[],"resources":[{"kind":"storage.folder","name":"storage","label":"Harness","permissions":["read","write"]}]}'
+#
+# The second resource is a MAILBOX, and it is not storage: nothing is kept
+# here, the connector holds the credential, and what the holder approves is
+# "this agent may read my mail and leave me drafts". Its name must match
+# HARNESS_MAILBOX_RESOURCE (default "mailbox"). Declared on both fleets
+# because the manifest is measured and one image serves both; a fleet with no
+# mail connector simply has no resource service for the kind, and the runtime
+# refuses the ask rather than showing the holder a screen it cannot honour.
+LABEL org.privasys.manifest='{"tools":[],"resources":[{"kind":"storage.folder","name":"storage","label":"Harness","permissions":["read","write"]},{"kind":"mail.mailbox","name":"mailbox","label":"Mail Connector","permissions":["read","write"]}]}'
 # Link the GHCR package to this repo so its Actions inherit write access
 # (avoids a personal access token — the package is published by CI).
 LABEL org.opencontainers.image.source="https://github.com/Privasys/attested-harness"

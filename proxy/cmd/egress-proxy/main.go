@@ -347,6 +347,17 @@ func main() {
 	// shims): Drive matches the verified peer app id against the grant subject,
 	// and an unattested connection would silently get the weaker key-only check.
 	registerStorageAPI(mux, broker, client, cfg.toolHosts["drive"])
+	// The mailbox is the second declared resource, and the first that is not
+	// storage. It is brokered exactly like the first — the runtime holds the
+	// binding key, pushes the wallet and answers the wallet's attested fetch —
+	// and it is deliberately served by the GENERIC endpoints rather than a
+	// mail-shaped copy of the storage ones: the next connector should need a
+	// manifest entry and a broker, and no new HTTP surface.
+	mailbox := capability.NewBroker(envOr("HARNESS_MAILBOX_RESOURCE", "mailbox"))
+	registerResourceCapabilityAPI(mux,
+		resourceLeg{name: envOr("HARNESS_STORAGE_RESOURCE", "storage"), broker: broker},
+		resourceLeg{name: envOr("HARNESS_MAILBOX_RESOURCE", "mailbox"), broker: mailbox},
+	)
 	// A tenant's policy is their data too: it lives in their Drive folder,
 	// never on this volume (D6'). In memory until they connect one.
 	store.SetTenantBackend(newDriveTenantBackend(broker, client, cfg.toolHosts["drive"]))
