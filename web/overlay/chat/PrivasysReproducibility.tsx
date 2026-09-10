@@ -312,8 +312,22 @@ export function PrivasysReproducibilityAction({ messageId, sessionId, useChat, r
   if (located === undefined || repro === undefined) return null
 
   const stepsRecorded = located.steps.map(n => reproOf(n.usage))
-  const replayable = located.prompt !== undefined
+  const recorded = located.prompt !== undefined
     && stepsRecorded.every(b => b !== undefined && b.harness !== undefined)
+  // Reproducibility is a property of PINNED sessions: a pinned call runs
+  // strict (a single-use KV-cache salt, so the whole prompt is prefilled
+  // fresh), and strict against strict is byte-identical on a batch-
+  // invariant engine. A reply served from the shared prefix cache is not:
+  // the cached prefix ends where an earlier turn happened to end, and the
+  // linear-attention scan of the rest is not invariant to that boundary
+  // (prod, 2026-09-10: same seed, prompt and clock, 6288 cached tokens on
+  // the original, a different reply on the cold replay). So a replay is
+  // offered only for a turn whose every call ran strict.
+  const strict = stepsRecorded.every(b => b !== undefined && b.kv_cache_mode === 'strict')
+  const replayable = recorded && strict
+  const unavailableReason = !recorded
+    ? t('message.repro.replayUnavailable')
+    : t('message.repro.replayNotStrict')
   const prevTurnEndSeq = turnEnd ?? located.prevTurnMaxSeq
 
   const onReplay = async (): Promise<void> => {
@@ -434,7 +448,7 @@ export function PrivasysReproducibilityAction({ messageId, sessionId, useChat, r
               variant="outline"
               size="sm"
               disabled={busy || !replayable}
-              title={replayable ? undefined : t('message.repro.replayUnavailable')}
+              title={replayable ? undefined : unavailableReason}
               onClick={() => { void onReplay() }}
             >
               {busy ? t('message.repro.replaying') : t('message.repro.replay')}
@@ -443,6 +457,7 @@ export function PrivasysReproducibilityAction({ messageId, sessionId, useChat, r
               {copied ? t('message.repro.copied') : t('message.repro.copy')}
             </Button>
           </div>
+          {!replayable && <p className={css.hint}>{unavailableReason}</p>}
           {error !== undefined && <div className={css.error}>{error}</div>}
         </div>,
         document.body,

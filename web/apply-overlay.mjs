@@ -944,6 +944,7 @@ edit('packages/client/ui-chat/src/client/locale.ts', [
       `  'message.repro.replay': '重放本轮',\n` +
       `  'message.repro.replaying': '重放中…',\n` +
       `  'message.repro.replayUnavailable': '重放需要本轮每次调用都记录了可复现性信息',\n` +
+      `  'message.repro.replayNotStrict': '此回复使用了共享前缀缓存，无法逐字节重放。先在“采样”中固定种子，该会话的每次调用都会重新预填充，重放即可完全一致。',\n` +
       `  'message.repro.copy': '复制 JSON',\n` +
       `  'message.repro.copied': '已复制',\n` +
       `  'message.repro.replayOf': '第 {turn} 轮的重放',\n` +
@@ -1002,6 +1003,7 @@ edit('packages/client/ui-chat/src/client/locale.ts', [
       `  'message.repro.replay': 'Replay this turn',\n` +
       `  'message.repro.replaying': 'Replaying…',\n` +
       `  'message.repro.replayUnavailable': 'Replay needs a recorded block for every model call of this turn',\n` +
+      `  'message.repro.replayNotStrict': 'This reply was served from the shared prefix cache and cannot be replayed byte for byte. Pin a seed in Sampling first: every call of that session then prefills fresh, and its replays match exactly.',\n` +
       `  'message.repro.copy': 'Copy JSON',\n` +
       `  'message.repro.copied': 'Copied',\n` +
       `  'message.repro.replayOf': 'Replay of turn {turn}',\n` +
