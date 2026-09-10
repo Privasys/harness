@@ -51,6 +51,14 @@ case "${PRIVASYS_APP_ID:-}" in
     # The user was also, reasonably, looking at drive.test.privasys.org and
     # wondering where their sessions had gone.
     export HARNESS_TOOL_HOSTS="${HARNESS_TOOL_HOSTS/drive=privasys-drive.apps.privasys.org/drive=drive-demo.apps.test.privasys.org}"
+    # The mail connector exists on DEV ONLY, so it is appended here rather
+    # than baked into the image's topology. Appending, not rewriting: there is
+    # no prod host to substitute, and naming one that does not exist would put
+    # a permanently failing tool in front of prod users. The preset still
+    # mounts the row on both fleets (the overlay runs once, at build), and on
+    # prod it degrades to nothing with a logged catalogue failure, which is
+    # the honest description of a tool that fleet does not have.
+    export HARNESS_TOOL_HOSTS="${HARNESS_TOOL_HOSTS},mail=mail-connector.apps.test.privasys.org"
     # Which Drive brokers the storage CONSENT is the runtime's decision
     # (its StorageResourceApp: the fleet's Drive, the dev id on the test
     # control plane), not this script's — the harness no longer names it.

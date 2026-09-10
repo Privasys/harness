@@ -300,7 +300,14 @@ const MCP_FLEET_ROWS =
   `# tool app degrades that tool, never the whole preset.\n` +
   mcpFleetRow('web-search', 'web_search') + `\n` +
   mcpFleetRow('web-reader', 'web_reader') + `\n` +
-  mcpFleetRow('drive', 'drive')
+  mcpFleetRow('drive', 'drive') + `\n` +
+  // The mail connector. One image serves both fleets and this overlay runs at
+  // BUILD time, so the row is mounted on both; only dev has a host for it
+  // (entrypoint.sh appends one), and on prod the row degrades to nothing with
+  // a logged catalogue failure until a prod connector exists. That is the
+  // honest state of a tool one fleet does not have, and failOnStartupError
+  // keeps it from touching the rest of the preset.
+  mcpFleetRow('mail', 'mail')
 for (const preset of ['standard', 'ptc', 'cordis']) {
   edit(`packages/preset/agent-presets/presets/${preset}/agent.cordis.yml`, [
     [`preset ${preset} attested-fleet swap`, TOOL_WEB_BLOCK, MCP_FLEET_ROWS],
