@@ -1,7 +1,9 @@
 // Apply the Privasys attested-harness web overlay onto a vendored dsh tree.
 //
 // This is the sanctioned patch-queue divergence (D8: extend-don't-fork), rebased
-// for dsh v0.1.5-alpha.2 (every anchor of the 0.1.5-alpha.1 rebase still holds:
+// for dsh v0.1.5-rc.2 (every anchor of the 0.1.5-alpha.2 rebase still holds:
+// between alpha.2 and rc.2 only the DeepSeek catalogue moved, and not at our
+// anchor; the alpha.2 rebase found the same for alpha.1:
 // upstream left the webserver, connection, presets and bundle base untouched;
 // that rebase covered the persona prefix/suffix split, and the one before it the
 // @Remote gateway and the removal of APIProxy/AbstractApiClient). It:

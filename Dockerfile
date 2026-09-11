@@ -19,8 +19,12 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
 
 # ---- dsh at the pin -------------------------------------------------------
 FROM node:22-bookworm AS dsh-builder
-# dsh-v0.1.5-alpha.2 (2026-09-09)
-ARG DSH_PIN=b2e3b2a0125854567a4a5fcba75782e42fe84901
+# dsh-v0.1.5-rc.2 (2026-09-10). Release audit 2026-09-11: 21 commits past
+# alpha.2, only one overlay-touched file moved (llm-deepseek/src/index.ts
+# gained the DeepSeek-V41-Flash catalogue entry and a new default model; our
+# profile overrides the catalogue and pins the model, and the provider-card
+# anchor is untouched). Overlay applied and both faces type-checked at this pin.
+ARG DSH_PIN=fb2c4b9e698e30edb738bca4cf0618587db7d203
 RUN corepack enable \
  && git clone https://github.com/deepseek-ai/deepseek-harness /dsh \
  && git -C /dsh checkout "${DSH_PIN}"
