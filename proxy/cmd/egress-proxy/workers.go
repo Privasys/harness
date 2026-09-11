@@ -280,6 +280,9 @@ func (m *WorkerManager) start(w *Worker) {
 	if w.Subject != systemSubject {
 		// Restore BEFORE dsh starts: it lists its workspaces once at boot.
 		w.syncer = capability.NewSyncerFor(m.broker, m.client, m.driveHost, m.appID, w.Sessions, w.Workspace, w.Subject)
+		// dsh's workspace registry (titles, archived set) names the Drive
+		// folders the mirror files sessions under.
+		w.syncer.SetRegistryFile(filepath.Join(w.Home, "storages", "workspace.json"))
 		w.syncer.LoadState()
 		if n, err := w.syncer.RestoreFor(w.Subject); err != nil {
 			log.Printf("[workers] %s: restore: %v", w.Key, err)

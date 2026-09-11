@@ -184,7 +184,7 @@ LABEL org.privasys.static-unsealed-prefixes="/,/assets/,/privasys/,/plugins/,/fa
 # because the manifest is measured and one image serves both; a fleet with no
 # mail connector simply has no resource service for the kind, and the runtime
 # refuses the ask rather than showing the holder a screen it cannot honour.
-LABEL org.privasys.manifest='{"tools":[],"resources":[{"kind":"storage.folder","name":"storage","label":"Harness","permissions":["read","write"]},{"kind":"mail.mailbox","name":"mailbox","label":"Mail Connector","permissions":["read","write"]}]}'
+LABEL org.privasys.manifest='{"tools":[],"resources":[{"kind":"storage.folder","name":"storage","label":"Harness","permissions":["read","write","delete"]},{"kind":"mail.mailbox","name":"mailbox","label":"Mail Connector","permissions":["read","write"]}]}'
 # Link the GHCR package to this repo so its Actions inherit write access
 # (avoids a personal access token — the package is published by CI).
 LABEL org.opencontainers.image.source="https://github.com/Privasys/attested-harness"

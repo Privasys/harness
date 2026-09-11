@@ -339,6 +339,28 @@ func (d *DriveStore) put(parentID, name string, data []byte) (string, error) {
 	return n.ID, nil
 }
 
+// Delete removes one node (a file, or a folder with its subtree) and
+// reclaims its bytes. Needs the grant's `delete` permission; a grant without
+// it answers 403, which surfaces as a RefusedError the caller must not read
+// as a withdrawn capability.
+func (d *DriveStore) Delete(nodeID string) error {
+	u := fmt.Sprintf("https://%s/v1/tenants/%s/nodes/%s",
+		d.host, url.PathEscape(d.tenantID()), url.PathEscape(nodeID))
+	req, err := http.NewRequest(http.MethodDelete, u, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := d.do(req, []string{"delete"})
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		return driveError("delete", resp)
+	}
+	return nil
+}
+
 // Get reads one file by its node id.
 func (d *DriveStore) Get(fileID string) ([]byte, error) {
 	u := fmt.Sprintf("https://%s/v1/tenants/%s/files/%s",

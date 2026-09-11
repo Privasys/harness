@@ -8,9 +8,10 @@ package capability
 // Two roots, two shapes, kept apart so a person opening the folder sees their
 // conversations and their files as separate things:
 //
-//   - sessions/   dsh's session logs, one Drive file per local file. They are
-//                 records the holder may open and read, so they keep dsh's
-//                 own project/session layout.
+//   - sessions/   dsh's session logs, one Drive file per local file, filed
+//                 under the WORKSPACE they belong to (and Archived/ once
+//                 archived) rather than dsh's own directory key; sessions.go
+//                 owns that mapping and the way back.
 //   - workspace/  the working tree, as a content-addressed SNAPSHOT in the
 //                 format Drive renders as one item: `.workspace.json` (the
 //                 tree manifest) beside `.blobs/<sha256>` (each distinct file
@@ -24,12 +25,10 @@ package capability
 // window. Uploads are content-addressed, so a quiet harness sends nothing.
 
 import (
-	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"io/fs"
 	"log"
 	"net/http"
@@ -39,8 +38,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/klauspost/compress/zstd"
 )
 
 const (
@@ -118,6 +115,16 @@ type Syncer struct {
 	// and cleared by the next pass Drive accepts. The runtime cannot see a
 	// revoke made in Drive, so this is the only place the truth surfaces.
 	withdrawn bool
+	// registryFile is dsh's workspace registry document for this holder
+	// (titles, paths, archived ids); sessions.go reads it every pass.
+	registryFile string
+	// metaCache remembers each local session directory's header (id, cwd):
+	// neither ever changes, and the file is read once instead of per tick.
+	metaCache map[string]sessionMeta
+	// deleteRefused/pendingDeletes report a Drive that has not granted
+	// `delete` yet: stale copies wait there until the holder approves it.
+	deleteRefused  bool
+	pendingDeletes int
 }
 
 // AccessWithdrawn reports whether Drive last refused the holder's capability.
@@ -190,6 +197,7 @@ func NewSyncer(broker *Broker, client *http.Client, driveHost, appID, sessionsRo
 		broker: broker, client: client, driveHost: driveHost, appID: appID,
 		sessions: sessionsRoot, workspace: workspaceRoot,
 		uploaded: map[string]string{}, blobs: map[string]bool{}, folders: map[string]string{},
+		metaCache: map[string]sessionMeta{},
 	}
 }
 
@@ -222,12 +230,17 @@ type SyncStatus struct {
 	Blobs            int       `json:"blobs"`
 	WorkspaceSavedAt time.Time `json:"workspace_saved_at,omitempty"`
 	LastError        string    `json:"last_error,omitempty"`
+	// DeleteRefused: Drive has not granted this harness `delete`, so
+	// PendingDeletes stale session copies remain on the holder's Drive.
+	DeleteRefused  bool `json:"delete_refused,omitempty"`
+	PendingDeletes int  `json:"pending_deletes,omitempty"`
 }
 
 func (s *Syncer) Status() SyncStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	st := SyncStatus{LastSync: s.last, Files: s.files, Blobs: s.blobCount, WorkspaceSavedAt: s.savedAt, LastError: s.lastErr, AccessWithdrawn: s.withdrawn}
+	st := SyncStatus{LastSync: s.last, Files: s.files, Blobs: s.blobCount, WorkspaceSavedAt: s.savedAt, LastError: s.lastErr, AccessWithdrawn: s.withdrawn,
+		DeleteRefused: s.deleteRefused, PendingDeletes: s.pendingDeletes}
 	sub := s.subjectNow()
 	switch {
 	case sub == "":
@@ -359,75 +372,10 @@ func (s *Syncer) SyncOnce() error {
 	return wsErr
 }
 
-// ---- sessions: one Drive file per local file --------------------------------
-
-func (s *Syncer) mirrorSessions(ds *DriveStore) error {
-	var changed, failed int
-	var refused error
-	walkErr := filepath.WalkDir(s.sessions, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			// An unreadable entry must not abort the whole mirror: the rest of
-			// the holder's sessions still deserve to reach their Drive.
-			return nil
-		}
-		if d.IsDir() {
-			return nil
-		}
-		rel, relErr := filepath.Rel(s.sessions, path)
-		if relErr != nil {
-			return nil
-		}
-		rel = sessionsFolder + "/" + filepath.ToSlash(rel)
-		if isLockFile(d.Name()) {
-			return nil
-		}
-		data, readErr := os.ReadFile(path)
-		if readErr != nil {
-			return nil
-		}
-		sum := sha256.Sum256(data)
-		hash := hex.EncodeToString(sum[:])
-
-		s.mu.Lock()
-		unchanged := s.uploaded[rel] == hash
-		s.mu.Unlock()
-		if unchanged {
-			return nil
-		}
-		parent, folderErr := s.ensurePath(ds, filepath.ToSlash(filepath.Dir(rel)))
-		if folderErr != nil {
-			failed++
-			log.Printf("[sync] folder for %s: %v", rel, folderErr)
-			return nil
-		}
-		if _, putErr := ds.PutIn(parent, filepath.Base(rel), data); putErr != nil {
-			failed++
-			log.Printf("[sync] upload %s: %v", rel, putErr)
-			if IsRefused(putErr) {
-				refused = putErr
-				return fs.SkipAll // the capability is gone; the rest would fail the same way
-			}
-			return nil
-		}
-		s.mu.Lock()
-		s.uploaded[rel] = hash
-		s.mu.Unlock()
-		changed++
-		return nil
-	})
-	if walkErr != nil && !os.IsNotExist(walkErr) {
-		log.Printf("[sync] walking %s: %v", s.sessions, walkErr)
-	}
-	if changed > 0 || failed > 0 {
-		log.Printf("[sync] mirrored %d session file(s) to the holder's Drive, %d failed", changed, failed)
-	}
-	if refused != nil {
-		return refused
-	}
-	if failed > 0 {
-		return fmt.Errorf("capability: %d session file(s) could not be mirrored", failed)
-	}
-	return nil
+// contentHash is the hex SHA-256 the uploaded-file map is keyed by.
+func contentHash(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 // ensurePath resolves (creating as needed) the Drive folder for one relative
@@ -668,16 +616,15 @@ func (s *Syncer) restore(ds *DriveStore) (int, error) {
 		if id, err := s.folderIfExists(ds, sessionsFolder); err != nil {
 			firstErr = err
 		} else if id != "" {
-			n, rerr := s.restoreTree(ds, id, s.sessions)
+			n, rerr := s.restoreSessions(ds, id)
 			if rerr != nil && firstErr == nil {
 				firstErr = rerr
 			}
 			if n > 0 {
 				log.Printf("[sync] restored %d session file(s) from the holder's Drive", n)
 				total += n
-				// What came down is exactly what Drive holds: remember its
-				// hashes so the next tick does not send it all straight back.
-				s.rememberSessions()
+				// (restoreSessionFolder seeded the uploaded-hash map with the
+				// Drive path each file came from.)
 				// A session whose working directory is missing is invisible
 				// to dsh, and a workspace that held no file has no snapshot
 				// to bring the directory back — recreate it from the header.
@@ -745,57 +692,6 @@ func (s *Syncer) ensureSessionCwds() int {
 		return nil
 	})
 	return made
-}
-
-// sessionCwd returns the `cwd` of a session log's header line, or "".
-func sessionCwd(path string) string {
-	f, err := os.Open(path)
-	if err != nil {
-		return ""
-	}
-	defer f.Close()
-	var r io.Reader = f
-	if strings.HasSuffix(path, ".zstd") {
-		dec, derr := zstd.NewReader(f)
-		if derr != nil {
-			return ""
-		}
-		defer dec.Close()
-		r = dec
-	}
-	line, err := bufio.NewReaderSize(r, 64<<10).ReadBytes('\n')
-	if err != nil && len(line) == 0 {
-		return ""
-	}
-	var header struct {
-		Cwd string `json:"cwd"`
-	}
-	if json.Unmarshal(line, &header) != nil || !filepath.IsAbs(header.Cwd) {
-		return ""
-	}
-	return header.Cwd
-}
-
-// rememberSessions seeds the uploaded-hash map from the local session root.
-func (s *Syncer) rememberSessions() {
-	_ = filepath.WalkDir(s.sessions, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || isLockFile(d.Name()) {
-			return nil
-		}
-		rel, relErr := filepath.Rel(s.sessions, path)
-		if relErr != nil {
-			return nil
-		}
-		data, readErr := os.ReadFile(path)
-		if readErr != nil {
-			return nil
-		}
-		sum := sha256.Sum256(data)
-		s.mu.Lock()
-		s.uploaded[sessionsFolder+"/"+filepath.ToSlash(rel)] = hex.EncodeToString(sum[:])
-		s.mu.Unlock()
-		return nil
-	})
 }
 
 func dirEmpty(dir string) bool {
