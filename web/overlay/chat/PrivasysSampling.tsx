@@ -121,6 +121,9 @@ export function PrivasysSamplingChip({ sessionId, t }: Props) {
       const e = await pvSendJson<SamplingEntry>('PUT', path, body)
       setEntry(e)
       setDraft(draftOf(e.pins))
+      // The change is applied and reflected in the chip: the panel has
+      // nothing more to say, so it closes (it used to linger, 2026-09-11).
+      setOpen(false)
     } catch (err: unknown) {
       setError(t('input.sampling.error', { message: err instanceof Error ? err.message : String(err) }))
     } finally {
