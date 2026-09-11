@@ -306,6 +306,12 @@ func main() {
 	mux.HandleFunc("/tool/", func(w http.ResponseWriter, r *http.Request) {
 		rest := strings.TrimPrefix(r.URL.Path, "/tool/")
 		name, path, _ := strings.Cut(rest, "/")
+		// The harness's own access server (access.go) has no upstream: it
+		// reports and requests the user's approvals through the runtime.
+		if name == accessServerName && path == "mcp" {
+			accessShim(w, r)
+			return
+		}
 		host := cfg.toolHosts[name]
 		if host == "" {
 			http.Error(w, fmt.Sprintf(`{"error":"egress-proxy: unknown tool %q"}`, name), http.StatusNotFound)
@@ -374,6 +380,13 @@ func main() {
 	// ingress fell through to dsh, which answered a bare 405 that looks
 	// nothing like "wrong listener".
 	mailbox := capability.NewBroker(envOr("HARNESS_MAILBOX_RESOURCE", "mailbox"))
+	// The same declared resources, offered to the agent through the access
+	// server (access.go): it reports what the user approved and asks their
+	// wallet for more, so a missing approval is raised in the conversation.
+	setAccessLegs(
+		resourceLeg{name: envOr("HARNESS_STORAGE_RESOURCE", "storage"), broker: broker},
+		resourceLeg{name: envOr("HARNESS_MAILBOX_RESOURCE", "mailbox"), broker: mailbox},
+	)
 	// A tenant's policy is their data too: it lives in their Drive folder,
 	// never on this volume (D6'). In memory until they connect one.
 	store.SetTenantBackend(newDriveTenantBackend(broker, client, cfg.toolHosts["drive"]))

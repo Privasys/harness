@@ -309,7 +309,11 @@ const MCP_FLEET_ROWS =
   // a logged catalogue failure until a prod connector exists. That is the
   // honest state of a tool one fleet does not have, and failOnStartupError
   // keeps it from touching the rest of the preset.
-  mcpFleetRow('mail', 'mail')
+  mcpFleetRow('mail', 'mail') + `\n` +
+  // The harness's own access server (proxy access.go): lists what the user
+  // has approved and asks their wallet for more, so the agent can raise a
+  // missing approval in the conversation instead of a screen per tool.
+  mcpFleetRow('access', 'access')
 for (const preset of ['standard', 'ptc', 'cordis']) {
   edit(`packages/preset/agent-presets/presets/${preset}/agent.cordis.yml`, [
     [`preset ${preset} attested-fleet swap`, TOOL_WEB_BLOCK, MCP_FLEET_ROWS],
