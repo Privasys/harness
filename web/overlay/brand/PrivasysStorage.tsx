@@ -36,6 +36,10 @@ interface StorageState {
   signed_in?: boolean
   withdrawn?: boolean
   folder?: string
+  /** Approved under other permissions than this harness now declares. */
+  stale?: boolean
+  permissions?: string[]
+  granted_permissions?: string[]
 }
 
 interface PendingAsk {
@@ -77,7 +81,7 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
         setState(d ?? {})
         // The ask is over once the runtime reports the grant: drop the
         // "approve on your device" box rather than leaving the user on it.
-        if (d?.persistent === true) setAsk(undefined)
+        if (d?.persistent === true && d?.stale !== true) setAsk(undefined)
       }, () => { setState({}) })
   }
   // Poll: quickly until the session is bound to someone, then slowly, so a
@@ -105,11 +109,15 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
   const withdrawn = state.withdrawn === true
   const persistent = state.persistent === true && !withdrawn
   const declined = state.declined === true
+  // Approved, working, but under a narrower (or other) permission set than
+  // this harness now asks for: saved, and still needing one more approval.
+  const stale = persistent && state.stale === true
+  const missing = (state.permissions ?? []).filter(p => !(state.granted_permissions ?? []).includes(p))
   // Not an option with two acceptable answers. Without a Drive this harness
   // cannot keep anything: the session root is a tmpfs and dies with the
   // container. The row says setup is incomplete, not that a preference is unset.
-  const dot = persistent ? 'done' as const : withdrawn ? 'error' as const : 'warning' as const
-  const word = persistent ? 'In your Drive' : withdrawn ? 'Withdrawn' : 'Not saved'
+  const dot = stale ? 'warning' as const : persistent ? 'done' as const : withdrawn ? 'error' as const : 'warning' as const
+  const word = stale ? 'Approval needed' : persistent ? 'In your Drive' : withdrawn ? 'Withdrawn' : 'Not saved'
   const folder = state.folder ?? 'AppData/Harness'
 
   return (
@@ -137,11 +145,30 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
         <div className={css.dialogBody}>
           {persistent
             ? (
-              <p>
-                Your conversations and workspace are saved to <strong>{folder}</strong> in
-                your own Drive, under your own keys. They survive this enclave being
-                replaced. You can withdraw access at any time in Drive.
-              </p>
+              <>
+                <p>
+                  Your conversations and workspace are saved to <strong>{folder}</strong> in
+                  your own Drive, under your own keys. They survive this enclave being
+                  replaced. You can withdraw access at any time in Drive.
+                </p>
+                {stale
+                  ? (
+                    <>
+                      <p className={css.warn}>
+                        This harness now asks for <strong>{(missing.length > 0 ? missing : state.permissions ?? []).join(', ')}</strong> on
+                        that folder (so it can remove sessions you delete and tidy old copies).
+                        What you approved earlier keeps working until you answer; approve the
+                        updated access on your device to enable it.
+                      </p>
+                      <div className={css.actions}>
+                        <Button variant="primary" size="sm" disabled={busy} onClick={() => { request(false) }}>
+                          {busy ? 'Preparing…' : 'Approve the updated access'}
+                        </Button>
+                      </div>
+                    </>
+                  )
+                  : null}
+              </>
             )
             : (
               <>
@@ -177,7 +204,7 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
               </>
             )}
 
-          {ask?.nonce && !persistent
+          {ask?.nonce && (!persistent || stale)
             ? (
               <div className={css.askBox}>
                 <div className={css.askTitle}>Approve on your device</div>

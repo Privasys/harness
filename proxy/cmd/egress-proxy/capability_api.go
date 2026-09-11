@@ -83,6 +83,12 @@ func registerCapabilityAPI(mux *http.ServeMux, broker *capability.Broker, withdr
 		resp["declined"] = st.Declined
 		resp["resource_app"] = st.ResourceApp
 		resp["permissions"] = st.Permissions
+		if st.Stale {
+			// Approved under other permissions than this image declares: the
+			// row must say so and offer the re-approval, not "In your Drive".
+			resp["stale"] = true
+			resp["granted_permissions"] = st.GrantedPermissions
+		}
 		// The runtime cannot see a revoke made in Drive; the mirror can, on
 		// its next pass. "Granted but refused" is a state the user must see
 		// as such, not as "saved to your Drive".

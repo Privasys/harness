@@ -76,7 +76,13 @@ type Status struct {
 	Permissions []string `json:"permissions"`
 	Label       string   `json:"label"`
 	ResourceApp string   `json:"resource_app"`
-	Granted     *Granted `json:"-"`
+	// Stale: the grant was approved under other permissions than the
+	// manifest declares now (runtime ≥ the 2026-09-11 manager fix reports
+	// it); GrantedPermissions is what the holder actually approved. The
+	// grant keeps working; the holder is asked again.
+	Stale              bool     `json:"stale"`
+	GrantedPermissions []string `json:"granted_permissions"`
+	Granted            *Granted `json:"-"`
 }
 
 // Broker talks to the enclave runtime's resource endpoints:

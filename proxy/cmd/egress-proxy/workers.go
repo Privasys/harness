@@ -294,6 +294,18 @@ func (m *WorkerManager) start(w *Worker) {
 			chownTree(w.Sessions, w.UID)
 			chownTree(w.Workspace, w.UID)
 		}
+		// A grant approved under other permissions than this image declares
+		// is asked again, once per worker start: the holder sees the ask in
+		// their wallet and in the storage row, and the old grant keeps
+		// working until they answer.
+		if st, serr := m.broker.Status(w.Subject); serr == nil && st.Stale {
+			if out, rerr := m.broker.Request(w.Subject, false); rerr != nil {
+				log.Printf("[capability] %s: re-ask for the updated permissions: %v", w.Key, rerr)
+			} else {
+				log.Printf("[capability] %s: asked the holder to approve %v (approved so far: %v): %v",
+					w.Key, st.Permissions, st.GrantedPermissions, out["status"])
+			}
+		}
 	}
 	cmd, err := m.command(w)
 	if err != nil {
