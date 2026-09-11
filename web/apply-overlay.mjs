@@ -1422,9 +1422,9 @@ edit('packages/api/session-controller/src/commands.ts', [
       `      // and its own \`session/disposed\` carries the removal to the client.\n` +
       `      await this.agents.release(sessionId)\n` +
       `    }\n` +
-      `    const persistence = this.ctx.sessionPersistence as { deleteSession?(id: SessionId): Promise<boolean> }\n` +
+      `    // Read without inject: this controller's context does not list the service.\n    const persistence = this.ctx.get('sessionPersistence') as { deleteSession?(id: SessionId): Promise<boolean> } | undefined\n` +
       `    let removed = false\n` +
-      `    if (persistence.deleteSession !== undefined) {\n` +
+      `    if (persistence?.deleteSession !== undefined) {\n` +
       `      try {\n` +
       `        removed = await persistence.deleteSession(sessionId)\n` +
       `      } catch (error: unknown) {\n` +
@@ -1434,8 +1434,8 @@ edit('packages/api/session-controller/src/commands.ts', [
       `    if (!removed && live === undefined) {\n` +
       `      throw new RemoteError('session/not-found', \`session "\${sessionId}" not found\`, { sessionId })\n` +
       `    }\n` +
-      `    const registry = this.ctx.workspaceRegistry as { forgetSession?(id: SessionId): Promise<void> }\n` +
-      `    await registry.forgetSession?.(sessionId)\n` +
+      `    const registry = this.ctx.get('workspaceRegistry') as { forgetSession?(id: SessionId): Promise<void> } | undefined\n` +
+      `    await registry?.forgetSession?.(sessionId)\n` +
       `    if (live === undefined) this.ctx.emit('api-session/removed', sessionId)\n` +
       `    return { sessionId }\n` +
       `  }`,
