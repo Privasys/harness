@@ -108,6 +108,10 @@ type reproScanBody struct {
 	lossyFound int
 	// toolFound bounds the tool-call shape probe (structure only, no content).
 	toolFound int
+	// toolIDs maps the ids vLLM gave this stream's tool calls to the
+	// deterministic ids served to dsh (toolids.go); toolSeq numbers them.
+	toolIDs map[string]string
+	toolSeq int
 }
 
 func newReproScanBody(rc io.ReadCloser, call *modelCall) *reproScanBody {
@@ -193,6 +197,11 @@ func (b *reproScanBody) scan(line []byte) []byte {
 					b.toolFound++
 				}
 			}
+		}
+	}
+	if b.call != nil && !b.call.Pins.empty() && strings.Contains(payload, `"tool_calls"`) {
+		if rewritten, ok := b.rewriteToolCallIDs(payload); ok {
+			return rewritten
 		}
 	}
 	if !strings.Contains(payload, `"reproducibility"`) {
