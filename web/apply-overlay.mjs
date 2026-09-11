@@ -1219,4 +1219,569 @@ for (const rel of ['packages/llm/llm-deepseek/src/adapter.ts', 'packages/llm/llm
   }
 }
 
+// --- 2i. Delete session -------------------------------------------------------
+// dsh can archive a session (a registry flag; the log stays) but never delete
+// one: no menu item, no Host command, no persistence operation. On the
+// platform a session's durable home is the holder's Drive, and the mirror
+// now removes what no longer exists locally, so deletion is one Host command
+// away. It runs in the session controller, which owns the live Agents and
+// already emits the removal event the sidebar listens to:
+//   1. a live but idle Agent is released (its handle, which the controller
+//      dropped upstream, is now retained) — a running one is refused;
+//   2. the session directory (log, lock, attachments) is removed through the
+//      JSONL persistence, which learns a `deleteSession`;
+//   3. the workspace registry forgets the id (membership, archive set, index);
+//   4. `api-session/removed` reaches the client for a cold session (a live
+//      one emits it through its own disposal).
+// The client gains `delete` on the session service, and the workspace browser
+// a "Delete session" row action behind a confirmation dialog. The row reaches
+// the dialog over a module-level bus (PrivasysSessionDelete.ts) rather than
+// through the four-hop prop chain, so upstream layout changes cost nothing.
+
+/** Like edit(), but the anchor must occur exactly `count` times and every occurrence is replaced. */
+function editAll(rel, transforms) {
+  const path = join(dsh, rel)
+  let src = readFileSync(path, 'utf8')
+  for (const [label, find, replace, count] of transforms) {
+    const found = src.split(find).length - 1
+    if (found !== count) {
+      throw new Error(`overlay anchor MISSING in ${rel}: "${label}" (expected ${count} occurrence(s), found ${found}). Upstream changed — rebase the patch.`)
+    }
+    src = src.split(find).join(replace)
+  }
+  writeFileSync(path, src)
+  console.log(`[overlay] patched ${rel}`)
+}
+
+// (a) session controller: retain Agent handles so one Agent can be released.
+editAll('packages/api/session-controller/src/agent.ts', [
+  [
+    'agent handle map',
+    `  private readonly creations = new Map<SessionId, Promise<Agent>>()`,
+    `  private readonly creations = new Map<SessionId, Promise<Agent>>()\n` +
+      `  // Privasys: the handles create/resume hand back, so a session can be\n` +
+      `  // released on its own (dsh keeps every resumed Agent until unload).\n` +
+      `  private readonly handles = new Map<SessionId, { agent: Agent; dispose(): Promise<void> }>()`,
+    1,
+  ],
+  [
+    'resume handle retained (4)',
+    `    return (await this.ctx.agents.resume({
+` +
+      `      resumeSessionId: sessionId,
+` +
+      `      agentOptions: this.agentOptions(),
+` +
+      `      setup: composition.setup,
+` +
+      `    })).agent`,
+    `    return this.retain(await this.ctx.agents.resume({
+` +
+      `      resumeSessionId: sessionId,
+` +
+      `      agentOptions: this.agentOptions(),
+` +
+      `      setup: composition.setup,
+` +
+      `    }))`,
+    1,
+  ],
+  [
+    'resume handle retained (8)',
+    `        return (await this.ctx.agents.resume({
+` +
+      `          resumeSessionId: sessionId,
+` +
+      `          agentOptions: this.agentOptions(),
+` +
+      `          setup: composition.setup,
+` +
+      `        })).agent`,
+    `        return this.retain(await this.ctx.agents.resume({
+` +
+      `          resumeSessionId: sessionId,
+` +
+      `          agentOptions: this.agentOptions(),
+` +
+      `          setup: composition.setup,
+` +
+      `        }))`,
+    1,
+  ],
+  [
+    'create handle retained',
+    `    return (await this.ctx.agents.create({\n` +
+      `      sessionId,\n` +
+      `      agentOptions: this.agentOptions(),\n` +
+      `      meta: {\n` +
+      `        cwd,\n` +
+      `        ...(composition.agentPreset === undefined ? {} : { agentPreset: composition.agentPreset }),\n` +
+      `      },\n` +
+      `      setup: composition.setup,\n` +
+      `    })).agent\n` +
+      `  }`,
+    `    return this.retain(await this.ctx.agents.create({\n` +
+      `      sessionId,\n` +
+      `      agentOptions: this.agentOptions(),\n` +
+      `      meta: {\n` +
+      `        cwd,\n` +
+      `        ...(composition.agentPreset === undefined ? {} : { agentPreset: composition.agentPreset }),\n` +
+      `      },\n` +
+      `      setup: composition.setup,\n` +
+      `    }))\n` +
+      `  }\n` +
+      `\n` +
+      `  /** Privasys: remember one live Agent's handle and hand back its Agent. */\n` +
+      `  private retain(handle: { agent: Agent; dispose(): Promise<void> }): Agent {\n` +
+      `    this.handles.set(handle.agent.id, handle)\n` +
+      `    return handle.agent\n` +
+      `  }\n` +
+      `\n` +
+      `  /**\n` +
+      `   * Privasys: release one live Agent — stop and drain it, unregister it,\n` +
+      `   * detach its session (which emits \`session/disposed\`, hence\n` +
+      `   * \`api-session/removed\`). A session this controller never resumed is a\n` +
+      `   * no-op.\n` +
+      `   */\n` +
+      `  async release(sessionId: SessionId): Promise<boolean> {\n` +
+      `    const handle = this.handles.get(sessionId)\n` +
+      `    if (handle === undefined) return false\n` +
+      `    this.handles.delete(sessionId)\n` +
+      `    await handle.dispose()\n` +
+      `    return true\n` +
+      `  }`,
+    1,
+  ],
+])
+
+// (b) session controller: the delete command, its types and its Remote.
+edit('packages/api/session-controller/src/types.ts', [
+  [
+    'delete request/value types',
+    `/** Receipt after cancellation is admitted to the live Agent. */\n` +
+      `export interface SessionCancelValue {\n` +
+      `  readonly accepted: true\n` +
+      `}`,
+    `/** Receipt after cancellation is admitted to the live Agent. */\n` +
+      `export interface SessionCancelValue {\n` +
+      `  readonly accepted: true\n` +
+      `}\n` +
+      `\n` +
+      `/** Privasys: request to delete one Session for good (log, registry accounting, Drive copy). */\n` +
+      `export interface SessionDeleteRequest {\n` +
+      `  readonly sessionId: SessionId\n` +
+      `}\n` +
+      `\n` +
+      `/** Privasys: receipt naming the deleted Session. */\n` +
+      `export interface SessionDeleteValue {\n` +
+      `  readonly sessionId: SessionId\n` +
+      `}`,
+  ],
+])
+edit('packages/api/session-controller/src/commands.ts', [
+  [
+    'delete type imports',
+    `  SessionCancelRequest,\n  SessionCancelValue,\n  SessionCreateRequest,`,
+    `  SessionCancelRequest,\n  SessionCancelValue,\n  SessionDeleteRequest,\n  SessionDeleteValue,\n  SessionCreateRequest,`,
+  ],
+  [
+    'delete command',
+    `    agent.cancel({ kind: 'user' }, { keepInbox: true })\n` +
+      `    return { accepted: true }\n` +
+      `  }`,
+    `    agent.cancel({ kind: 'user' }, { keepInbox: true })\n` +
+      `    return { accepted: true }\n` +
+      `  }\n` +
+      `\n` +
+      `  /**\n` +
+      `   * Privasys: delete one ordinary Session for good — its live Agent (idle\n` +
+      `   * only), its stored log, and its registry accounting. The platform\n` +
+      `   * mirror removes the Drive copy on its next pass.\n` +
+      `   * @param request - Session to delete.\n` +
+      `   * @returns the deleted Session identity.\n` +
+      `   */\n` +
+      `  async delete(request: SessionDeleteRequest): Promise<SessionDeleteValue> {\n` +
+      `    const { sessionId } = request\n` +
+      `    const live = this.ctx.agents.get(sessionId)\n` +
+      `    if (live !== undefined) {\n` +
+      `      if (hasApiSessionSubagentOwner(this.ctx, live.session, live)) {\n` +
+      `        throw apiSessionSubagentOwnershipError(sessionId)\n` +
+      `      }\n` +
+      `      if (live.status === 'running') {\n` +
+      `        throw new RemoteError(\n` +
+      `          'gateway/bad-request',\n` +
+      `          \`session "\${sessionId}" is still running; stop it before deleting it\`,\n` +
+      `          {},\n` +
+      `        )\n` +
+      `      }\n` +
+      `      // Released first: the disposal closes the log and drops the lease,\n` +
+      `      // and its own \`session/disposed\` carries the removal to the client.\n` +
+      `      await this.agents.release(sessionId)\n` +
+      `    }\n` +
+      `    const persistence = this.ctx.sessionPersistence as { deleteSession?(id: SessionId): Promise<boolean> }\n` +
+      `    let removed = false\n` +
+      `    if (persistence.deleteSession !== undefined) {\n` +
+      `      try {\n` +
+      `        removed = await persistence.deleteSession(sessionId)\n` +
+      `      } catch (error: unknown) {\n` +
+      `        throw new RemoteError('gateway/internal', \`failed to delete session "\${sessionId}": \${String(error)}\`, {})\n` +
+      `      }\n` +
+      `    }\n` +
+      `    if (!removed && live === undefined) {\n` +
+      `      throw new RemoteError('session/not-found', \`session "\${sessionId}" not found\`, { sessionId })\n` +
+      `    }\n` +
+      `    const registry = this.ctx.workspaceRegistry as { forgetSession?(id: SessionId): Promise<void> }\n` +
+      `    await registry.forgetSession?.(sessionId)\n` +
+      `    if (live === undefined) this.ctx.emit('api-session/removed', sessionId)\n` +
+      `    return { sessionId }\n` +
+      `  }`,
+  ],
+])
+edit('packages/api/session-controller/src/index.ts', [
+  [
+    'delete type imports (host)',
+    `  SessionCancelRequest,\n  SessionCancelValue,`,
+    `  SessionCancelRequest,\n  SessionCancelValue,\n  SessionDeleteRequest,\n  SessionDeleteValue,`,
+  ],
+  [
+    'delete remote',
+    `  @Remote('cancel')\n` +
+      `  cancel(request: SessionCancelRequest): SessionCancelValue {\n` +
+      `    return this.commands.cancel(request)\n` +
+      `  }`,
+    `  @Remote('cancel')\n` +
+      `  cancel(request: SessionCancelRequest): SessionCancelValue {\n` +
+      `    return this.commands.cancel(request)\n` +
+      `  }\n` +
+      `\n` +
+      `  /**\n` +
+      `   * Privasys: delete one Session for good (see SessionCommandController.delete).\n` +
+      `   * @param request - Session to delete.\n` +
+      `   * @returns the deleted Session identity.\n` +
+      `   */\n` +
+      `  @Remote('delete')\n` +
+      `  delete(request: SessionDeleteRequest): Promise<SessionDeleteValue> {\n` +
+      `    return this.commands.delete(request)\n` +
+      `  }`,
+  ],
+])
+
+// (c) JSONL persistence: remove one stored session's directory.
+edit('packages/session/session-persistence-jsonl/src/index.ts', [
+  [
+    'persistence deleteSession',
+    `  /**\n` +
+      `   * List every stored session visible to this process: materialized artifacts\n` +
+      `   * plus this process's created-but-unmaterialized sessions.`,
+    `  /**\n` +
+      `   * Privasys: remove one stored session's directory — its log, lock and\n` +
+      `   * anything filed beside them. Every live handle must have been released\n` +
+      `   * first; a session still being created is refused.\n` +
+      `   * @param id - the session to remove.\n` +
+      `   * @returns true when a stored session was removed, false when none existed.\n` +
+      `   */\n` +
+      `  async deleteSession(id: SessionId): Promise<boolean> {\n` +
+      `    await this.ensureRootEncoding()\n` +
+      `    if (this.tracker.pendingOf(id) !== undefined) {\n` +
+      `      throw new Error(\`session "\${id}" is still being created\`)\n` +
+      `    }\n` +
+      `    const selected = await this.findLog(id)\n` +
+      `    if (selected === undefined) return false\n` +
+      `    this.coldLogMemo.delete(id)\n` +
+      `    this.migrationPreparations.delete(id)\n` +
+      `    await rm(dirname(selected.currentPath), { recursive: true, force: true })\n` +
+      `    return true\n` +
+      `  }\n` +
+      `\n` +
+      `  /**\n` +
+      `   * List every stored session visible to this process: materialized artifacts\n` +
+      `   * plus this process's created-but-unmaterialized sessions.`,
+  ],
+])
+
+// (d) workspace registry: forget a deleted session everywhere it is counted.
+edit('packages/workspace/workspace/src/index.ts', [
+  [
+    'registry forgetSession',
+    `      const state = this.requireState()\n` +
+      `      await this.setState({ ...state, archivedSessionIds: [...state.archivedSessionIds, sessionId] })\n` +
+      `    })\n` +
+      `  }`,
+    `      const state = this.requireState()\n` +
+      `      await this.setState({ ...state, archivedSessionIds: [...state.archivedSessionIds, sessionId] })\n` +
+      `    })\n` +
+      `  }\n` +
+      `\n` +
+      `  /**\n` +
+      `   * Privasys: drop one deleted session from every workspace's membership,\n` +
+      `   * from the archive set, and from the header index. Unknown ids are a\n` +
+      `   * no-op: the caller has already removed the log.\n` +
+      `   * @param sessionId - The deleted session.\n` +
+      `   * @returns resolution after durability.\n` +
+      `   */\n` +
+      `  forgetSession(sessionId: SessionId): Promise<void> {\n` +
+      `    return this.enqueueOperation(async () => {\n` +
+      `      this.headers.delete(sessionId)\n` +
+      `      this.sessionPaths.delete(sessionId)\n` +
+      `      this.invalidSessionPaths.delete(sessionId)\n` +
+      `      const table = this.requireTable()\n` +
+      `      for (const [id, record] of [...table.entries()]) {\n` +
+      `        if (!record.sessionIds.includes(sessionId)) continue\n` +
+      `        await table.update(id, current => ({\n` +
+      `          ...current,\n` +
+      `          sessionIds: current.sessionIds.filter(candidate => candidate !== sessionId),\n` +
+      `          updatedAt: new Date().toISOString(),\n` +
+      `        }))\n` +
+      `      }\n` +
+      `      const state = this.requireState()\n` +
+      `      if (!state.archivedSessionIds.includes(sessionId)) return\n` +
+      `      await this.setState({\n` +
+      `        ...state,\n` +
+      `        archivedSessionIds: state.archivedSessionIds.filter(candidate => candidate !== sessionId),\n` +
+      `      })\n` +
+      `    })\n` +
+      `  }`,
+  ],
+])
+
+// (e) client session service: \`delete\` beside \`fork\`.
+edit('packages/api/session-controller/src/client/sessions/manager.ts', [
+  [
+    'manager delete',
+    `  async fork(\n` +
+      `    opts: { sessionId: SessionId; atSeq?: SessionSeq },\n` +
+      `  ): Promise<RemoteResult<{ sessionId: SessionId }>> {`,
+    `  /** Privasys: delete one Session for good; the Host's removal event drops the row. */\n` +
+      `  async delete(sessionId: SessionId): Promise<RemoteResult<{ sessionId: SessionId }>> {\n` +
+      `    return this.remote.session.delete({ sessionId })\n` +
+      `  }\n` +
+      `\n` +
+      `  async fork(\n` +
+      `    opts: { sessionId: SessionId; atSeq?: SessionSeq },\n` +
+      `  ): Promise<RemoteResult<{ sessionId: SessionId }>> {`,
+  ],
+])
+edit('packages/api/session-controller/src/client/sessions/service.ts', [
+  [
+    'service delete',
+    `  async fork(opts: {\n` +
+      `    sessionId: SessionId\n` +
+      `    atSeq?: number\n` +
+      `    increaseTitle?: boolean\n` +
+      `  }): Promise<SessionId> {`,
+    `  async delete(sessionId: SessionId): Promise<void> {\n` +
+      `    const result = await this.manager.delete(sessionId)\n` +
+      `    if (!result.ok) throw new Error(\`\${result.error.code}: \${result.error.message}\`)\n` +
+      `    this.projectList()\n` +
+      `  }\n` +
+      `\n` +
+      `  async fork(opts: {\n` +
+      `    sessionId: SessionId\n` +
+      `    atSeq?: number\n` +
+      `    increaseTitle?: boolean\n` +
+      `  }): Promise<SessionId> {`,
+  ],
+])
+edit('packages/api/session-controller/src/client/contract/sessions.ts', [
+  [
+    'contract delete',
+    `  fork(opts: { sessionId: SessionId; atSeq?: number; increaseTitle?: boolean }): Promise<SessionId>`,
+    `  fork(opts: { sessionId: SessionId; atSeq?: number; increaseTitle?: boolean }): Promise<SessionId>\n` +
+      `  /**\n` +
+      `   * Privasys: delete one session for good (log, registry accounting, Drive\n` +
+      `   * copy). A running session is refused.\n` +
+      `   * @param sessionId - the session to delete.\n` +
+      `   */\n` +
+      `  delete?(sessionId: SessionId): Promise<void>`,
+  ],
+])
+
+// (f) workspace browser: the row action, the dialog, the wiring.
+put('packages/client/ui-workspace/src/client/rows/PrivasysSessionDelete.ts', 'overlay/workspace/PrivasysSessionDelete.ts')
+// The client-runtime fake of the session Remote namespace must implement
+// every generated method, tests included (the image build type-checks them).
+edit('packages/api/session-controller/tests/fake-api.client.ts', [
+  [
+    'fake delete',
+    `        cancel: payload => this.record('session.cancel', payload, this.onCancel(payload)),`,
+    `        cancel: payload => this.record('session.cancel', payload, this.onCancel(payload)),\n` +
+      `        delete: payload => this.record('session.delete', payload, Promise.resolve<RemoteResult<{ sessionId: SessionId }>>({ ok: true, value: { sessionId: payload.sessionId } })),`,
+  ],
+])
+
+edit('packages/client/ui-workspace/src/client/contract/slots.ts', [
+  [
+    'slot deleteSession',
+    `  archiveSession: (sessionId: SessionId) => Promise<void>`,
+    `  archiveSession: (sessionId: SessionId) => Promise<void>\n` +
+      `  /**\n` +
+      `   * Privasys: delete a Session for good. Deleting the current session\n` +
+      `   * clears the selection into the New Session view state.\n` +
+      `   */\n` +
+      `  deleteSession?: (sessionId: SessionId) => Promise<void>`,
+  ],
+])
+edit('packages/client/ui-workspace/src/client/index.ts', [
+  [
+    'wire deleteSession',
+    `    archiveSession: async (sessionId) => { await uiWorkspace.archiveSession(sessionId) },`,
+    `    archiveSession: async (sessionId) => { await uiWorkspace.archiveSession(sessionId) },\n` +
+      `    deleteSession: async (sessionId) => { await uiWorkspace.deleteSession(sessionId) },`,
+  ],
+])
+edit('packages/client/ui-workspace/src/client/navigation.ts', [
+  [
+    'navigation deleteSession (interface)',
+    `  archiveSession(sessionId: SessionId): Promise<void>\n` +
+      `  /**\n` +
+      `   * Open the Host-native directory picker.`,
+    `  archiveSession(sessionId: SessionId): Promise<void>\n` +
+      `  /**\n` +
+      `   * Privasys: delete a Session for good and clear it when it is the current selection.\n` +
+      `   * @param sessionId - Session to delete.\n` +
+      `   */\n` +
+      `  deleteSession(sessionId: SessionId): Promise<void>\n` +
+      `  /**\n` +
+      `   * Open the Host-native directory picker.`,
+  ],
+  [
+    'navigation deleteSession (impl)',
+    `  async archiveSession(sessionId: SessionId): Promise<void> {\n` +
+      `    await this.workspaces.archiveSession(sessionId)\n` +
+      `  }`,
+    `  async archiveSession(sessionId: SessionId): Promise<void> {\n` +
+      `    await this.workspaces.archiveSession(sessionId)\n` +
+      `  }\n` +
+      `\n` +
+      `  async deleteSession(sessionId: SessionId): Promise<void> {\n` +
+      `    const current = this.sessions.list.getSnapshot().current\n` +
+      `    if (this.sessions.delete === undefined) throw new Error('session deletion is unavailable in this build')\n` +
+      `    await this.sessions.delete(sessionId)\n` +
+      `    if (current === sessionId) this.sessions.clear()\n` +
+      `  }`,
+  ],
+])
+edit('packages/client/ui-workspace/src/client/rows/Rows.tsx', [
+  [
+    'rows: bus import',
+    `import css from './Rows.module.css'`,
+    `import css from './Rows.module.css'\n` +
+      `import { requestSessionDelete } from './PrivasysSessionDelete.ts'`,
+  ],
+  [
+    'rows: delete menu item',
+    `    { id: 'archive', label: t('menu.archiveSession'), icon: <IconArchiveOutline20 size={16} /> },\n` +
+      `  ]`,
+    `    { id: 'archive', label: t('menu.archiveSession'), icon: <IconArchiveOutline20 size={16} /> },\n` +
+      `    // Privasys: deletion is destructive, so it confirms in the browser root.\n` +
+      `    { id: 'delete', label: t('menu.deleteSession'), icon: <IconTrashOutline16 /> },\n` +
+      `  ]`,
+  ],
+  [
+    'rows: delete dispatch',
+    `              if (id === 'archive') onArchive(node.id)`,
+    `              if (id === 'archive') onArchive(node.id)\n` +
+      `              if (id === 'delete') requestSessionDelete(node.id, row.title)`,
+  ],
+])
+edit('packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx', [
+  [
+    'browser: bus import',
+    `import css from './WorkspaceBrowser.module.css'`,
+    `import css from './WorkspaceBrowser.module.css'\n` +
+      `import { onSessionDeleteRequest } from './PrivasysSessionDelete.ts'`,
+  ],
+  [
+    'browser: deleteSession prop',
+    `  archiveSession,\n  insertSessionBefore,\n  createWorkspace,`,
+    `  archiveSession,\n  deleteSession,\n  insertSessionBefore,\n  createWorkspace,`,
+  ],
+  [
+    'browser: session delete state',
+    `  const [deleteError, setDeleteError] = useState<string | null>(null)`,
+    `  const [deleteError, setDeleteError] = useState<string | null>(null)\n` +
+      `\n` +
+      `  // Privasys: session deletion — the row publishes a request, the root\n` +
+      `  // confirms it, the Host deletes, and the removal event drops the row.\n` +
+      `  const [sessionDeleteTarget, setSessionDeleteTarget] = useState<{ sessionId: SessionNode['id']; title: string } | null>(null)\n` +
+      `  const [sessionDeleting, setSessionDeleting] = useState(false)\n` +
+      `  const [sessionDeleteError, setSessionDeleteError] = useState<string | null>(null)\n` +
+      `  useEffect(() => onSessionDeleteRequest((request) => {\n` +
+      `    setSessionDeleteTarget({ sessionId: request.sessionId as SessionNode['id'], title: request.title })\n` +
+      `    setSessionDeleteError(null)\n` +
+      `  }), [])\n` +
+      `  const closeSessionDelete = () => {\n` +
+      `    if (sessionDeleting) return\n` +
+      `    setSessionDeleteTarget(null)\n` +
+      `    setSessionDeleteError(null)\n` +
+      `  }\n` +
+      `  const confirmSessionDelete = () => {\n` +
+      `    if (sessionDeleting || sessionDeleteTarget === null || deleteSession === undefined) return\n` +
+      `    setSessionDeleting(true)\n` +
+      `    setSessionDeleteError(null)\n` +
+      `    deleteSession(sessionDeleteTarget.sessionId).then(() => {\n` +
+      `      setSessionDeleting(false)\n` +
+      `      setSessionDeleteTarget(null)\n` +
+      `    }).catch((reason: unknown) => {\n` +
+      `      setSessionDeleting(false)\n` +
+      `      setSessionDeleteError(reason instanceof Error ? reason.message : String(reason))\n` +
+      `    })\n` +
+      `  }`,
+  ],
+  [
+    'browser: session delete dialog',
+    `      <Modal\n` +
+      `        open={deleteTarget !== null}\n` +
+      `        onClose={closeDelete}`,
+    `      <Modal\n` +
+      `        open={sessionDeleteTarget !== null}\n` +
+      `        onClose={closeSessionDelete}\n` +
+      `        closeLabel={t('close')}\n` +
+      `        title={t('delete.session')}\n` +
+      `        {...sessionDeleteTarget === null\n` +
+      `          ? {}\n` +
+      `          : { description: t('delete.session.desc', { name: sessionDeleteTarget.title }) }}\n` +
+      `        footer={(\n` +
+      `          <>\n` +
+      `            <Button variant="outline" disabled={sessionDeleting} onClick={closeSessionDelete}>{t('cancel')}</Button>\n` +
+      `            <Button\n` +
+      `              variant="outline"\n` +
+      `              className={css.deleteAction}\n` +
+      `              disabled={sessionDeleting}\n` +
+      `              onClick={confirmSessionDelete}\n` +
+      `            >\n` +
+      `              {t('delete.session')}\n` +
+      `            </Button>\n` +
+      `          </>\n` +
+      `        )}\n` +
+      `      >\n` +
+      `        {sessionDeleting && <div className={css.deleteStatus} role="status">{t('delete.session.pending')}</div>}\n` +
+      `        {sessionDeleteError !== null && <div className={css.renameError} role="alert">{sessionDeleteError}</div>}\n` +
+      `      </Modal>\n` +
+      `      <Modal\n` +
+      `        open={deleteTarget !== null}\n` +
+      `        onClose={closeDelete}`,
+  ],
+])
+edit('packages/client/ui-workspace/src/client/locales.ts', [
+  [
+    'locale: delete session (zh)',
+    `  'menu.archiveSession': '归档会话',`,
+    `  'menu.archiveSession': '归档会话',\n` +
+      `  'menu.deleteSession': '删除会话',\n` +
+      `  'delete.session': '删除会话',\n` +
+      `  'delete.session.desc': '将永久删除“{name}”：本地记录和您 Drive 中的副本都会被移除，无法恢复。',\n` +
+      `  'delete.session.pending': '正在删除会话…',`,
+  ],
+  [
+    'locale: delete session (en)',
+    `  'menu.archiveSession': 'Archive session',`,
+    `  'menu.archiveSession': 'Archive session',\n` +
+      `  'menu.deleteSession': 'Delete session',\n` +
+      `  'delete.session': 'Delete session',\n` +
+      `  'delete.session.desc': 'This deletes “{name}” for good: its record here and the copy in your Drive are removed and cannot be recovered.',\n` +
+      `  'delete.session.pending': 'Deleting session…',`,
+  ],
+])
+
 console.log('[overlay] done')
