@@ -1788,4 +1788,113 @@ edit('packages/client/ui-workspace/src/client/locales.ts', [
   ],
 ])
 
+// --- 2j. Drive knowledge, per workspace ----------------------------------------
+// The user's files reach the agent through Drive's MCP server, gated globally
+// by the folders they enabled for AI. A workspace narrows that: Off, all
+// enabled folders (default), or a chosen subset, so a session about one
+// customer never sees another's files. The setting is the user's document on
+// their Drive and the egress proxy enforces it on every Drive tool call
+// (proxy/cmd/egress-proxy/knowledge.go). dsh's part is small:
+//   (a) the MCP client names the calling session in each request's _meta,
+//       so the proxy can resolve the workspace (the model never sees it);
+//   (b) a "Drive knowledge…" row in the workspace menu and, once a workspace
+//       is created, the same dialog, over a module-level bus
+//       (PrivasysDriveKnowledge.tsx) rather than the upstream prop chains.
+edit('packages/mcp/mcp-client/src/tools.ts', [
+  [
+    'session in _meta',
+    `  return client.request(\n` +
+      `    { method: 'tools/call', params: { name: rawName, arguments: args } },`,
+    `  // Privasys: the calling session rides the request's _meta so the egress\n` +
+      `  // proxy can apply the workspace's Drive-knowledge setting. Never part of\n` +
+      `  // the arguments, so the model's view and the replay digest are untouched.\n` +
+      `  const meta = exec.agent === undefined ? {} : { _meta: { privasysSession: exec.agent.session.id } }\n` +
+      `  return client.request(\n` +
+      `    { method: 'tools/call', params: { name: rawName, arguments: args, ...meta } },`,
+  ],
+])
+put('packages/client/ui-workspace/src/client/rows/PrivasysDriveKnowledge.tsx', 'overlay/workspace/PrivasysDriveKnowledge.tsx')
+edit('packages/client/ui-workspace/src/client/rows/Rows.tsx', [
+  [
+    'rows: knowledge bus import',
+    `import { requestSessionDelete } from './PrivasysSessionDelete.ts'`,
+    `import { requestSessionDelete } from './PrivasysSessionDelete.ts'\n` +
+      `import { requestDriveKnowledge } from './PrivasysDriveKnowledge.tsx'`,
+  ],
+  [
+    'rows: workspace menu item',
+    `  const workspaceMenuItems = [\n` +
+      `    { id: 'rename', label: t('rename'), icon: <IconEditOutline16 /> },`,
+    `  const workspaceMenuItems = [\n` +
+      `    { id: 'rename', label: t('rename'), icon: <IconEditOutline16 /> },\n` +
+      `    // Privasys: what this workspace's sessions may read from the user's Drive.\n` +
+      `    { id: 'drive-knowledge', label: t('menu.driveKnowledge'), icon: <IconFolderOpen16 /> },`,
+  ],
+  [
+    'rows: workspace menu dispatch',
+    `              /* v8 ignore next -- Menu can emit only the rename and delete rows supplied above. */\n` +
+      `              if (id !== 'rename' && id !== 'delete') return`,
+    `              if (id === 'drive-knowledge') {\n` +
+      `                if (row.workspaceId !== undefined) requestDriveKnowledge(row.workspaceId, label)\n` +
+      `                return\n` +
+      `              }\n` +
+      `              /* v8 ignore next -- Menu can emit only the rename and delete rows supplied above. */\n` +
+      `              if (id !== 'rename' && id !== 'delete') return`,
+  ],
+])
+edit('packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx', [
+  [
+    'browser: knowledge dialog import',
+    `import { onSessionDeleteRequest } from './PrivasysSessionDelete.ts'`,
+    `import { onSessionDeleteRequest } from './PrivasysSessionDelete.ts'\n` +
+      `import { PrivasysDriveKnowledgeDialog } from './PrivasysDriveKnowledge.tsx'`,
+  ],
+  [
+    'browser: mount the knowledge dialog',
+    `      <Modal\n` +
+      `        open={sessionDeleteTarget !== null}\n` +
+      `        onClose={closeSessionDelete}`,
+    `      <PrivasysDriveKnowledgeDialog />\n` +
+      `      <Modal\n` +
+      `        open={sessionDeleteTarget !== null}\n` +
+      `        onClose={closeSessionDelete}`,
+  ],
+])
+edit('packages/client/ui-workspace/src/client/WorkspacePicker.tsx', [
+  [
+    'picker: bus import',
+    `import { useCallback, useEffect, useState } from 'react'`,
+    `import { useCallback, useEffect, useState } from 'react'\n` +
+      `import { requestDriveKnowledge } from './rows/PrivasysDriveKnowledge.tsx'`,
+  ],
+  [
+    'picker: ask at creation',
+    `    createWorkspace({ path }).then((workspace) => {\n` +
+      `      setFlowOpen(false)\n` +
+      `      onPick(workspace.workspaceId)\n` +
+      `    })`,
+    `    createWorkspace({ path }).then((workspace) => {\n` +
+      `      setFlowOpen(false)\n` +
+      `      onPick(workspace.workspaceId)\n` +
+      `      // Privasys: a new workspace is asked what its sessions may read\n` +
+      `      // from the user's Drive (default: everything enabled for AI).\n` +
+      `      requestDriveKnowledge(workspace.workspaceId, workspace.title)\n` +
+      `    })`,
+  ],
+])
+edit('packages/client/ui-workspace/src/client/locales.ts', [
+  [
+    'locale: drive knowledge (zh)',
+    `  'menu.deleteSession': '删除会话',`,
+    `  'menu.deleteSession': '删除会话',\n` +
+      `  'menu.driveKnowledge': 'Drive 知识…',`,
+  ],
+  [
+    'locale: drive knowledge (en)',
+    `  'menu.deleteSession': 'Delete session',`,
+    `  'menu.deleteSession': 'Delete session',\n` +
+      `  'menu.driveKnowledge': 'Drive knowledge…',`,
+  ],
+])
+
 console.log('[overlay] done')

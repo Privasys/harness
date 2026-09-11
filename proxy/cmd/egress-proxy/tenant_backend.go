@@ -47,11 +47,21 @@ func (b *driveTenantBackend) store(sub string) *capability.DriveStore {
 }
 
 func (b *driveTenantBackend) Load(sub string) ([]byte, bool, error) {
+	return b.LoadNamed(sub, tenantPolicyFile)
+}
+
+func (b *driveTenantBackend) Save(sub string, raw []byte) error {
+	return b.SaveNamed(sub, tenantPolicyFile, raw)
+}
+
+// LoadNamed reads one of the holder's documents at the root of their
+// granted folder (policy.json, workspaces.json).
+func (b *driveTenantBackend) LoadNamed(sub, name string) ([]byte, bool, error) {
 	ds := b.store(sub)
 	if ds == nil {
 		return nil, false, nil
 	}
-	n, found, err := ds.ResolvePath(ds.RootID(), tenantPolicyFile)
+	n, found, err := ds.ResolvePath(ds.RootID(), name)
 	if err != nil || !found {
 		return nil, false, err
 	}
@@ -62,11 +72,13 @@ func (b *driveTenantBackend) Load(sub string) ([]byte, bool, error) {
 	return raw, true, nil
 }
 
-func (b *driveTenantBackend) Save(sub string, raw []byte) error {
+// SaveNamed writes one of the holder's documents; ErrNotPersisted when no
+// Drive is connected for them yet.
+func (b *driveTenantBackend) SaveNamed(sub, name string, raw []byte) error {
 	ds := b.store(sub)
 	if ds == nil {
 		return policy.ErrNotPersisted
 	}
-	_, err := ds.Put(tenantPolicyFile, raw)
+	_, err := ds.Put(name, raw)
 	return err
 }

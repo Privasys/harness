@@ -135,6 +135,26 @@ func mcpShim(w http.ResponseWriter, r *http.Request, client *http.Client, toolNa
 			args = json.RawMessage(`{}`)
 		}
 		args = applyDocumentedDefaults(toolName, p.Name, args)
+		// Drive knowledge (knowledge.go): the user's per-workspace setting,
+		// applied here on the measured leg. The model's own folder_ids are
+		// dropped first; the replay digest below is taken on what the model
+		// sent, so a narrowed call still matches its record.
+		var narrowTo []string
+		if toolName == knowledgeTool && knowledge != nil {
+			args = stripFolderIDs(args)
+			ws := workspaceOfSession(sub, knowledgeMeta(req.Params))
+			switch k := knowledge.For(sub, ws); k.Mode {
+			case knowledgeModeOff:
+				log.Printf("[mcp %s] refused %s: Drive knowledge is off for workspace %.8s…", toolName, p.Name, ws)
+				rpcResult(w, req.ID, knowledgeRefusal())
+				return
+			case knowledgeModeSelected:
+				narrowTo = k.Folders
+				if narrowTo == nil {
+					narrowTo = []string{}
+				}
+			}
+		}
 		// A replay in flight for this user (sampling.go): a call identical
 		// to the next recorded one gets the recorded result, so the turn
 		// sees the same tool answers it saw the first time and the tool
@@ -146,6 +166,9 @@ func mcpShim(w http.ResponseWriter, r *http.Request, client *http.Client, toolNa
 				"isError": rec.IsError,
 			})
 			return
+		}
+		if narrowTo != nil {
+			args = withFolderIDs(args, narrowTo)
 		}
 		result, status, price, err := callTool(r, client, host, p.Name, args, "", sub)
 		if err != nil {

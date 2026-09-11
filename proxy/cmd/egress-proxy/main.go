@@ -389,7 +389,12 @@ func main() {
 	)
 	// A tenant's policy is their data too: it lives in their Drive folder,
 	// never on this volume (D6'). In memory until they connect one.
-	store.SetTenantBackend(newDriveTenantBackend(broker, client, cfg.toolHosts["drive"]))
+	tenantDocs := newDriveTenantBackend(broker, client, cfg.toolHosts["drive"])
+	store.SetTenantBackend(tenantDocs)
+	// Per-workspace Drive knowledge (knowledge.go): the same per-user
+	// document storage, a second file, enforced on the tool leg.
+	knowledge = newKnowledgeStore(tenantDocs)
+	registerKnowledgeAPI(mux, knowledge, client, cfg.toolHosts["drive"])
 	// Standing consent to per-call tool fees comes from that same document;
 	// the meter turns it into the byte-exact header and keeps the running
 	// total the per-session figure bounds.
