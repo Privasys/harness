@@ -2,8 +2,7 @@
  * Privasys sidebar-foot rows (attested-harness fork).
  *
  * ONE occupant of the `sidebar.footer.action` list slot renders a column of
- * rows — Attestation, Sessions (storage), Mail (where the fleet has a mail
- * connector), User — above dsh's own
+ * three rows — Attestation, Sessions (storage), User — above dsh's own
  * Settings trigger. dsh lays list occupants out in a row and expects each to
  * own its button geometry (ui-sidebar contract), so a single occupant with
  * a column is the seam as designed: no sidebar source is edited and no
@@ -24,7 +23,6 @@ import { IconUserOutline16, Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SidebarFooterActionOwnerProps } from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import { PrivasysAttestationRow } from './PrivasysAttestation.tsx'
 import { PrivasysStorageRow } from './PrivasysStorage.tsx'
-import { PrivasysMailboxRow } from './PrivasysMailbox.tsx'
 import { FootRow } from './PrivasysFootRow.tsx'
 import css from './PrivasysFoot.module.css'
 
@@ -92,7 +90,6 @@ export function PrivasysFootRows({ wide }: SidebarFooterActionOwnerProps) {
     <div className={wide ? css.column : `${css.column} ${css.rail}`}>
       <PrivasysAttestationRow wide={wide} />
       <PrivasysStorageRow wide={wide} />
-      <PrivasysMailboxRow wide={wide} />
       <PrivasysUserRow wide={wide} />
     </div>
   )

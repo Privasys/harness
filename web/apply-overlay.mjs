@@ -682,10 +682,6 @@ put('packages/client/ui-brand-official/src/client/PrivasysPolicy.tsx', 'overlay/
 // modal, because the commitment is a NON-BLOCKING banner — nobody mid-task
 // should be interrupted to decide about storage.
 put('packages/client/ui-brand-official/src/client/PrivasysStorage.tsx', 'overlay/brand/PrivasysStorage.tsx')
-// The mail row: the second declared resource. Its own component because the
-// storage status is Drive-shaped; it renders only where the fleet has a mail
-// connector, and walks the holder through link-then-allow.
-put('packages/client/ui-brand-official/src/client/PrivasysMailbox.tsx', 'overlay/brand/PrivasysMailbox.tsx')
 put('apps/web/public/privasys/privasys-attestation.css', 'vendor/privasys-attestation.css')
 
 // --- 2g. greenfield content: no DeepSeek-authored text reaches user or model
