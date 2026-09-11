@@ -39,8 +39,20 @@ case "${PRIVASYS_APP_ID:-}" in
     PV_ATTEST_BASE="https://api.developer.privasys.org"
     PV_API_BASE="https://api.privasys.org"
     ;;
-  *)                                     # attested-harness (dev, and the default)
-    export HARNESS_PUBLIC_HOST="${HARNESS_PUBLIC_HOST:-attested-harness.apps.test.privasys.org}"
+  *)                                     # dev harness apps, and the default
+    # The public host is THIS app's own name on the dev apps domain, derived
+    # from the launcher-injected container name (which is the app name). A
+    # baked "attested-harness" host meant a second dev harness app answered
+    # the browser under its own hostname while dsh's --trusted-host fence and
+    # the shell config named another app's, and the fence refused it.
+    #
+    # Validated before use: the value is interpolated into the shell's <script>
+    # config below, so anything but a DNS label is refused rather than trusted.
+    if [[ "${PRIVASYS_CONTAINER_NAME:-}" =~ ^[a-z][a-z0-9-]{1,62}$ ]]; then
+      export HARNESS_PUBLIC_HOST="${PRIVASYS_CONTAINER_NAME}.apps.test.privasys.org"
+    else
+      export HARNESS_PUBLIC_HOST="${HARNESS_PUBLIC_HOST:-attested-harness.apps.test.privasys.org}"
+    fi
     PV_ATTEST_BASE="https://api.developer.test.privasys.org"
     PV_API_BASE="https://api-test.privasys.org"
     # STORAGE goes to the DEV Drive, not production. The image's baked tool
