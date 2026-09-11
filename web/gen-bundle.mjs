@@ -52,6 +52,45 @@ const missing = [...DROP].filter(id => !seen.includes(id))
 if (missing.length) throw new Error(`DROP ids not found in base: ${missing.join(', ')} — rebase the list.`)
 
 const kept = blocks.filter(b => !DROP.has(b.id))
+
+// Privasys defaults, pinned at the bundle level so no profile composed over
+// it can start on DeepSeek's cloud model or public endpoint. The same values
+// are restated in app/profile.cordis.yml (a patch replaces a row's whole
+// config); keep the two in step.
+const MODEL_ROW = [
+  '      config:',
+  '        baseURL: http://127.0.0.1:9411/model/v1',
+  '        thinking: enabled',
+  '        reasoningEffort: low',
+  '        models:',
+  '          - id: qwen36-35b-a3b-fp8',
+  '            name: Qwen3.6 35B (Privasys attested)',
+  '            contextWindow: 131072',
+  '            maxTokens: 8192',
+]
+for (const b of kept) {
+  if (b.id === 'agent-default-model') {
+    const i = b.lines.findIndex(l => /^\s+model: /.test(l))
+    if (i < 0) throw new Error('agent-default-model row has no model line')
+    b.lines[i] = b.lines[i].replace(/model: .*/, 'model: qwen36-35b-a3b-fp8')
+    const row = b.lines.findIndex(l => /^    - id: /.test(l))
+    b.lines.splice(row, 0,
+      '    # Privasys: the default is OUR attested model, not DeepSeek\x27s cloud one, so',
+      '    # every profile composed over this bundle (deployment, smoke, headless)',
+      '    # starts on it even before app/profile.cordis.yml restates it.')
+  }
+  if (b.id === 'llm-deepseek') {
+    if (b.lines.some(l => /^\s+config:/.test(l))) throw new Error('llm-deepseek row now carries config upstream; merge by hand')
+    const name = b.lines.findIndex(l => /^      name: /.test(l))
+    b.lines.splice(name + 1, 0,
+      '      # Privasys: the route is pinned to the attested egress proxy and the',
+      '      # catalogue is our model alone, at the bundle level too, so no profile',
+      '      # can fall back to the adapter\x27s DeepSeek catalogue or public endpoint.',
+      '      # app/profile.cordis.yml restates the same values (a patch replaces the',
+      '      # whole config); keep the two in step.',
+      ...MODEL_ROW)
+  }
+}
 const header = `# @privasys/harness-bundle — the Privasys Privasys Harness core composition.
 #
 # ALLOW-LIST fork of @deepseek-ai/dsh-base (generated from the pinned dsh tree,

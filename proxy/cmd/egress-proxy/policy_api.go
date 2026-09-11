@@ -180,6 +180,13 @@ func redactSubject(sub string) string {
 	return sub[:8] + "…"
 }
 
+// writeJSONBytes serves an already-encoded JSON body.
+func writeJSONBytes(w http.ResponseWriter, code int, body []byte) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	w.Write(body)
+}
+
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Content-Type-Options", "nosniff")

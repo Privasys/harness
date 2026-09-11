@@ -21,7 +21,9 @@ func TestRewriteToolCallIDs_DeterministicForPinnedCalls(t *testing.T) {
 		var f struct {
 			Choices []struct {
 				Delta struct {
-					ToolCalls []struct{ ID string `json:"id"` } `json:"tool_calls"`
+					ToolCalls []struct {
+						ID string `json:"id"`
+					} `json:"tool_calls"`
 				} `json:"delta"`
 			} `json:"choices"`
 		}

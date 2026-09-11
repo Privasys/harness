@@ -85,11 +85,14 @@
 
     # The transport-independent default for Agents created by entry points.
     # Settings may supply a saved selection; consumers read it at creation time.
+    # Privasys: the default is OUR attested model, not DeepSeek's cloud one, so
+    # every profile composed over this bundle (deployment, smoke, headless)
+    # starts on it even before app/profile.cordis.yml restates it.
     - id: agent-default-model
       name: '@deepseek-ai/dsh-agent-default-model'
       config:
         provider: deepseek-official
-        model: deepseek-v4-flash
+        model: qwen36-35b-a3b-fp8
 
 
     - id: jobs
@@ -469,3 +472,17 @@
     # choice.
     - id: llm-deepseek
       name: '@deepseek-ai/dsh-llm-deepseek'
+      # Privasys: the route is pinned to the attested egress proxy and the
+      # catalogue is our model alone, at the bundle level too, so no profile
+      # can fall back to the adapter's DeepSeek catalogue or public endpoint.
+      # app/profile.cordis.yml restates the same values (a patch replaces the
+      # whole config); keep the two in step.
+      config:
+        baseURL: http://127.0.0.1:9411/model/v1
+        thinking: enabled
+        reasoningEffort: low
+        models:
+          - id: qwen36-35b-a3b-fp8
+            name: Qwen3.6 35B (Privasys attested)
+            contextWindow: 131072
+            maxTokens: 8192

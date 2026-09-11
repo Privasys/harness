@@ -156,19 +156,29 @@ func forward(w http.ResponseWriter, r *http.Request, client *http.Client, host, 
 		// That combination cost a full day's debugging on 2026-09-05.
 		log.Printf("[egress-proxy] %s leg REFUSED: %s %s -> %v",
 			map[bool]string{true: "model", false: "tool"}[repro], r.Method, host, err)
+		if repro {
+			// The model leg's body reaches the person in the chat: shape it
+			// so dsh shows OUR verdict, not its provider's generic line
+			// (modelerror.go).
+			writeJSONBytes(w, http.StatusBadGateway, refusedModelLegBody(err))
+			return
+		}
 		http.Error(w, fmt.Sprintf(`{"error":"egress-proxy: %v"}`, err), http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
 	body := resp.Body
+	rewritten := false
 	if repro && resp.StatusCode >= 400 {
 		// A refused model leg used to log its status alone, and dsh shows
 		// the user a generic "API key is invalid" for any 4xx, so the
 		// callee's reason was visible nowhere. Errors are small JSON
-		// bodies, never streams: read, log, and pass along.
+		// bodies, never streams: read, log, and pass along, in the one
+		// shape dsh renders verbatim (modelerror.go).
 		peek, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 		log.Printf("[egress-proxy] model leg: %s %s -> %d %s: %s", r.Method, path, resp.StatusCode,
 			resp.Header.Get("Content-Type"), truncate(peek, 300))
+		peek, rewritten = normaliseModelError(resp.StatusCode, peek)
 		body = io.NopCloser(bytes.NewReader(peek))
 	} else if repro {
 		log.Printf("[egress-proxy] model leg: %s %s -> %d %s", r.Method, path, resp.StatusCode, resp.Header.Get("Content-Type"))
@@ -184,9 +194,15 @@ func forward(w http.ResponseWriter, r *http.Request, client *http.Client, host, 
 		body = newReproScanBody(resp.Body, modelCallOf(r))
 	}
 	for k, vs := range resp.Header {
+		if rewritten && (k == "Content-Length" || k == "Content-Type") {
+			continue // the body served is not the one upstream described
+		}
 		for _, v := range vs {
 			w.Header().Add(k, v)
 		}
+	}
+	if rewritten {
+		w.Header().Set("Content-Type", "application/json")
 	}
 	w.WriteHeader(resp.StatusCode)
 	// Flush per read so SSE deltas reach the plugin as they arrive instead

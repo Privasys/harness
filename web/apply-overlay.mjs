@@ -1036,4 +1036,187 @@ edit('packages/client/ui-chat/src/client/locale.ts', [
   ],
 ])
 
+// --- 2h. no DeepSeek in the user's face -------------------------------------
+// The adapter behind our `deepseek-official` route talks to Confidential AI
+// through the egress proxy, yet its provider heading (the model picker's
+// group title), its error lines and a few settings strings still said
+// "DeepSeek": a refused or offline attested model surfaced in the chat as
+// "DeepSeek API error (HTTP 502)" (2026-09-10). The proxy now shapes every
+// model-leg error so dsh prints OUR message (proxy/cmd/egress-proxy/
+// modelerror.go); these edits cover what the adapter and the client say on
+// their own. Wire identifiers (the provider route, the settings namespace,
+// the package names) are untouched: they are addresses, not words. The
+// upstream onboarding and welcome dialogs are already unmounted (2g).
+edit('packages/llm/llm-deepseek/src/adapter.ts', [
+  [
+    'provider heading',
+    `    return { id: provider, name: 'DeepSeek' }`,
+    `    return { id: provider, name: 'Privasys' }`,
+  ],
+  [
+    'image input refusal',
+    `          \`DeepSeek model "\${options.model}" does not accept image input.\`,`,
+    `          \`Model "\${options.model}" does not accept image input.\`,`,
+  ],
+  [
+    'image conversion',
+    `          'DeepSeek image conversion requires the durable attachment service.',`,
+    `          'Image conversion requires the durable attachment service.',`,
+  ],
+  [
+    'stream idle timeout',
+    `          \`DeepSeek stream idle timeout after \${connection.streamIdleTimeoutMs}ms\`,`,
+    `          \`Attested model stream idle timeout after \${connection.streamIdleTimeoutMs}ms\`,`,
+  ],
+  [
+    'aborted by caller',
+    `        throw new LlmError('DeepSeek request aborted by caller', 'ABORTED', { cause: error })`,
+    `        throw new LlmError('Model request aborted by caller', 'ABORTED', { cause: error })`,
+  ],
+  [
+    'stream failed',
+    `      throw new LlmError(\`DeepSeek API stream from \${connection.baseURL} failed\`, 'TRANSPORT', { cause: error })`,
+    `      throw new LlmError(\`Attested model stream from \${connection.baseURL} failed\`, 'TRANSPORT', { cause: error })`,
+  ],
+  [
+    'consumer stopped',
+    `      consumer.abort('DeepSeek stream consumer stopped')`,
+    `      consumer.abort('Model stream consumer stopped')`,
+  ],
+  [
+    'extension preparation',
+    `        throw new LlmError('DeepSeek request extension preparation failed', 'REQUEST_EXTENSION', { cause: error })`,
+    `        throw new LlmError('Model request extension preparation failed', 'REQUEST_EXTENSION', { cause: error })`,
+  ],
+  [
+    'extension collision',
+    `          throw new LlmError(\`DeepSeek request extension field \${JSON.stringify(field)} collides with the base request\`, 'REQUEST_EXTENSION')`,
+    `          throw new LlmError(\`Model request extension field \${JSON.stringify(field)} collides with the base request\`, 'REQUEST_EXTENSION')`,
+  ],
+  [
+    'request failed',
+    `          \`DeepSeek API request to \${connection.baseURL} failed\`,`,
+    `          \`Attested model request to \${connection.baseURL} failed\`,`,
+  ],
+  [
+    'api error line',
+    `        let message = \`DeepSeek API error (HTTP \${response.status})\``,
+    `        let message = \`Attested model error (HTTP \${response.status})\``,
+  ],
+  [
+    'http cause',
+    `          cause: new Error(rawResponse.length > 0 ? rawResponse : \`DeepSeek HTTP \${response.status}\`),`,
+    `          cause: new Error(rawResponse.length > 0 ? rawResponse : \`Attested model HTTP \${response.status}\`),`,
+  ],
+  [
+    'extension acceptance',
+    `        throw new LlmError('DeepSeek request extension acceptance failed', 'REQUEST_EXTENSION', { cause: error })`,
+    `        throw new LlmError('Model request extension acceptance failed', 'REQUEST_EXTENSION', { cause: error })`,
+  ],
+  [
+    'empty response',
+    `        throw new LlmError('DeepSeek API returned no response body', 'EMPTY_RESPONSE')`,
+    `        throw new LlmError('Attested model returned no response body', 'EMPTY_RESPONSE')`,
+  ],
+])
+edit('packages/llm/llm-deepseek/src/serialize.ts', [
+  [
+    'effort unsupported',
+    `    \`DeepSeek does not support reasoning effort "\${effort}"\`,`,
+    `    \`The attested model does not support reasoning effort "\${effort}"\`,`,
+  ],
+  [
+    'effort disabled',
+    `      \`DeepSeek deployment does not support reasoning effort "\${effort}"\`,`,
+    `      \`This deployment does not support reasoning effort "\${effort}"\`,`,
+  ],
+  [
+    'image content',
+    `    throw new LlmError('The DeepSeek chat-completions adapter does not support image content.', 'UNSUPPORTED_CONTENT')`,
+    `    throw new LlmError('The attested model adapter does not support image content.', 'UNSUPPORTED_CONTENT')`,
+  ],
+  [
+    'image role',
+    `        \`The DeepSeek chat-completions adapter cannot represent image content in a \${message.role} message.\`,`,
+    `        \`The attested model adapter cannot represent image content in a \${message.role} message.\`,`,
+  ],
+  [
+    'image not prepared (block)',
+    `      \`DeepSeek request image \${block.attachment.attachmentId} was not prepared.\`,`,
+    `      \`Request image \${block.attachment.attachmentId} was not prepared.\`,`,
+  ],
+  [
+    'image not prepared (ref)',
+    `        throw new LlmError(\`DeepSeek request image \${ref.attachmentId} was not prepared.\`, 'INVALID_REQUEST')`,
+    `        throw new LlmError(\`Request image \${ref.attachmentId} was not prepared.\`, 'INVALID_REQUEST')`,
+  ],
+])
+// Settings > Models: the base-URL placeholder named DeepSeek's public API,
+// the one endpoint this deployment must never reach. Name our route instead.
+edit('packages/client/ui-settings-models/src/client/ProviderEditor.tsx', [
+  [
+    'base-url placeholder',
+    `const DEEPSEEK_PUBLIC_BASE_URL = 'https://api.deepseek.com'`,
+    `// Privasys: the attested egress proxy's model route, never a public API.\n` +
+      `const DEEPSEEK_PUBLIC_BASE_URL = 'http://127.0.0.1:9411/model/v1'`,
+  ],
+])
+edit('packages/client/ui-settings-models/src/client/locales.ts', [
+  [
+    'onboarding description (en)',
+    `  onboardingDescription: 'Configure the official DeepSeek provider to start building.',`,
+    `  onboardingDescription: 'Configure the attested model provider to start building.',`,
+  ],
+  [
+    'onboarding description (zh)',
+    `  onboardingDescription: '配置 DeepSeek 官方模型，即可开始使用。',`,
+    `  onboardingDescription: '配置已认证的模型提供方，即可开始使用。',`,
+  ],
+])
+edit('packages/client/ui-settings-plugins/src/client/locales.ts', [
+  [
+    'web search description (en)',
+    `  webSearchDescription: 'The DeepSeek search provider.',`,
+    `  webSearchDescription: 'The web search provider.',`,
+  ],
+  [
+    'web search description (zh)',
+    `  webSearchDescription: 'DeepSeek 搜索提供方。',`,
+    `  webSearchDescription: '网页搜索提供方。',`,
+  ],
+])
+// The Files API paths (image attachments) are unreachable behind our text-only
+// catalogue, but their messages are thrown from the same adapter: reword them
+// so the guard below holds and no path can ever print the old name.
+edit('packages/llm/llm-deepseek/src/adapter.ts', [
+  [
+    'files api image resolve',
+    `super('DeepSeek Files API could not resolve a request image.', { cause })`,
+    `super('The model files API could not resolve a request image.', { cause })`,
+  ],
+  [
+    'normalized image rejected (facts)',
+    `return \`DeepSeek rejected normalized image \${normalizedImageFacts(target)}: \${providerMessage}. \``,
+    `return \`The model rejected normalized image \${normalizedImageFacts(target)}: \${providerMessage}. \``,
+  ],
+  [
+    'normalized image rejected (candidates)',
+    `return \`DeepSeek rejected a normalized request image: \${providerMessage}. Candidate images: \``,
+    `return \`The model rejected a normalized request image: \${providerMessage}. Candidate images: \``,
+  ],
+])
+// Guard for the next re-pin: no prose "DeepSeek" may remain in a message the
+// adapter can throw (a string literal starting with the word). Identifiers
+// and comments are fine; a new upstream message is the signal to extend 2h.
+for (const rel of ['packages/llm/llm-deepseek/src/adapter.ts', 'packages/llm/llm-deepseek/src/serialize.ts']) {
+  const lines = readFileSync(join(dsh, rel), 'utf8').split('\n')
+  const prose = lines
+    .map((line, i) => [i + 1, line])
+    .filter(([, line]) => /['`"](The )?DeepSeek /.test(line) && !/^\s*(\/\/|\*|\/\*)/.test(line))
+  if (prose.length > 0) {
+    throw new Error(`overlay 2h: user-facing DeepSeek wording remains in ${rel}: ` +
+      prose.map(([n, l]) => `${n}: ${l.trim()}`).join(' | '))
+  }
+}
+
 console.log('[overlay] done')
