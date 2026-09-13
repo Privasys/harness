@@ -71,6 +71,10 @@ type Worker struct {
 	Sessions  string
 	Workspace string
 	Home      string
+	// Skills is this holder's own behaviour directory, mirrored from their
+	// Drive. tmpfs like the other user roots: the enclave keeps no durable
+	// copy of anything that is theirs.
+	Skills string
 
 	cmd    *exec.Cmd
 	syncer *capability.Syncer
@@ -221,6 +225,9 @@ func (m *WorkerManager) Ensure(sub string) *Worker {
 	w.Sessions = filepath.Join(envOr("HARNESS_SESSIONS_TMPFS", "/dev/shm/privasys-users"), key, "sessions")
 	w.Workspace = filepath.Join(w.Dir, "workspace")
 	w.Home = filepath.Join(w.Dir, "dsh-home")
+	// Beside the sessions on tmpfs: what the holder's assistant DOES is their
+	// data, mirrored from their Drive, and the enclave keeps no durable copy.
+	w.Skills = filepath.Join(envOr("HARNESS_SESSIONS_TMPFS", "/dev/shm/privasys-users"), key, "skills")
 	m.bySub[sub] = w
 	m.byToken[w.Token] = w
 	if w.UID != 0 {
@@ -280,6 +287,10 @@ func (m *WorkerManager) start(w *Worker) {
 	if w.Subject != systemSubject {
 		// Restore BEFORE dsh starts: it lists its workspaces once at boot.
 		w.syncer = capability.NewSyncerFor(m.broker, m.client, m.driveHost, m.appID, w.Sessions, w.Workspace, w.Subject)
+		// The holder's own skills: read from their Drive, seeded once from the
+		// deployment's reference set. What the assistant DOES is then a folder
+		// they can open and edit, with no build and no deploy in their path.
+		w.syncer.SetSkillsRoot(w.Skills, envOr("HARNESS_SEED_SKILLS", "/data/skills"))
 		// dsh's workspace registry (titles, archived set) names the Drive
 		// folders the mirror files sessions under.
 		w.syncer.SetRegistryFile(filepath.Join(w.Home, "storages", "workspace.json"))
@@ -293,6 +304,7 @@ func (m *WorkerManager) start(w *Worker) {
 		if w.UID != 0 {
 			chownTree(w.Sessions, w.UID)
 			chownTree(w.Workspace, w.UID)
+			chownTree(w.Skills, w.UID)
 		}
 		// A grant approved under other permissions than this image declares
 		// is asked again, once per worker start: the holder sees the ask in
@@ -379,7 +391,7 @@ func (m *WorkerManager) prepare(w *Worker) error {
 			return fmt.Errorf("%s: %w", root, err)
 		}
 	}
-	for _, d := range []string{w.Dir, filepath.Dir(w.Sessions), w.Sessions, w.Workspace, w.Home} {
+	for _, d := range []string{w.Dir, filepath.Dir(w.Sessions), w.Sessions, w.Workspace, w.Home, w.Skills} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			return err
 		}
@@ -513,6 +525,11 @@ func (m *WorkerManager) command(w *Worker) (*exec.Cmd, error) {
 	}
 	env["HOME"] = w.Workspace
 	env["DSH_HOME"] = w.Home
+	// Where this worker's agent finds skills: the deployment's reference set
+	// first, then the holder's own (mirrored from their Drive), read by the
+	// measured preset. Naming them here rather than in the image keeps the
+	// per-user path out of the measurement.
+	env["PRIVASYS_SKILL_DIRS"] = envOr("HARNESS_SEED_SKILLS", "/data/skills") + ":" + w.Skills
 	env["PRIVASYS_BEARER"] = w.Token
 	env["DEEPSEEK_API_KEY"] = w.Token
 	// dsh (overlay 2b) refuses any request without this token, so the

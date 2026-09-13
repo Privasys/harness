@@ -187,7 +187,18 @@ if [[ "$HARNESS_WORKERS" == "1" ]]; then
   for private in /data/sessions /data/workspace /data/policy; do
     [[ -d "$private" ]] && chmod 700 "$private"
   done
-  mkdir -p /data/skills && chmod -R a+rX /data/skills
+  # The deployment's reference skills, refreshed from the IMAGE on every boot:
+  # they are the measured ones, and a holder's own copies live in their Drive
+  # (seeded from here, then theirs), never here.
+  mkdir -p /data/skills
+  # `set -e` is on: a bare `[[ -d … ]] && cp` would END THE BOOT on an image
+  # built without the skills stage (a rollback, say). An absent or unreadable
+  # reference set costs the holder their seeded skills, never their harness.
+  if [[ -d /app/skills ]]; then
+    cp -a /app/skills/. /data/skills/ 2>/dev/null || echo "[harness] reference skills not copied" >&2
+  fi
+  rm -rf /data/skills/.github /data/skills/README.md 2>/dev/null || true
+  chmod -R a+rX /data/skills
   echo "[harness] volume layout for workers: /data $(stat -c '%a uid=%u' /data), /data/users $(stat -c '%a' /data/users), /data/skills $(stat -c '%a' /data/skills)"
 fi
 EGRESS_PROXY_LISTEN=127.0.0.1:9411 \
@@ -329,8 +340,14 @@ fi
 # harness source tree. Work now belongs on the tmpfs workspace root resolved
 # above, mirrored to the user's Drive — the enclave keeps no copy.
 # The deployment-owned skill root (presets pin skill discovery to it,
-# includeDefaultRoots:false — see app/profile notes + the preset overlay).
+# includeDefaultRoots:false — see app/profile notes + the preset overlay),
+# refreshed from the image so a rollback deployment is not left with an empty
+# one. The workers path above does the same before the proxy starts.
 mkdir -p /data/skills
+if [[ -d /app/skills ]]; then
+  cp -a /app/skills/. /data/skills/ 2>/dev/null || echo "[harness] reference skills not copied" >&2
+fi
+rm -rf /data/skills/.github /data/skills/README.md 2>/dev/null || true
 cd "$WORKSPACE_ROOT"
 
 if [[ "$HARNESS_WORKERS" == "1" ]]; then

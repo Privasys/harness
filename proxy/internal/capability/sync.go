@@ -43,6 +43,11 @@ import (
 const (
 	sessionsFolder  = "sessions"
 	workspaceFolder = "workspace"
+	// skillsFolder holds the behaviour the holder can edit: Markdown the
+	// agent reads at run time. Their Drive is the source of truth for it —
+	// the harness only seeds it once and reads it back — so a person can
+	// change what their assistant does in a text editor, with no deploy.
+	skillsFolder = "skills"
 	blobsFolder     = ".blobs"
 	manifestName    = ".workspace.json"
 	// maxSnapshotFile bounds one blob. Drive's inline write cap is 64 MiB;
@@ -77,6 +82,14 @@ type Syncer struct {
 	appID     string
 	sessions  string // local session root
 	workspace string // local workspace root
+	// skills is the local skills root, empty when this deployment does not
+	// carry per-holder skills. Unlike the other two it is pulled every pass:
+	// the holder edits these files in Drive, not here.
+	skills string
+	// seeds is the deployment's reference skills, copied into the holder's
+	// Drive once (and only where they have no skill of that name), so the
+	// folder they open is not empty.
+	seeds string
 	// subject binds this syncer to one person (per-user workers); empty
 	// means the process-wide acting subject (single-user layout).
 	subject string
@@ -187,6 +200,188 @@ func (s *Syncer) RestoreFor(subject string) (int, error) {
 		s.mu.Unlock()
 	}
 	return n, err
+}
+
+// SetSkillsRoot wires a local skills directory to `skills/` in the holder's
+// Drive folder, seeded from the deployment's reference skills. Set per worker;
+// empty leaves the harness on deployment-owned skills alone.
+func (s *Syncer) SetSkillsRoot(local, seeds string) {
+	s.mu.Lock()
+	s.skills, s.seeds = local, seeds
+	s.mu.Unlock()
+}
+
+// syncSkills makes the holder's Drive the source of truth for what their
+// assistant does. Every pass pulls what changed there into the local root, so
+// editing SKILL.md in Drive changes the next session's behaviour with no
+// deploy and no build. It pushes in one case only: a reference skill this
+// deployment ships that the holder does not have yet, so the folder they open
+// has something in it to edit. Nothing local is ever uploaded over a file
+// they changed, because the agent never writes here.
+func (s *Syncer) syncSkills(ds *DriveStore) error {
+	s.mu.Lock()
+	local, seeds := s.skills, s.seeds
+	s.mu.Unlock()
+	if local == "" {
+		return nil
+	}
+	if err := os.MkdirAll(local, 0o700); err != nil {
+		return err
+	}
+	root, err := s.folderIfExists(ds, skillsFolder)
+	if err != nil {
+		return err
+	}
+	if root == "" {
+		if root, err = ds.EnsureFolder(ds.RootID(), skillsFolder); err != nil {
+			return err
+		}
+	}
+	pulled, err := s.pullSkills(ds, root, local, skillsFolder)
+	if err != nil {
+		return err
+	}
+	seeded, err := s.seedSkills(ds, root, seeds)
+	if err != nil {
+		return err
+	}
+	if pulled > 0 || seeded > 0 {
+		log.Printf("[sync] skills: %d file(s) read from the holder's Drive, %d reference file(s) seeded", pulled, seeded)
+	}
+	return nil
+}
+
+// pullSkills mirrors one Drive folder down, writing only what differs. The
+// count is files written, so a quiet pass logs nothing.
+func (s *Syncer) pullSkills(ds *DriveStore, nodeID, dir, rel string) (int, error) {
+	children, err := ds.ListIn(nodeID)
+	if err != nil {
+		return 0, err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, c := range children {
+		if isLockFile(c.Name) || strings.HasPrefix(c.Name, ".") {
+			continue
+		}
+		target := filepath.Join(dir, c.Name)
+		if c.IsFolder() {
+			n, err := s.pullSkills(ds, c.ID, target, rel+"/"+c.Name)
+			count += n
+			if err != nil {
+				return count, err
+			}
+			continue
+		}
+		data, err := ds.Get(c.ID)
+		if err != nil {
+			return count, err
+		}
+		if sameOnDisk(target, data) {
+			continue
+		}
+		if err := os.WriteFile(target, data, 0o600); err != nil {
+			return count, err
+		}
+		s.mu.Lock()
+		s.uploaded[rel+"/"+c.Name] = contentHash(data)
+		s.mu.Unlock()
+		count++
+	}
+	return count, nil
+}
+
+// sameOnDisk reports whether the local file already holds exactly this
+// content. Pulling is therefore a no-op for an unchanged skill, and a holder
+// who edited one in Drive gets their version, byte for byte.
+func sameOnDisk(path string, data []byte) bool {
+	have, err := os.ReadFile(path)
+	return err == nil && contentHash(have) == contentHash(data)
+}
+
+// seedable picks the reference skills to copy into a holder's Drive: the ones
+// they do not already have by name, dotfiles aside. A skill they have is
+// theirs and has diverged, so it is never refreshed from the deployment.
+func seedable(have map[string]bool, names []string) []string {
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		if have[n] || strings.HasPrefix(n, ".") {
+			continue
+		}
+		out = append(out, n)
+	}
+	return out
+}
+
+// seedSkills copies the deployment's reference skills into the holder's Drive,
+// skipping any whose top-level name they already have: once a skill is theirs
+// it diverges, and a "refresh" that overwrote their edits would make the
+// folder the deployment's again.
+func (s *Syncer) seedSkills(ds *DriveStore, root, seeds string) (int, error) {
+	if seeds == "" {
+		return 0, nil
+	}
+	existing, err := ds.ListIn(root)
+	if err != nil {
+		return 0, err
+	}
+	have := map[string]bool{}
+	for _, c := range existing {
+		have[c.Name] = true
+	}
+	entries, err := os.ReadDir(seeds)
+	if err != nil {
+		return 0, nil // no reference skills shipped: nothing to seed
+	}
+	byName := make(map[string]fs.DirEntry, len(entries))
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		byName[e.Name()] = e
+		names = append(names, e.Name())
+	}
+	count := 0
+	for _, name := range seedable(have, names) {
+		n, err := s.uploadSkillTree(ds, root, filepath.Join(seeds, name), byName[name])
+		count += n
+		if err != nil {
+			return count, err
+		}
+	}
+	return count, nil
+}
+
+// uploadSkillTree puts one reference skill (a file, or a directory of them)
+// into the holder's Drive folder.
+func (s *Syncer) uploadSkillTree(ds *DriveStore, parent, path string, entry fs.DirEntry) (int, error) {
+	if !entry.IsDir() {
+		data, err := os.ReadFile(path)
+		if err != nil || len(data) > maxSnapshotFile {
+			return 0, nil
+		}
+		if _, err := ds.PutIn(parent, entry.Name(), data); err != nil {
+			return 0, err
+		}
+		return 1, nil
+	}
+	folder, err := ds.EnsureFolder(parent, entry.Name())
+	if err != nil {
+		return 0, err
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, e := range entries {
+		n, err := s.uploadSkillTree(ds, folder, filepath.Join(path, e.Name()), e)
+		count += n
+		if err != nil {
+			return count, err
+		}
+	}
+	return count, nil
 }
 
 // NewSyncer wires the two local roots to the holder's Drive folder. appID is
@@ -351,6 +546,13 @@ func (s *Syncer) SyncOnce() error {
 		}
 	}
 
+	// The holder's own behaviour files, read from their Drive every pass: this
+	// is what makes the assistant a folder they edit rather than a build.
+	// Failures here never hold up the mirror; the agent simply runs on what it
+	// has, which is the deployment's reference skills at worst.
+	if err := s.syncSkills(ds); err != nil {
+		log.Printf("[sync] skills: %v", err)
+	}
 	sessErr := s.mirrorSessions(ds)
 	wsErr := s.snapshotWorkspace(ds)
 	s.noteOutcome(sessErr)
