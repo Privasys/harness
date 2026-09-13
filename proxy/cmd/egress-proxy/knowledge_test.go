@@ -41,7 +41,7 @@ func (m *memDocs) SaveNamed(sub, name string, raw []byte) error {
 
 func TestKnowledgeStoreDefaultsValidatesAndPersists(t *testing.T) {
 	docs := &memDocs{}
-	ks := newKnowledgeStore(docs)
+	ks := newKnowledgeStore(docs, nil, "")
 	if k := ks.For("sub", "ws-1"); k.Mode != knowledgeModeAll {
 		t.Fatalf("default must be all, got %+v", k)
 	}
@@ -62,7 +62,7 @@ func TestKnowledgeStoreDefaultsValidatesAndPersists(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A fresh store reads the document back; ws-1 and ws-2 hold, ws-3 is the default.
-	again := newKnowledgeStore(docs)
+	again := newKnowledgeStore(docs, nil, "")
 	if k := again.For("sub", "ws-2"); k.Mode != knowledgeModeOff {
 		t.Fatalf("off did not persist: %+v", k)
 	}
@@ -79,7 +79,7 @@ func TestKnowledgeStoreDefaultsValidatesAndPersists(t *testing.T) {
 		t.Fatal("the default must not be recorded")
 	}
 	// No Drive yet: the setting holds in memory and is reported unpersisted.
-	noDrive := newKnowledgeStore(&memDocs{refuse: true})
+	noDrive := newKnowledgeStore(&memDocs{refuse: true}, nil, "")
 	persisted, err = noDrive.Set("sub", "ws-1", driveKnowledge{Mode: knowledgeModeOff})
 	if err != nil || persisted {
 		t.Fatalf("no Drive: err=%v persisted=%v", err, persisted)

@@ -93,12 +93,16 @@ type namedDocs interface {
 // and writes through to their Drive.
 type knowledgeStore struct {
 	docs namedDocs
-	mu   sync.Mutex
-	byID map[string]*knowledgeDoc // by subject
+	// client and driveHost reach Drive, acting for the user, for the
+	// picker's folder listing (the attested egress client).
+	client    *http.Client
+	driveHost string
+	mu        sync.Mutex
+	byID      map[string]*knowledgeDoc // by subject
 }
 
-func newKnowledgeStore(docs namedDocs) *knowledgeStore {
-	return &knowledgeStore{docs: docs, byID: map[string]*knowledgeDoc{}}
+func newKnowledgeStore(docs namedDocs, client *http.Client, driveHost string) *knowledgeStore {
+	return &knowledgeStore{docs: docs, client: client, driveHost: driveHost, byID: map[string]*knowledgeDoc{}}
 }
 
 // doc returns the user's document, loading it once. A missing or unreadable
@@ -296,7 +300,9 @@ func fetchAIScope(r *http.Request, client *http.Client, driveHost, sub string) (
 	return out.Folders, out.AllScoped, nil
 }
 
-func registerKnowledgeAPI(mux *http.ServeMux, ks *knowledgeStore, client *http.Client, driveHost string) {
+// registerKnowledgeAPI mounts the UI's endpoints on the INGRESS mux: the
+// browser reaches them over the sealed session, never the loopback listener.
+func registerKnowledgeAPI(mux *http.ServeMux, ks *knowledgeStore) {
 	mux.HandleFunc("GET /privasys/workspaces/{id}/drive-knowledge", func(w http.ResponseWriter, r *http.Request) {
 		sub := r.Header.Get("X-Privasys-Sub")
 		if sub == "" {
@@ -309,7 +315,7 @@ func registerKnowledgeAPI(mux *http.ServeMux, ks *knowledgeStore, client *http.C
 		if k.Folders == nil {
 			out["folders"] = []string{}
 		}
-		folders, allScoped, err := fetchAIScope(r, client, driveHost, sub)
+		folders, allScoped, err := fetchAIScope(r, ks.client, ks.driveHost, sub)
 		if err != nil {
 			// The setting is still shown and saveable; only the picker's
 			// choices are missing, and the UI says why.

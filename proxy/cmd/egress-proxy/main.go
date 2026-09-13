@@ -393,8 +393,7 @@ func main() {
 	store.SetTenantBackend(tenantDocs)
 	// Per-workspace Drive knowledge (knowledge.go): the same per-user
 	// document storage, a second file, enforced on the tool leg.
-	knowledge = newKnowledgeStore(tenantDocs)
-	registerKnowledgeAPI(mux, knowledge, client, cfg.toolHosts["drive"])
+	knowledge = newKnowledgeStore(tenantDocs, client, cfg.toolHosts["drive"])
 	// Standing consent to per-call tool fees comes from that same document;
 	// the meter turns it into the byte-exact header and keeps the running
 	// total the per-session figure bounds.
@@ -646,6 +645,11 @@ func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp 
 	// Per-session sampling pins and faithful replay (sampling.go); read and
 	// written by the chat UI over the sealed session, applied on the model leg.
 	registerSamplingAPI(mux, sampling)
+	// Per-workspace Drive knowledge (knowledge.go), read and written by the
+	// workspace dialog over the sealed session.
+	if knowledge != nil {
+		registerKnowledgeAPI(mux, knowledge)
+	}
 	if mgr != nil {
 		// Operators' view of the workers (no subjects, only keys).
 		mux.HandleFunc("GET /privasys/workers", func(w http.ResponseWriter, _ *http.Request) {
