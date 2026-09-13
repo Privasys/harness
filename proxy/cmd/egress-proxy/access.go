@@ -65,6 +65,34 @@ func currentAccessLegs() []resourceLeg {
 	return accessLegs
 }
 
+// servedLegs narrows the declared resources to the ones this fleet can
+// actually offer. ONE measured image serves several fleets, so it declares
+// every resource any of them serves; the runtime answers with the app that
+// serves each kind HERE (`resource_app`, stamped by the control plane), and
+// where that is empty there is no service to approve anything against.
+// Offering it anyway would have the agent propose connecting something that
+// does not exist on this fleet.
+//
+// Anything the holder already answered (approved or declined) stays listed
+// whatever the fleet now says, and so does a resource whose status cannot be
+// read: a broker hiccup must not quietly shrink what the user can see.
+func servedLegs(sub string, legs []resourceLeg) []resourceLeg {
+	if sub == "" {
+		return legs
+	}
+	out := make([]resourceLeg, 0, len(legs))
+	for _, l := range legs {
+		if !l.broker.Enabled() {
+			continue
+		}
+		st, err := l.broker.Status(sub)
+		if err != nil || st == nil || st.Persistent || st.Declined || st.ResourceApp != "" {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
 func accessTools(legs []resourceLeg) []map[string]any {
 	names := make([]string, 0, len(legs))
 	for _, l := range legs {
@@ -144,7 +172,13 @@ func accessShim(w http.ResponseWriter, r *http.Request) {
 	case "ping":
 		rpcResult(w, req.ID, map[string]any{})
 	case "tools/list":
-		rpcResult(w, req.ID, map[string]any{"tools": accessTools(legs)})
+		// Logged for the same reason the fleet shims log their catalogues: a
+		// tool that mounts with nothing looks exactly like a tool nobody
+		// wired, and this server has no upstream whose failure would show.
+		served := servedLegs(sub, legs)
+		tools := accessTools(served)
+		log.Printf("[mcp access] catalogue: %d tool(s), resources offered: %s", len(tools), legNames(served))
+		rpcResult(w, req.ID, map[string]any{"tools": tools})
 	case "tools/call":
 		var p struct {
 			Name      string          `json:"name"`
@@ -155,6 +189,11 @@ func accessShim(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		out, isErr := callAccessTool(p.Name, p.Arguments, sub, legs)
+		if isErr {
+			log.Printf("[mcp access] %s refused: %v", p.Name, out["error"])
+		} else {
+			log.Printf("[mcp access] %s for %.8s…", p.Name, sub)
+		}
 		text, _ := json.Marshal(out)
 		rpcResult(w, req.ID, map[string]any{
 			"content": []map[string]any{{"type": "text", "text": string(text)}},
@@ -169,15 +208,27 @@ func accessShim(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func legNames(legs []resourceLeg) string {
+	if len(legs) == 0 {
+		return "none"
+	}
+	names := make([]string, 0, len(legs))
+	for _, l := range legs {
+		names = append(names, l.name)
+	}
+	return strings.Join(names, ", ")
+}
+
 // callAccessTool runs one access tool for sub and returns the result the
 // model reads, and whether it is an error.
 func callAccessTool(name string, args json.RawMessage, sub string, legs []resourceLeg) (map[string]any, bool) {
 	if sub == "" {
 		return map[string]any{"error": "no signed-in user is bound to this session, so there is nobody to ask"}, true
 	}
+	served := servedLegs(sub, legs)
 	switch name {
 	case "list_access":
-		return listAccess(sub, legs), false
+		return listAccess(sub, served), false
 	case "request_access":
 		var a struct {
 			Resource string `json:"resource"`
@@ -188,7 +239,7 @@ func callAccessTool(name string, args json.RawMessage, sub string, legs []resour
 				return map[string]any{"error": "invalid arguments: " + err.Error()}, true
 			}
 		}
-		return requestAccess(sub, strings.TrimSpace(a.Resource), a.AskAgain, legs)
+		return requestAccess(sub, strings.TrimSpace(a.Resource), a.AskAgain, served, legs)
 	}
 	return map[string]any{"error": fmt.Sprintf("unknown tool %q", name)}, true
 }
@@ -241,17 +292,28 @@ func listAccess(sub string, legs []resourceLeg) map[string]any {
 	return map[string]any{"resources": items}
 }
 
-func requestAccess(sub, name string, askAgain bool, legs []resourceLeg) (map[string]any, bool) {
+// requestAccess puts one resource's approval to the holder's wallet. served
+// is what this fleet can offer; declared is everything the manifest declares,
+// so a resource that exists but has no service here is told apart from one
+// this assistant never declared at all.
+func requestAccess(sub, name string, askAgain bool, served, declared []resourceLeg) (map[string]any, bool) {
 	var leg *resourceLeg
-	names := make([]string, 0, len(legs))
-	for i := range legs {
-		names = append(names, legs[i].name)
-		if legs[i].name == name {
-			leg = &legs[i]
+	names := make([]string, 0, len(served))
+	for i := range served {
+		names = append(names, served[i].name)
+		if served[i].name == name {
+			leg = &served[i]
 		}
 	}
 	if leg == nil {
-		return map[string]any{"error": fmt.Sprintf("no resource %q; this assistant declares: %s", name, strings.Join(names, ", "))}, true
+		for i := range declared {
+			if declared[i].name == name {
+				return map[string]any{"error": "this assistant declares a " + name +
+					" resource, but no service for it is deployed here, so there is nothing to approve. " +
+					"Tell the user it is not available on this deployment."}, true
+			}
+		}
+		return map[string]any{"error": fmt.Sprintf("no resource %q; this assistant can ask for: %s", name, legNames(served))}, true
 	}
 	if !leg.broker.Enabled() {
 		return map[string]any{"error": "this assistant is not running on the platform, so there is nothing to approve"}, true

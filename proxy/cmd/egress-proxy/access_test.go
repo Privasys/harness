@@ -81,12 +81,8 @@ func toolText(t *testing.T, resp map[string]any) (map[string]any, bool) {
 	return out, isErr
 }
 
-// The catalogue names both tools and offers exactly the declared resources.
-// Nothing in it names a product: the server knows declarations, not services.
-func TestAccessCatalogueOffersTheDeclaredResources(t *testing.T) {
-	srv := fakeRuntime(t, nil, nil)
-	legs := withRuntime(t, srv, "sub-A")
-	resp := callAccessRPC(t, legs, "tools/list", map[string]any{})
+func resourceEnum(t *testing.T, resp map[string]any) []any {
+	t.Helper()
 	tools, _ := resp["result"].(map[string]any)["tools"].([]any)
 	if len(tools) != 2 {
 		t.Fatalf("want list_access and request_access, got %v", tools)
@@ -95,21 +91,73 @@ func TestAccessCatalogueOffersTheDeclaredResources(t *testing.T) {
 	if req["name"] != "request_access" {
 		t.Fatalf("second tool: %v", req["name"])
 	}
-	enum := req["inputSchema"].(map[string]any)["properties"].(map[string]any)["resource"].(map[string]any)["enum"].([]any)
+	props := req["inputSchema"].(map[string]any)["properties"].(map[string]any)
+	enum, _ := props["resource"].(map[string]any)["enum"].([]any)
+	return enum
+}
+
+// The catalogue names both tools and offers the declared resources this fleet
+// serves. Nothing in it names a product: the server knows declarations and
+// what the runtime says serves them, not services.
+func TestAccessCatalogueOffersTheDeclaredResources(t *testing.T) {
+	srv := fakeRuntime(t, map[string]string{
+		"storage": `{"kind":"storage.folder","resource_app":"cf7a0d58"}`,
+		"mailbox": `{"kind":"mail.mailbox","resource_app":"7958ba28"}`,
+	}, nil)
+	legs := withRuntime(t, srv, "sub-A")
+	resp := callAccessRPC(t, legs, "tools/list", map[string]any{})
+	enum := resourceEnum(t, resp)
 	if len(enum) != 2 || enum[0] != "mailbox" || enum[1] != "storage" {
 		t.Fatalf("resource enum: %v", enum)
 	}
-	desc := strings.ToLower(req["description"].(string))
+	tools, _ := resp["result"].(map[string]any)["tools"].([]any)
+	desc := strings.ToLower(tools[1].(map[string]any)["description"].(string))
 	if !strings.Contains(desc, "never ask the user to type a password") {
 		t.Fatal("the description must keep credentials out of the conversation")
 	}
 }
 
-// Each resource reports its state as the runtime knows it, and what the
-// granting service returned is passed on untouched.
-func TestListAccessReportsEachResource(t *testing.T) {
+// ONE image serves several fleets, so it declares every resource any fleet
+// serves. Where this fleet deploys no service for a kind (the runtime returns
+// no resource_app), the agent must not be offered it at all: proposing to
+// connect something that does not exist here is worse than silence.
+func TestAccessHidesResourcesThisFleetDoesNotServe(t *testing.T) {
 	srv := fakeRuntime(t, map[string]string{
-		"storage": `{"persistent":true,"kind":"storage.folder","label":"Harness","permissions":["read","write"]}`,
+		"storage": `{"kind":"storage.folder","resource_app":"cf7a0d58"}`,
+		"mailbox": `{"kind":"mail.mailbox"}`,
+	}, map[string]string{"mailbox": `{"status":"pending","nonce":"n-1","app_host":"h"}`})
+	legs := withRuntime(t, srv, "sub-A")
+
+	enum := resourceEnum(t, callAccessRPC(t, legs, "tools/list", map[string]any{}))
+	if len(enum) != 1 || enum[0] != "storage" {
+		t.Fatalf("only served resources may be offered: %v", enum)
+	}
+	out, _ := toolText(t, callAccessRPC(t, legs, "tools/call", map[string]any{"name": "list_access"}))
+	items := out["resources"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["resource"] != "storage" {
+		t.Fatalf("list: %v", items)
+	}
+	// Declared but unserved is told apart from never declared, and neither
+	// reaches the runtime.
+	out, isErr := toolText(t, callAccessRPC(t, legs, "tools/call", map[string]any{
+		"name": "request_access", "arguments": map[string]any{"resource": "mailbox"},
+	}))
+	if !isErr || !strings.Contains(out["error"].(string), "no service for it is deployed here") {
+		t.Fatalf("unserved resource: %v", out)
+	}
+	out, isErr = toolText(t, callAccessRPC(t, legs, "tools/call", map[string]any{
+		"name": "request_access", "arguments": map[string]any{"resource": "calendar"},
+	}))
+	if !isErr || !strings.Contains(out["error"].(string), "can ask for: storage") {
+		t.Fatalf("undeclared resource: %v", out)
+	}
+}
+
+// An outcome the holder already gave stays visible even if the fleet's
+// mapping is missing: their answer is theirs, not the deployment's.
+func TestAccessKeepsAnsweredResourcesVisible(t *testing.T) {
+	srv := fakeRuntime(t, map[string]string{
+		"storage": `{"declined":true,"kind":"storage.folder"}`,
 		"mailbox": `{"persistent":true,"kind":"mail.mailbox","label":"Mail Connector","service_result":{"account":"you@example.com"}}`,
 	}, nil)
 	legs := withRuntime(t, srv, "sub-A")
@@ -118,33 +166,25 @@ func TestListAccessReportsEachResource(t *testing.T) {
 		t.Fatalf("list_access errored: %v", out)
 	}
 	items := out["resources"].([]any)
+	if len(items) != 2 {
+		t.Fatalf("both answered resources must stay: %v", items)
+	}
 	mailbox := items[0].(map[string]any)
-	if mailbox["resource"] != "mailbox" || mailbox["state"] != "approved" {
+	if mailbox["state"] != "approved" || mailbox["details"].(map[string]any)["account"] != "you@example.com" {
 		t.Fatalf("mailbox: %v", mailbox)
 	}
-	if mailbox["details"].(map[string]any)["account"] != "you@example.com" {
-		t.Fatalf("service result not passed on: %v", mailbox)
-	}
-	if items[1].(map[string]any)["state"] != "approved" {
+	if items[1].(map[string]any)["state"] != "declined" {
 		t.Fatalf("storage: %v", items[1])
-	}
-
-	srv2 := fakeRuntime(t, map[string]string{
-		"storage": `{"declined":true,"kind":"storage.folder"}`,
-		"mailbox": `{"kind":"mail.mailbox"}`,
-	}, nil)
-	legs = withRuntime(t, srv2, "sub-B")
-	out, _ = toolText(t, callAccessRPC(t, legs, "tools/call", map[string]any{"name": "list_access"}))
-	items = out["resources"].([]any)
-	if items[0].(map[string]any)["state"] != "not_approved" || items[1].(map[string]any)["state"] != "declined" {
-		t.Fatalf("states: %v", items)
 	}
 }
 
 // A request puts a question to the user's device and tells the agent what to
 // say; a declined one is not reopened unless the user asks again.
 func TestRequestAccessSendsOrExplains(t *testing.T) {
-	srv := fakeRuntime(t, nil, map[string]string{
+	srv := fakeRuntime(t, map[string]string{
+		"storage": `{"declined":true,"kind":"storage.folder","resource_app":"cf7a0d58"}`,
+		"mailbox": `{"kind":"mail.mailbox","resource_app":"7958ba28"}`,
+	}, map[string]string{
 		"mailbox": `{"status":"pending","nonce":"n-123","app_host":"assistant.example"}`,
 		"storage": `{"status":"declined"}`,
 	})
@@ -162,13 +202,6 @@ func TestRequestAccessSendsOrExplains(t *testing.T) {
 	}))
 	if isErr || !strings.Contains(out["message"].(string), "ask_again") {
 		t.Fatalf("declined: %v", out)
-	}
-
-	out, isErr = toolText(t, callAccessRPC(t, legs, "tools/call", map[string]any{
-		"name": "request_access", "arguments": map[string]any{"resource": "calendar"},
-	}))
-	if !isErr || !strings.Contains(out["error"].(string), "mailbox, storage") {
-		t.Fatalf("unknown resource: %v", out)
 	}
 }
 
