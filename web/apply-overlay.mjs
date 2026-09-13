@@ -790,11 +790,13 @@ const SKILL_ROW_PRIVASYS =
   `- id: skill-filesystem\n` +
   `  name: '@deepseek-ai/dsh-skill-filesystem'\n` +
   `  config:\n` +
-  `    # Privasys: skills come ONLY from the deployment-owned directory on the\n` +
-  `    # encrypted volume — never the dsh checkout's own development skills.\n` +
+  `    # Privasys: skills come ONLY from directories the deployment names —\n` +
+  `    # never the dsh checkout's own development skills. The proxy sets\n` +
+  `    # PRIVASYS_SKILL_DIRS per worker: the deployment's reference skills\n` +
+  `    # plus that holder's own, mirrored from their Drive. No per-user path\n` +
+  `    # is compiled into the image.\n` +
   `    includeDefaultRoots: false\n` +
-  `    customSkillDirs:\n` +
-  `      - /data/skills\n` +
+  `    customSkillDirs: !!js "(process.env.PRIVASYS_SKILL_DIRS || '/data/skills').split(':').filter(Boolean)"\n` +
   `    watch: false\n` +
   `\n` +
   `- id: tool-skill`

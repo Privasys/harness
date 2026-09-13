@@ -103,6 +103,18 @@ RUN pnpm run build \
 #   trees are DeepSeek-authored content an fs tool could surface. LICENSE and
 #   THIRD_PARTY_NOTICES.md are deliberately KEPT (MIT attribution).
 
+# ---- reference skills at a pin --------------------------------------------
+# What the assistant DOES is a folder of Markdown, not code: these are the
+# deployment's reference skills, copied once into each holder's Drive and
+# theirs to edit from then on (proxy capability/sync.go). Pinned and cloned
+# rather than vendored, so the public repo stays the one place they live, and
+# so the image's identity commits to exactly this text.
+FROM node:22-bookworm AS skills-builder
+ARG SKILLS_PIN=cf3db3ee1e361c05d7113be0a8c370aa673ad741
+RUN git clone https://github.com/Privasys/agent-skills /skills \
+ && git -C /skills checkout "${SKILLS_PIN}" \
+ && rm -rf /skills/.git
+
 # ---- runtime --------------------------------------------------------------
 FROM node:22-bookworm-slim
 # corepack prepare pins pnpm INSIDE the image: an enclave has no free
@@ -131,6 +143,10 @@ COPY app/smoke.cordis.yml /app/smoke.cordis.yml
 # enterprise-owned harness sets its own ceiling on the volume instead (see
 # policy.Store.LoadCeiling).
 COPY app/ceiling.json /app/ceiling.json
+# The reference skills, in the measurement: a verifier who checks the image
+# has checked the behaviour this deployment offers, before any holder edits
+# their own copy.
+COPY --from=skills-builder /skills /app/skills
 COPY app/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 # The measured web profile (plugins + frontend) is baked at /dsh-home. Only
