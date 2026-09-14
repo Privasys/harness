@@ -73,6 +73,15 @@ func mcpShim(w http.ResponseWriter, r *http.Request, client *http.Client, toolNa
 		http.Error(w, "read body", http.StatusBadRequest)
 		return
 	}
+	// A JSON-RPC RESPONSE from the client is the holder's answer to a tool's
+	// question (elicit.go): it goes to the tool call waiting for it.
+	if id, ok := isRPCResponse(body); ok {
+		if !deliverElicitResponse(id, body) {
+			log.Printf("[mcp %s] an answer arrived for no open question (%s)", toolName, id)
+		}
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
 	var req rpcRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		rpcError(w, nil, -32700, "parse error")
@@ -83,10 +92,13 @@ func mcpShim(w http.ResponseWriter, r *http.Request, client *http.Client, toolNa
 	case "initialize":
 		rpcResult(w, req.ID, map[string]any{
 			"protocolVersion": mcpProtocolVersion,
-			"capabilities":    map[string]any{"tools": map[string]any{}},
+			// Tools, and questions to the holder in the middle of a call
+			// (elicitation, elicit.go): the client advertises whether it can
+			// show them; a tool app asks only when it must.
+			"capabilities": map[string]any{"tools": map[string]any{}},
 			"serverInfo": map[string]any{
 				"name":    "privasys-egress-proxy/" + toolName,
-				"version": "0.1.0",
+				"version": "0.2.0",
 			},
 		})
 	case "notifications/initialized", "notifications/cancelled":
@@ -173,6 +185,17 @@ func mcpShim(w http.ResponseWriter, r *http.Request, client *http.Client, toolNa
 		result, status, price, err := callTool(r, client, host, p.Name, args, "", sub)
 		if err != nil {
 			rpcError(w, req.ID, -32000, fmt.Sprintf("tool call: %v", err))
+			return
+		}
+		// The tool needs the holder's answer first (elicit.go): the question
+		// goes to the person on dsh's own surface, the answer to the tool app
+		// alone, and the model sees only the final result.
+		if ask, ok := parseElicit(status, result); ok {
+			elicitAndRetry(w, r, req.ID, toolName, p.Name, args, ask, knowledgeMeta(req.Params),
+				func(a json.RawMessage) ([]byte, int, error) {
+					res, st, _, err := callTool(r, client, host, p.Name, a, "", sub)
+					return res, st, err
+				})
 			return
 		}
 		// A priced tool: the runtime refused with the exact attested price.
