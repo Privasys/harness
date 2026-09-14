@@ -399,14 +399,37 @@ func (m *WorkerManager) start(w *Worker) {
 				// proof that the routines door composed is to knock: the
 				// plugin answers a GET with 405, a missing route with 404,
 				// and a realm that failed to start does not answer at all.
-				knock, _ := http.NewRequest(http.MethodGet, w.RoutineDoor(), nil)
-				knock.Header.Set("X-Privasys-Ingress-Token", w.Ingress) // the guard fronts this listener too
-				if dr, derr := http.DefaultClient.Do(knock); derr != nil {
-					log.Printf("[workers] %s: routines door NOT listening (%v); unattended runs cannot be dispatched to this worker", w.Key, derr)
-				} else {
-					dr.Body.Close()
-					log.Printf("[workers] %s: routines door answers %d (405 = composed)", w.Key, dr.StatusCode)
-				}
+				// The door's route registers only once dsh's webhook runtime has
+				// activated, which waits for the workspace registry, which on a
+				// real holder's data comes up AFTER the main port answers (the
+				// first knock, 2026-09-14, read 404 at that instant). Knock for
+				// up to a minute and log when it came up.
+				go func() {
+					started := time.Now()
+					for {
+						knock, _ := http.NewRequest(http.MethodGet, w.RoutineDoor(), nil)
+						knock.Header.Set("X-Privasys-Ingress-Token", w.Ingress) // the guard fronts this listener too
+						dr, derr := http.DefaultClient.Do(knock)
+						code := 0
+						if derr == nil {
+							dr.Body.Close()
+							code = dr.StatusCode
+						}
+						if code == http.StatusMethodNotAllowed {
+							log.Printf("[workers] %s: routines door composed after %s", w.Key, time.Since(started).Round(time.Second))
+							return
+						}
+						if time.Since(started) > time.Minute {
+							log.Printf("[workers] %s: routines door NOT composed after a minute (last answer %d, %v); unattended runs would be refused", w.Key, code, derr)
+							return
+						}
+						select {
+						case <-w.exited:
+							return
+						case <-time.After(2 * time.Second):
+						}
+					}
+				}()
 				return
 			}
 		}
