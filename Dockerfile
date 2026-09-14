@@ -135,6 +135,9 @@ COPY --from=dsh-builder /dsh /dsh
 COPY --from=dsh-builder /dsh-home /dsh-home
 COPY --from=proxy-builder /egress-proxy /usr/local/bin/egress-proxy
 COPY app/profile.cordis.yml /app/profile.cordis.yml
+# The routines door (a dsh plugin the proxy composes per worker) lives INSIDE
+# the CLI's tree so its bare imports of dsh packages resolve from there.
+COPY app/privasys-routines.mjs /dsh/apps/cli/config/privasys/privasys-routines.mjs
 COPY app/smoke.cordis.yml /app/smoke.cordis.yml
 # The service ceiling, IN THE IMAGE and therefore in the measurement. The
 # proxy also publishes its digest at OID 5.4.9, but baking it here gives the
