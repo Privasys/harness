@@ -50,6 +50,17 @@ func TestNormaliseModelErrorFoldsStringError(t *testing.T) {
 	}
 }
 
+func TestSpendConsentBodyNamesTheSignIn(t *testing.T) {
+	e := decodeModelError(t, spendConsentBody())
+	msg, _ := e["message"].(string)
+	if e["code"] != "spend_consent_required" || !strings.Contains(msg, "sign in again") || !strings.Contains(msg, "402") {
+		t.Fatalf("the consent refusal must carry its code, the status and the remedy: %v", e)
+	}
+	if strings.Contains(msg, "open a Privasys") || strings.Contains(msg, "funded") {
+		t.Fatalf("a holder with an account must not be told to open one: %q", msg)
+	}
+}
+
 func TestNormaliseModelErrorHandlesTextAndEmpty(t *testing.T) {
 	out, _ := normaliseModelError(503, []byte("upstream not ready"))
 	msg, _ := decodeModelError(t, out)["message"].(string)

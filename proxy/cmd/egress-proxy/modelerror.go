@@ -67,6 +67,17 @@ func refusedModelLegBody(err error) []byte {
 		"The attested model (Confidential AI) was refused by the harness's peer gate: "+err.Error())
 }
 
+// spendConsentBody words a callee's 402 for a holder who has not allowed this
+// harness to spend their credits. The generic wording sends them to open an
+// account they already have (2026-09-13, 09-14); what fixes it is a sign-in,
+// because the wallet ceremony is the one screen that asks.
+func spendConsentBody() []byte {
+	return modelErrorBody("spend_consent_required",
+		"This assistant is not yet allowed to spend your Privasys credits, so the attested model "+
+			"(Confidential AI) refused the call (HTTP 402). Sign out of the assistant and sign in again: "+
+			"your wallet will ask you to allow it, with a monthly cap.")
+}
+
 // normaliseModelError returns the body to serve for an upstream error
 // response, and whether it was rewritten. A body that already carries an
 // OpenAI-shaped error with a message passes through untouched (vLLM's own
