@@ -426,6 +426,12 @@ func main() {
 		go mgr.Reap(context.Background())
 		syncer.SetReady()
 		log.Printf("[workers] per-user dsh workers enabled (uids=%v idle=%s)", mgr.useUIDs, mgr.idle)
+		// Unattended runs of the holders' agents (routines.go): the proxy
+		// owns the clock and holds the mail change feed; a run is a session
+		// dispatched into the worker through its routines door.
+		routines := newRoutineEngine(mgr, client, cfg.toolHosts["mail"], envOr("HARNESS_USERS_DIR", "/data/users"))
+		routines.Load()
+		routines.Start(context.Background())
 	} else {
 		syncer.LoadState()
 		// Boot-time restore for the subject this deployment remembered: dsh
