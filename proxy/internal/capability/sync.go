@@ -252,7 +252,9 @@ func (s *Syncer) syncSkills(ds *DriveStore) error {
 		return err
 	}
 	if pulled > 0 || seeded > 0 {
-		log.Printf("[sync] skills: %d file(s) read from the holder's Drive, %d reference file(s) seeded", pulled, seeded)
+		// The holder is named so that two workers seeding two Drives are
+		// not read as one mirror seeding twice (prod, 2026-09-14).
+		log.Printf("[sync] skills for %.8s…: %d file(s) read from the holder's Drive, %d reference file(s) seeded", s.subject, pulled, seeded)
 	}
 	return nil
 }

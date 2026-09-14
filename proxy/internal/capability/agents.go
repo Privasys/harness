@@ -214,7 +214,7 @@ func (s *Syncer) syncAgents(ds *DriveStore) error {
 	s.agents = seen
 	s.mu.Unlock()
 	if pulled > 0 || pushed > 0 {
-		log.Printf("[sync] agents: %d agent(s), %d definition file(s) read from the holder's Drive, %d output file(s) written to it", len(seen), pulled, pushed)
+		log.Printf("[sync] agents for %.8s…: %d agent(s), %d definition file(s) read from the holder's Drive, %d output file(s) written to it", s.subject, len(seen), pulled, pushed)
 	}
 	return nil
 }
