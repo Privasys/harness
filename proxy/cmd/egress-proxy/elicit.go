@@ -44,6 +44,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 )
@@ -177,13 +178,18 @@ func elicitAndRetry(w http.ResponseWriter, r *http.Request, reqID json.RawMessag
 	elicitPending.Store(id, ch)
 	defer elicitPending.Delete(id)
 
+	// The client validates the schema strictly, and "password" is not one
+	// of MCP's string formats, so the secret marking travels in _meta
+	// (which the client passes through) and the schema goes out standard.
+	schema, secrets := liftSecrets(ask.RequestedSchema)
 	params := map[string]any{
 		"message":         ask.Message,
-		"requestedSchema": ask.RequestedSchema,
+		"requestedSchema": schema,
 		"_meta": map[string]any{
 			"privasysSession": sessionID,
 			"privasysServer":  toolName,
 			"privasysTool":    fn,
+			"privasysSecrets": secrets,
 		},
 	}
 	if err := sse.send(map[string]any{"jsonrpc": "2.0", "id": id, "method": "elicitation/create", "params": params}); err != nil {
@@ -242,6 +248,35 @@ func elicitAndRetry(w http.ResponseWriter, r *http.Request, reqID json.RawMessag
 	}
 	log.Printf("[mcp %s] elicitation %s: answered; %s -> %d", toolName, id, fn, status)
 	final(string(result), status < 200 || status >= 300)
+}
+
+// liftSecrets returns the schema with `format: "password"` removed from its
+// string properties, and the names of those properties. A tool app marks a
+// secret that way (our contract); the wire carries the mark in _meta.
+func liftSecrets(schema json.RawMessage) (json.RawMessage, []string) {
+	secrets := []string{}
+	var s map[string]any
+	if err := json.Unmarshal(schema, &s); err != nil {
+		return schema, secrets
+	}
+	props, _ := s["properties"].(map[string]any)
+	names := make([]string, 0, len(props))
+	for name := range props {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		p, _ := props[name].(map[string]any)
+		if f, _ := p["format"].(string); f == "password" {
+			delete(p, "format")
+			secrets = append(secrets, name)
+		}
+	}
+	out, err := json.Marshal(s)
+	if err != nil {
+		return schema, secrets
+	}
+	return out, secrets
 }
 
 // mergeArgs lays the answers over the model's arguments; an answer wins.

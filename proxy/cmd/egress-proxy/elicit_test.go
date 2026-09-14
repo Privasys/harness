@@ -121,3 +121,16 @@ func TestElicitationDeclineEndsTheCallReadably(t *testing.T) {
 		t.Fatalf("a decline must end the call as a readable tool error: %q", rec.Body.String())
 	}
 }
+
+func TestSecretsAreLiftedIntoMetaAndTheSchemaGoesOutStandard(t *testing.T) {
+	schema, secrets := liftSecrets(json.RawMessage(`{"type":"object","properties":{"user":{"type":"string","format":"email"},"password":{"type":"string","format":"password","title":"App password"}},"required":["user","password"]}`))
+	if len(secrets) != 1 || secrets[0] != "password" {
+		t.Fatalf("secrets = %v", secrets)
+	}
+	if strings.Contains(string(schema), `"password","title"`) && strings.Contains(string(schema), `"format":"password"`) {
+		t.Fatalf("the non-standard format must leave the schema: %s", schema)
+	}
+	if !strings.Contains(string(schema), `"format":"email"`) || !strings.Contains(string(schema), `"title":"App password"`) {
+		t.Fatalf("standard fields must survive: %s", schema)
+	}
+}
