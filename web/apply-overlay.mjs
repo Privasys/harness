@@ -790,12 +790,17 @@ const SKILL_ROW_PRIVASYS =
   `- id: skill-filesystem\n` +
   `  name: '@deepseek-ai/dsh-skill-filesystem'\n` +
   `  config:\n` +
-  `    # Privasys: skills come ONLY from directories the deployment names —\n` +
-  `    # never the dsh checkout's own development skills. The proxy sets\n` +
-  `    # PRIVASYS_SKILL_DIRS per worker: the deployment's reference skills\n` +
-  `    # plus that holder's own, mirrored from their Drive. No per-user path\n` +
-  `    # is compiled into the image.\n` +
-  `    includeDefaultRoots: false\n` +
+  `    # Privasys: the proxy sets PRIVASYS_SKILL_DIRS per worker: that\n` +
+  `    # holder's own skills, mirrored from their Drive, then the\n` +
+  `    # deployment's reference set. No per-user path is compiled into the\n` +
+  `    # image. Default roots stay ON for one reason: dsh reads a\n` +
+  `    # workspace's own skills from <project root>/.agents/skills per\n` +
+  `    # session, which is how an AGENT's folder (mirrored there from the\n` +
+  `    # holder's Drive, proxy capability/agents.go) carries its own skills\n` +
+  `    # and outranks the shared set. The other defaults resolve under the\n` +
+  `    # worker's own home and are empty; the dsh checkout's development\n` +
+  `    # skills are never on the path because no session runs inside it.\n` +
+  `    includeDefaultRoots: true\n` +
   `    customSkillDirs: !!js "(process.env.PRIVASYS_SKILL_DIRS || '/data/skills').split(':').filter(Boolean)"\n` +
   `    watch: false\n` +
   `\n` +
