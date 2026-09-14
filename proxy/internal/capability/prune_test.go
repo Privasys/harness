@@ -26,9 +26,9 @@ func TestPruneNeverTouchesSkillsOrAgents(t *testing.T) {
 	uploaded := map[string]string{
 		"sessions/Chat/session-1/session.v3.jsonl.zstd": "a",
 		"sessions/Chat/session-2/session.v3.jsonl.zstd": "b", // deleted locally
-		"skills/inbox-triage/SKILL.md":                   "c",
-		"agents/Inbox triage/agent.md":                   "d",
-		"agents/Inbox triage/state/triage.jsonl":         "e",
+		"skills/inbox-triage/SKILL.md":                  "c",
+		"agents/Inbox triage/agent.md":                  "d",
+		"agents/Inbox triage/state/triage.jsonl":        "e",
 	}
 	expected := map[string]bool{"sessions/Chat/session-1/session.v3.jsonl.zstd": true}
 	got := staleUploads(uploaded, expected)
