@@ -4,9 +4,12 @@
 package attested
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"fmt"
+	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -17,6 +20,23 @@ import (
 
 	rc "enclave-os-mini/clients/go/ratls"
 )
+
+// verdictWindow is how long a pooled verified connection may be reused before
+// it is retired. The callee's runtime records the caller's attestation as a
+// verdict PER CONNECTION and forgets it after its re-attestation window
+// (enclave-os-virtual ingress, six minutes): from then on every request over
+// that connection is refused with "caller presented a certificate without
+// current evidence on this connection". A connection that is never idle for
+// IdleConnTimeout (a sync loop every fifteen seconds keeps it warm) would
+// otherwise live past the window and turn into a permanent refusal. Idle
+// connections are evicted every half window, so a fresh dial, which attests
+// again, happens well inside it.
+const verdictWindow = 5 * time.Minute
+
+// staleVerdictMarker is the callee runtime's wording when its verdict for the
+// connection is gone: the window passed, or its manager restarted and lost
+// the verdict while the TLS connection survived.
+const staleVerdictMarker = "without current evidence on this connection"
 
 // RATLSTransport is an http.RoundTripper that carries each request over a
 // freshly attested RA-TLS connection to the target enclave, instead of a
@@ -133,8 +153,84 @@ func (t *RATLSTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			MaxIdleConnsPerHost: 4,
 			IdleConnTimeout:     90 * time.Second,
 		}
+		// Retire verified connections inside the callee's verdict window
+		// (see verdictWindow). The transport lives as long as the process.
+		go func() {
+			for range time.Tick(verdictWindow / 2) {
+				t.pool.CloseIdleConnections()
+			}
+		}()
 	})
-	return t.pool.RoundTrip(req)
+	return roundTripStaleVerdict(t.pool, t.pool.CloseIdleConnections, req)
+}
+
+// roundTripStaleVerdict sends the request and, when the callee's runtime
+// answers that it holds no current verdict for the connection, evicts the
+// pooled connections and sends the request once more over a fresh, newly
+// attested dial. A request whose body cannot be replayed is not retried: the
+// refusal is returned as is, and the eviction happens when the caller closes
+// the body (the connection is only idle, hence evictable, after that), so the
+// NEXT request dials anew. Any other 403 passes through untouched: those are
+// the callee's decisions about the caller, not about the channel.
+func roundTripStaleVerdict(rt http.RoundTripper, evict func(), req *http.Request) (*http.Response, error) {
+	resp, err := rt.RoundTrip(req)
+	if err != nil || resp.StatusCode != http.StatusForbidden {
+		return resp, err
+	}
+	if !peekStaleVerdict(resp) {
+		return resp, nil
+	}
+	replayable := req.Body == nil || req.Body == http.NoBody || req.GetBody != nil
+	if !replayable {
+		resp.Body = &evictOnClose{ReadCloser: resp.Body, evict: evict}
+		return resp, nil
+	}
+	log.Printf("[ratls] %s: the callee holds no current verdict for the pooled connection; re-attesting on a fresh dial", req.URL.Host)
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	evict()
+	retry := req.Clone(req.Context())
+	if req.GetBody != nil {
+		body, gerr := req.GetBody()
+		if gerr != nil {
+			return nil, fmt.Errorf("ratls: replaying the request after re-attestation: %w", gerr)
+		}
+		retry.Body = body
+	}
+	return rt.RoundTrip(retry)
+}
+
+// peekStaleVerdict reads the head of a 403 body, reports whether it carries
+// the callee runtime's lapsed-verdict wording, and puts the bytes back so the
+// caller still reads the whole body.
+func peekStaleVerdict(resp *http.Response) bool {
+	if resp.Body == nil {
+		return false
+	}
+	head := make([]byte, 4096)
+	n, _ := io.ReadFull(resp.Body, head)
+	head = head[:n]
+	resp.Body = &prefixedBody{Reader: io.MultiReader(bytes.NewReader(head), resp.Body), Closer: resp.Body}
+	return bytes.Contains(head, []byte(staleVerdictMarker))
+}
+
+// prefixedBody is a response body whose first bytes were already read.
+type prefixedBody struct {
+	io.Reader
+	io.Closer
+}
+
+// evictOnClose evicts the pool's idle connections once the caller has closed
+// a response that proved the connection's verdict lapsed.
+type evictOnClose struct {
+	io.ReadCloser
+	evict func()
+}
+
+func (e *evictOnClose) Close() error {
+	err := e.ReadCloser.Close()
+	e.evict()
+	return err
 }
 
 // dialVerified performs one attested RA-TLS dial: fresh challenge, quote
