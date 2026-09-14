@@ -344,6 +344,10 @@ func (e *routineEngine) dispatch(ctx context.Context, st *routineState, a capabi
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(routineDoorToken, w.Ingress)
+	// dsh's ingress-token guard (overlay 2b) fronts EVERY listener of the
+	// worker, the isolated one included: without this header the door
+	// answers 401 before the plugin sees the request (seen 2026-09-14).
+	req.Header.Set("X-Privasys-Ingress-Token", w.Ingress)
 	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
 	if err != nil {
 		log.Printf("[routines] %.8s…/%s: the routines door did not answer: %v", st.Subject, a.Name, err)
