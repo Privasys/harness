@@ -1,0 +1,521 @@
+// Copyright (c) Privasys. All rights reserved.
+// Licensed under the GNU Affero General Public License v3.0.
+
+package capability
+
+// Agents: a folder per agent in the holder's Drive, a workspace per agent
+// in dsh (plan §3.6, decided 2026-09-14).
+//
+// An agent is `agents/<name>/` in the holder's Drive: `agent.md` (persona and
+// standing instructions), `agent.yaml` (trigger, budget, declared
+// resources), `skills/`, and two folders the runs write, `state/` and
+// `runs/`. The harness app stays the trust boundary; what the agent DOES is
+// this folder, which the holder reads, edits, exports and hands to someone
+// else, and which the chat itself writes through Drive's own tools.
+//
+// It is mirrored BY DIRECTION, per subfolder, so there is no merge and no
+// conflict: the definition is pulled (Drive is the source of truth, local
+// copies are owned by the proxy and read-only for the worker, so a stray
+// local write fails loudly instead of vanishing a tick later); `state/` and
+// `runs/` are pushed (the run writes them locally, they land in Drive, they
+// are never pulled). The agent's `skills/` is pulled to `.agents/skills/`
+// under the workspace, which is where dsh's skill provider looks for a
+// workspace's own skills; those outrank the holder's shared set.
+//
+// The local folder is a sibling of the holder's other workspaces, so dsh's
+// Files tab shows it as it shows any workspace, and the blob snapshot of the
+// working tree leaves it out: Drive already holds the truth of it.
+
+import (
+	"errors"
+	"fmt"
+	"io/fs"
+	"log"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
+
+const (
+	agentsFolder = "agents"
+	// agentSkillsLocal is where dsh's skill provider reads a workspace's own
+	// skills (`<project root>/.agents/skills`). Drive shows the plain name.
+	agentSkillsFolder = "skills"
+	agentSkillsLocal  = ".agents/skills"
+	agentSpecFile     = "agent.yaml"
+	agentPersonaFile  = "agent.md"
+	// maxAgentName bounds a folder name that becomes a workspace title.
+	maxAgentName = 64
+)
+
+// agentOutputDirs are the subfolders a RUN writes: pushed to Drive, never
+// pulled, owned by the worker.
+var agentOutputDirs = map[string]bool{"state": true, "runs": true}
+
+// AgentSpec is the parsed `agent.yaml`, plus where the agent lives.
+type AgentSpec struct {
+	Name string `yaml:"-"`
+	// Path is the local workspace directory dsh runs the agent in.
+	Path string `yaml:"-"`
+
+	// Prompt is what a scheduled run is asked to do. Empty means the agent
+	// runs only when a person asks in its workspace.
+	Prompt  string       `yaml:"prompt"`
+	Trigger AgentTrigger `yaml:"trigger"`
+	// Debounce collects a burst of events into one run; MinInterval is the
+	// shortest gap between two runs whatever arrives. Go durations.
+	Debounce    string `yaml:"debounce"`
+	MinInterval string `yaml:"min_interval"`
+	Paused      bool   `yaml:"paused"`
+	// Resources the agent declares it needs, by resource kind, so the
+	// conversation can ask for each consent it lacks.
+	Resources []string `yaml:"resources"`
+	Budget    struct {
+		CreditsPerRun int `yaml:"credits_per_run"`
+		CreditsPerDay int `yaml:"credits_per_day"`
+	} `yaml:"budget"`
+}
+
+// AgentTrigger is one of: every (a Go duration), at (a cron line), on (an
+// event source, e.g. "mail.changes").
+type AgentTrigger struct {
+	Every string `yaml:"every"`
+	At    string `yaml:"at"`
+	On    string `yaml:"on"`
+}
+
+// Scheduled reports whether the agent has any unattended trigger.
+func (a AgentSpec) Scheduled() bool {
+	return !a.Paused && (a.Trigger.Every != "" || a.Trigger.At != "" || a.Trigger.On != "")
+}
+
+// Durations returns the debounce and minimum interval with their defaults
+// (2 minutes and 10 minutes, plan §3.3).
+func (a AgentSpec) Durations() (debounce, minInterval time.Duration) {
+	debounce, minInterval = 2*time.Minute, 10*time.Minute
+	if d, err := time.ParseDuration(a.Debounce); err == nil && d >= 0 {
+		debounce = d
+	}
+	if d, err := time.ParseDuration(a.MinInterval); err == nil && d >= 0 {
+		minInterval = d
+	}
+	return debounce, minInterval
+}
+
+// parseAgentSpec reads an agent.yaml. An absent or empty file is a valid
+// agent with no trigger.
+func parseAgentSpec(data []byte) (AgentSpec, error) {
+	var spec AgentSpec
+	if len(strings.TrimSpace(string(data))) == 0 {
+		return spec, nil
+	}
+	if err := yaml.Unmarshal(data, &spec); err != nil {
+		return AgentSpec{}, err
+	}
+	if spec.Trigger.Every != "" {
+		if _, err := time.ParseDuration(spec.Trigger.Every); err != nil {
+			return AgentSpec{}, fmt.Errorf("trigger.every %q is not a duration", spec.Trigger.Every)
+		}
+	}
+	return spec, nil
+}
+
+// validAgentName accepts a Drive folder name as an agent: one path segment,
+// not hidden, short enough to be a workspace title.
+func validAgentName(name string) bool {
+	if name == "" || len(name) > maxAgentName || strings.HasPrefix(name, ".") {
+		return false
+	}
+	if strings.ContainsAny(name, `/\`) || name != strings.TrimSpace(name) {
+		return false
+	}
+	return name != "." && name != ".."
+}
+
+// SetAgentsRoot wires the holder's agents to a local root (the workspace
+// root: each agent becomes a sibling of the other workspaces) and names the
+// worker uid that owns the folders a run writes. Empty leaves agents off.
+func (s *Syncer) SetAgentsRoot(local string, uid int) {
+	s.mu.Lock()
+	s.agentsRoot, s.agentUID = local, uid
+	if s.agentDirs == nil {
+		s.agentDirs = map[string]bool{}
+	}
+	if s.agents == nil {
+		s.agents = map[string]AgentSpec{}
+	}
+	s.mu.Unlock()
+}
+
+// Agents returns the agents pulled on the last pass, sorted by name.
+func (s *Syncer) Agents() []AgentSpec {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]AgentSpec, 0, len(s.agents))
+	for _, a := range s.agents {
+		out = append(out, a)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// isAgentDir reports whether a top-level workspace entry is an agent folder
+// the mirror owns, so the snapshot leaves it out.
+func (s *Syncer) isAgentDir(name string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.agentDirs[name]
+}
+
+// syncAgents mirrors every agent folder: definition down, outputs up.
+func (s *Syncer) syncAgents(ds *DriveStore) error {
+	s.mu.Lock()
+	root, uid := s.agentsRoot, s.agentUID
+	s.mu.Unlock()
+	if root == "" {
+		return nil
+	}
+	agentsID, err := s.folderIfExists(ds, agentsFolder)
+	if err != nil || agentsID == "" {
+		return err // no agents folder yet: the chat creates it when asked
+	}
+	children, err := ds.ListIn(agentsID)
+	if err != nil {
+		return err
+	}
+	seen := map[string]AgentSpec{}
+	pulled, pushed := 0, 0
+	for _, c := range children {
+		if !c.IsFolder() || !validAgentName(c.Name) {
+			continue
+		}
+		local := filepath.Join(root, c.Name)
+		if !s.claimAgentDir(local, c.Name) {
+			log.Printf("[sync] agents: %q exists as a workspace that is not an agent; not mirroring over it", c.Name)
+			continue
+		}
+		n, spec, err := s.pullAgent(ds, c.ID, local, c.Name, uid)
+		pulled += n
+		if err != nil {
+			return err
+		}
+		m, err := s.pushAgentOutputs(ds, c.ID, local, c.Name)
+		pushed += m
+		if err != nil {
+			return err
+		}
+		seen[c.Name] = spec
+	}
+	s.mu.Lock()
+	s.agents = seen
+	s.mu.Unlock()
+	if pulled > 0 || pushed > 0 {
+		log.Printf("[sync] agents: %d agent(s), %d definition file(s) read from the holder's Drive, %d output file(s) written to it", len(seen), pulled, pushed)
+	}
+	return nil
+}
+
+// claimAgentDir marks a local directory as an agent's, refusing to take over
+// a directory the holder made themselves (a workspace that carries no agent
+// definition). A directory the mirror created is always its own.
+func (s *Syncer) claimAgentDir(local, name string) bool {
+	s.mu.Lock()
+	known := s.agentDirs[name]
+	s.mu.Unlock()
+	if known {
+		return true
+	}
+	if _, err := os.Stat(local); err == nil {
+		if _, perr := os.Stat(filepath.Join(local, agentPersonaFile)); perr != nil {
+			if _, serr := os.Stat(filepath.Join(local, agentSpecFile)); serr != nil {
+				return false
+			}
+		}
+	}
+	s.mu.Lock()
+	s.agentDirs[name] = true
+	s.mu.Unlock()
+	return true
+}
+
+// pullAgent mirrors one agent's definition down and makes it the proxy's:
+// directories 0755, files 0644, owned by root, so the worker reads and never
+// writes. The output folders exist, owned by the worker.
+func (s *Syncer) pullAgent(ds *DriveStore, nodeID, local, name string, uid int) (int, AgentSpec, error) {
+	if err := os.MkdirAll(local, 0o755); err != nil {
+		return 0, AgentSpec{}, err
+	}
+	children, err := ds.ListIn(nodeID)
+	if err != nil {
+		return 0, AgentSpec{}, err
+	}
+	rel := agentsFolder + "/" + name
+	present := map[string]bool{}
+	count := 0
+	for _, c := range children {
+		if agentOutputDirs[c.Name] || isLockFile(c.Name) || strings.HasPrefix(c.Name, ".") {
+			continue
+		}
+		target := filepath.Join(local, c.Name)
+		if c.IsFolder() {
+			if c.Name == agentSkillsFolder {
+				target = filepath.Join(local, filepath.FromSlash(agentSkillsLocal))
+			}
+			n, err := s.pullTree(ds, c.ID, target, rel+"/"+c.Name, 0o644, present)
+			count += n
+			if err != nil {
+				return count, AgentSpec{}, err
+			}
+			continue
+		}
+		data, err := ds.Get(c.ID)
+		if err != nil {
+			return count, AgentSpec{}, err
+		}
+		present[target] = true
+		if sameOnDisk(target, data) {
+			continue
+		}
+		if err := os.WriteFile(target, data, 0o644); err != nil {
+			return count, AgentSpec{}, err
+		}
+		s.mu.Lock()
+		s.uploaded[rel+"/"+c.Name] = contentHash(data)
+		s.mu.Unlock()
+		count++
+	}
+	pruned := pruneDefinition(local, present)
+	count += pruned
+	ownDefinition(local, uid)
+	for dir := range agentOutputDirs {
+		out := filepath.Join(local, dir)
+		_ = os.MkdirAll(out, 0o755)
+		chownAll(out, uid)
+	}
+	spec := AgentSpec{Name: name, Path: local}
+	if data, err := os.ReadFile(filepath.Join(local, agentSpecFile)); err == nil {
+		parsed, perr := parseAgentSpec(data)
+		if perr != nil {
+			log.Printf("[sync] agents: %s/%s: %v (the agent runs only when asked)", name, agentSpecFile, perr)
+		} else {
+			spec = parsed
+			spec.Name, spec.Path = name, local
+		}
+	}
+	return count, spec, nil
+}
+
+// pullTree mirrors one Drive folder down, writing only what differs, with the
+// given file mode. `present` collects the local paths the folder holds, for
+// pruning; nil to skip that.
+func (s *Syncer) pullTree(ds *DriveStore, nodeID, dir, rel string, perm os.FileMode, present map[string]bool) (int, error) {
+	children, err := ds.ListIn(nodeID)
+	if err != nil {
+		return 0, err
+	}
+	if err := os.MkdirAll(dir, perm|0o100); err != nil {
+		return 0, err
+	}
+	if present != nil {
+		present[dir] = true
+	}
+	count := 0
+	for _, c := range children {
+		if isLockFile(c.Name) || strings.HasPrefix(c.Name, ".") {
+			continue
+		}
+		target := filepath.Join(dir, c.Name)
+		if c.IsFolder() {
+			n, err := s.pullTree(ds, c.ID, target, rel+"/"+c.Name, perm, present)
+			count += n
+			if err != nil {
+				return count, err
+			}
+			continue
+		}
+		data, err := ds.Get(c.ID)
+		if err != nil {
+			return count, err
+		}
+		if present != nil {
+			present[target] = true
+		}
+		if sameOnDisk(target, data) {
+			continue
+		}
+		if err := os.WriteFile(target, data, perm); err != nil {
+			return count, err
+		}
+		s.mu.Lock()
+		s.uploaded[rel+"/"+c.Name] = contentHash(data)
+		s.mu.Unlock()
+		count++
+	}
+	return count, nil
+}
+
+// pruneDefinition removes local definition files the holder's Drive no
+// longer holds, so a deleted skill stops acting. Output folders are never
+// touched, and directories are left (a workspace path must keep existing).
+func pruneDefinition(local string, present map[string]bool) int {
+	removed := 0
+	_ = filepath.WalkDir(local, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if path == local {
+			return nil
+		}
+		relTop := firstSegment(local, path)
+		if agentOutputDirs[relTop] {
+			return filepath.SkipDir
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if !present[path] && !isLockFile(d.Name()) {
+			if os.Remove(path) == nil {
+				removed++
+			}
+		}
+		return nil
+	})
+	return removed
+}
+
+// firstSegment is the top-level name of path under root.
+func firstSegment(root, path string) string {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return ""
+	}
+	rel = filepath.ToSlash(rel)
+	if i := strings.Index(rel, "/"); i >= 0 {
+		return rel[:i]
+	}
+	return rel
+}
+
+// ownDefinition makes the definition the proxy's: root-owned, world-readable,
+// writable by nobody but root. Errors are ignored off platform (no root).
+func ownDefinition(local string, uid int) {
+	_ = filepath.WalkDir(local, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if path != local && agentOutputDirs[firstSegment(local, path)] {
+			return filepath.SkipDir
+		}
+		if d.IsDir() {
+			_ = os.Chmod(path, 0o755)
+		} else {
+			_ = os.Chmod(path, 0o644)
+		}
+		_ = os.Chown(path, 0, 0)
+		return nil
+	})
+	_ = uid
+}
+
+// chownAll hands a tree to a uid (no-op for uid 0 or off platform).
+func chownAll(root string, uid int) {
+	if uid <= 0 {
+		return
+	}
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err == nil {
+			_ = os.Chown(path, uid, uid)
+		}
+		return nil
+	})
+}
+
+// pushAgentOutputs uploads what a run wrote under state/ and runs/, only what
+// changed since the last push. Drive never overwrites these locally.
+func (s *Syncer) pushAgentOutputs(ds *DriveStore, agentID, local, name string) (int, error) {
+	count := 0
+	for _, dir := range sortedKeys(agentOutputDirs) {
+		src := filepath.Join(local, dir)
+		entries, err := os.ReadDir(src)
+		if err != nil || len(entries) == 0 {
+			continue
+		}
+		folder, err := ds.EnsureFolder(agentID, dir)
+		if err != nil {
+			return count, err
+		}
+		n, err := s.pushTree(ds, folder, src, agentsFolder+"/"+name+"/"+dir)
+		count += n
+		if err != nil {
+			return count, err
+		}
+	}
+	return count, nil
+}
+
+// pushTree uploads changed regular files of a local tree into a Drive folder.
+func (s *Syncer) pushTree(ds *DriveStore, parent, dir, rel string) (int, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, ".") || isLockFile(name) {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		key := rel + "/" + name
+		if e.IsDir() {
+			folder, err := ds.EnsureFolder(parent, name)
+			if err != nil {
+				return count, err
+			}
+			n, err := s.pushTree(ds, folder, path, key)
+			count += n
+			if err != nil {
+				return count, err
+			}
+			continue
+		}
+		if !e.Type().IsRegular() {
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err != nil || len(data) > maxSnapshotFile {
+			continue
+		}
+		hash := contentHash(data)
+		s.mu.Lock()
+		same := s.uploaded[key] == hash
+		s.mu.Unlock()
+		if same {
+			continue
+		}
+		if _, err := ds.PutIn(parent, name, data); err != nil {
+			return count, err
+		}
+		s.mu.Lock()
+		s.uploaded[key] = hash
+		s.mu.Unlock()
+		count++
+	}
+	return count, nil
+}
+
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// ErrNoAgents is returned by callers that need at least one agent.
+var ErrNoAgents = errors.New("the holder has no agents")

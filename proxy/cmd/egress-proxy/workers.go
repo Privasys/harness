@@ -291,6 +291,9 @@ func (m *WorkerManager) start(w *Worker) {
 		// deployment's reference set. What the assistant DOES is then a folder
 		// they can open and edit, with no build and no deploy in their path.
 		w.syncer.SetSkillsRoot(w.Skills, envOr("HARNESS_SEED_SKILLS", "/data/skills"))
+		// The holder's agents: a folder each in their Drive, a workspace each
+		// here, beside their other workspaces (capability/agents.go).
+		w.syncer.SetAgentsRoot(w.Workspace, w.UID)
 		// dsh's workspace registry (titles, archived set) names the Drive
 		// folders the mirror files sessions under.
 		w.syncer.SetRegistryFile(filepath.Join(w.Home, "storages", "workspace.json"))
@@ -529,7 +532,10 @@ func (m *WorkerManager) command(w *Worker) (*exec.Cmd, error) {
 	// first, then the holder's own (mirrored from their Drive), read by the
 	// measured preset. Naming them here rather than in the image keeps the
 	// per-user path out of the measurement.
-	env["PRIVASYS_SKILL_DIRS"] = envOr("HARNESS_SEED_SKILLS", "/data/skills") + ":" + w.Skills
+	// The holder's own skills FIRST: dsh breaks a duplicate name within one
+	// rank by registration order, so listed the other way round the
+	// deployment's reference copy would shadow the holder's edited one.
+	env["PRIVASYS_SKILL_DIRS"] = w.Skills + ":" + envOr("HARNESS_SEED_SKILLS", "/data/skills")
 	env["PRIVASYS_BEARER"] = w.Token
 	env["DEEPSEEK_API_KEY"] = w.Token
 	// dsh (overlay 2b) refuses any request without this token, so the

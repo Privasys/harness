@@ -48,8 +48,8 @@ const (
 	// the harness only seeds it once and reads it back — so a person can
 	// change what their assistant does in a text editor, with no deploy.
 	skillsFolder = "skills"
-	blobsFolder     = ".blobs"
-	manifestName    = ".workspace.json"
+	blobsFolder  = ".blobs"
+	manifestName = ".workspace.json"
 	// maxSnapshotFile bounds one blob. Drive's inline write cap is 64 MiB;
 	// anything larger is a build artefact or a dataset, not a working file
 	// worth carrying on every save, and is left out with a log line.
@@ -90,6 +90,12 @@ type Syncer struct {
 	// Drive once (and only where they have no skill of that name), so the
 	// folder they open is not empty.
 	seeds string
+	// agentsRoot is where the holder's agents are mirrored (the workspace
+	// root, one directory per agent, agents.go); empty means no agents.
+	agentsRoot string
+	agentUID   int
+	agentDirs  map[string]bool
+	agents     map[string]AgentSpec
 	// subject binds this syncer to one person (per-user workers); empty
 	// means the process-wide acting subject (single-user layout).
 	subject string
@@ -254,43 +260,7 @@ func (s *Syncer) syncSkills(ds *DriveStore) error {
 // pullSkills mirrors one Drive folder down, writing only what differs. The
 // count is files written, so a quiet pass logs nothing.
 func (s *Syncer) pullSkills(ds *DriveStore, nodeID, dir, rel string) (int, error) {
-	children, err := ds.ListIn(nodeID)
-	if err != nil {
-		return 0, err
-	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return 0, err
-	}
-	count := 0
-	for _, c := range children {
-		if isLockFile(c.Name) || strings.HasPrefix(c.Name, ".") {
-			continue
-		}
-		target := filepath.Join(dir, c.Name)
-		if c.IsFolder() {
-			n, err := s.pullSkills(ds, c.ID, target, rel+"/"+c.Name)
-			count += n
-			if err != nil {
-				return count, err
-			}
-			continue
-		}
-		data, err := ds.Get(c.ID)
-		if err != nil {
-			return count, err
-		}
-		if sameOnDisk(target, data) {
-			continue
-		}
-		if err := os.WriteFile(target, data, 0o600); err != nil {
-			return count, err
-		}
-		s.mu.Lock()
-		s.uploaded[rel+"/"+c.Name] = contentHash(data)
-		s.mu.Unlock()
-		count++
-	}
-	return count, nil
+	return s.pullTree(ds, nodeID, dir, rel, 0o600, nil)
 }
 
 // sameOnDisk reports whether the local file already holds exactly this
@@ -553,6 +523,11 @@ func (s *Syncer) SyncOnce() error {
 	if err := s.syncSkills(ds); err != nil {
 		log.Printf("[sync] skills: %v", err)
 	}
+	// The holder's agents: each a folder in their Drive and a workspace here
+	// (agents.go). Definition down, outputs up, never the other way.
+	if err := s.syncAgents(ds); err != nil {
+		log.Printf("[sync] agents: %v", err)
+	}
 	sessErr := s.mirrorSessions(ds)
 	wsErr := s.snapshotWorkspace(ds)
 	s.noteOutcome(sessErr)
@@ -663,6 +638,11 @@ func (s *Syncer) scanWorkspace() ([]manifestFile, []string, map[string][]byte, s
 			}
 			if rel, relErr := filepath.Rel(s.workspace, path); relErr == nil {
 				rel = filepath.ToSlash(rel)
+				// An agent's folder is mirrored from Drive by agents.go; the
+				// snapshot would only carry a copy of what Drive already holds.
+				if !strings.Contains(rel, "/") && s.isAgentDir(rel) {
+					return filepath.SkipDir
+				}
 				if rel != blobsFolder {
 					dirs = append(dirs, rel)
 				}
