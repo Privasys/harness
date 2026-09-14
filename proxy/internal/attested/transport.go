@@ -62,7 +62,6 @@ const staleVerdictMarker = "without current evidence on this connection"
 // OnChange hook evicts idle connections, so a revoked build cannot keep
 // serving over a stale verified channel. Non-HTTPS URLs (local dev against
 // plain-HTTP MCP servers) fall through to the standard transport.
-//
 type RATLSTransport struct {
 	// Timeout bounds connect + attestation verification per request.
 	Timeout time.Duration
