@@ -395,6 +395,16 @@ func (m *WorkerManager) start(w *Worker) {
 				if w.syncer != nil {
 					w.syncer.Start(15 * time.Second)
 				}
+				// dsh's own output is not in the container log, so the only
+				// proof that the routines door composed is to knock: the
+				// plugin answers a GET with 405, a missing route with 404,
+				// and a realm that failed to start does not answer at all.
+				if dr, derr := http.Get(w.RoutineDoor()); derr != nil {
+					log.Printf("[workers] %s: routines door NOT listening (%v); unattended runs cannot be dispatched to this worker", w.Key, derr)
+				} else {
+					dr.Body.Close()
+					log.Printf("[workers] %s: routines door answers %d (405 = composed)", w.Key, dr.StatusCode)
+				}
 				return
 			}
 		}
