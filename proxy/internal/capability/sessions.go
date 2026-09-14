@@ -465,7 +465,12 @@ func (s *Syncer) pruneRemote(ds *DriveStore, expected map[string]bool) {
 	s.mu.Lock()
 	var stale []string
 	for rel := range s.uploaded {
-		if !expected[rel] {
+		// The uploaded map is shared with the skills and agents mirrors,
+		// which record what they read and seeded under their own folders.
+		// Only the sessions tree is this prune's to delete: on prod v37 the
+		// freshly seeded skill files were counted as stale sessions and
+		// deleted a tick after they were written (2026-09-14).
+		if !expected[rel] && strings.HasPrefix(rel, sessionsFolder+"/") {
 			stale = append(stale, rel)
 		}
 	}
