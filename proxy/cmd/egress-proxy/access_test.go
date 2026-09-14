@@ -112,8 +112,12 @@ func TestAccessCatalogueOffersTheDeclaredResources(t *testing.T) {
 	}
 	tools, _ := resp["result"].(map[string]any)["tools"].([]any)
 	desc := strings.ToLower(tools[1].(map[string]any)["description"].(string))
-	if !strings.Contains(desc, "never ask the user to type a password") {
-		t.Fatal("the description must keep credentials out of the conversation")
+	// A service that must be set up first owns that step; the description
+	// sends the agent to the service's own instructions and names no product
+	// (Bertrand, 2026-09-14: setup happens in the conversation, through the
+	// service's tools, inside the confidential chain).
+	if !strings.Contains(desc, "follow that tool's own instructions") {
+		t.Fatal("the description must defer setup to the service's own tools")
 	}
 }
 
