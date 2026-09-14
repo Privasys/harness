@@ -83,13 +83,23 @@ func decorateSpend(req *http.Request, sub string) {
 		return
 	}
 	if errors.Is(err, spend.ErrNoConsent) {
-		if last, ok := spendNoConsent.Load(sub); !ok || time.Since(last.(time.Time)) > 10*time.Minute {
-			spendNoConsent.Store(sub, time.Now())
+		last, ok := spendNoConsent.Load(sub)
+		spendNoConsent.Store(sub, time.Now())
+		if !ok || time.Since(last.(time.Time)) > 10*time.Minute {
 			log.Printf("[spend] user %.8s… has not allowed the harness to spend their credits; leg to %s goes out unnamed", sub, req.URL.Host)
 		}
 		return
 	}
 	log.Printf("[spend] token for %.8s… unavailable (%v); leg to %s goes out unnamed", sub, err, req.URL.Host)
+}
+
+// spendConsentMissing reports whether the last leg for this subject went out
+// unnamed because they have not allowed this harness to spend their credits.
+// A callee's 402 that follows is then that, not a missing account, and is
+// worded so (modelerror.go).
+func spendConsentMissing(sub string) bool {
+	last, ok := spendNoConsent.Load(sub)
+	return ok && time.Since(last.(time.Time)) < 10*time.Minute
 }
 
 // spendStatus is the panel's view: whether this harness can name a payer,

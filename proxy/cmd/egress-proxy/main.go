@@ -179,6 +179,12 @@ func forward(w http.ResponseWriter, r *http.Request, client *http.Client, host, 
 		log.Printf("[egress-proxy] model leg: %s %s -> %d %s: %s", r.Method, path, resp.StatusCode,
 			resp.Header.Get("Content-Type"), truncate(peek, 300))
 		peek, rewritten = normaliseModelError(resp.StatusCode, peek)
+		if resp.StatusCode == http.StatusPaymentRequired && spendConsentMissing(subjectOfEgress(r)) {
+			// The leg went out unnamed because the holder never allowed
+			// this harness to spend: say that, and what to do, instead of
+			// the callee's "no billing account".
+			peek, rewritten = spendConsentBody(), true
+		}
 		body = io.NopCloser(bytes.NewReader(peek))
 	} else if repro {
 		log.Printf("[egress-proxy] model leg: %s %s -> %d %s", r.Method, path, resp.StatusCode, resp.Header.Get("Content-Type"))
