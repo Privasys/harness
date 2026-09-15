@@ -65,7 +65,7 @@ code reads them back:
 
 | Declaration | What it does |
 |---|---|
-| `HARNESS_TOOLS` | The attested tools, by name. The overlay bakes one MCP row per name into every agent preset (`/tool/<name>/mcp` on the proxy); `HARNESS_TOOL_HOSTS` maps each name to the attested app that answers for it. The harness's own `access` server is always mounted. |
+| `HARNESS_TOOLS` | The attested tools, by name. The overlay bakes one MCP row per name into every agent preset (`/tool/<name>/mcp` on the proxy); `HARNESS_TOOL_HOSTS` maps each name to the attested app that answers for it. The harness's own `access` and `agents` servers are always mounted. |
 | `HARNESS_RESOURCES` | The user-owned resources the enclave runtime brokers for the harness, as the manifest JSON. The measured `LABEL org.privasys.manifest` is built from it and the proxy builds one capability broker per entry (`proxy/cmd/egress-proxy/resources.go`). The entry named by `HARNESS_STORAGE_RESOURCE` (default `storage`) is the holder's folder, where sessions, policy and skills live. |
 
 The hosted Privasys Harness declares web search, a web reader, the holder's
@@ -85,7 +85,7 @@ of truth for behaviour, mirrored every pass by the proxy
 | Drive folder | Meaning |
 |---|---|
 | `skills/` | The holder's skills, one folder per skill with a `SKILL.md`. Seeded once from the deployment's reference set (`SKILLS_PIN`, cloned from [Privasys/agent-skills](https://github.com/Privasys/agent-skills) at build) and theirs to edit from then on; edits in Drive change the next session, with no deploy. |
-| `agents/<name>/` | One agent: a workspace by that name in the harness, read-only from the agent's side. `agent.md` is its persona, `agent.yaml` its definition (below), `.agents/skills/` its own skills; `state/` and `runs/` are what a run writes, pushed back to Drive. |
+| `agents/<name>/` | One agent: a workspace by that name in the harness, read-only from the agent's side. `agent.md` is its persona, `agent.yaml` its definition (below), `.agents/skills/` its own skills; `state/` and `runs/` are what a run writes, pushed back to Drive. The chat writes the two definition files through the harness's own `agents` server (`write_agent`, `list_agents`; proxy `agents.go`), since Drive's assistant tools are read-only; the holder edits or deletes the folder in Drive. |
 | `sessions/` | Session logs, one file per file, under their workspace's title (`Archived/` apart). |
 | `workspace/` | Content-addressed snapshots of the working tree. |
 

@@ -313,8 +313,11 @@ const MCP_FLEET_ROWS =
   `# (mutual RA-TLS, DepSet-gated). failOnStartupError: false so an unreachable\n` +
   `# tool app degrades that tool, never the whole preset.\n` +
   HARNESS_TOOLS.map((tool) => mcpFleetRow(tool.replace(/_/g, '-'), tool) + `\n`).join('') +
-  mcpFleetRow('access', 'access')
-console.log(`[overlay] attested tools: ${HARNESS_TOOLS.join(', ')} (+ access)`)
+  mcpFleetRow('access', 'access') + `\n` +
+  // The harness's agents server (proxy agents.go): the chat writes an agent's
+  // folder into the holder's Drive through it, and reads which agents exist.
+  mcpFleetRow('agents', 'agents')
+console.log(`[overlay] attested tools: ${HARNESS_TOOLS.join(', ')} (+ access, agents)`)
 for (const preset of ['standard', 'ptc', 'cordis']) {
   edit(`packages/preset/agent-presets/presets/${preset}/agent.cordis.yml`, [
     [`preset ${preset} attested-fleet swap`, TOOL_WEB_BLOCK, MCP_FLEET_ROWS],

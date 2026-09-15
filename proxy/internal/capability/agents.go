@@ -151,6 +151,59 @@ func (s *Syncer) SetAgentsRoot(local string, uid int) {
 	s.mu.Unlock()
 }
 
+// ValidAgentName reports whether a name can be an agent folder, and so a
+// workspace title. Exported for the harness's own agents tools.
+func ValidAgentName(name string) bool { return validAgentName(name) }
+
+// ParseAgentSpec parses an agent.yaml, for a caller that refuses a bad one
+// before it is written.
+func ParseAgentSpec(data []byte) (AgentSpec, error) { return parseAgentSpec(data) }
+
+// WriteAgent writes an agent's definition files into `agents/<name>/` in the
+// holder's Drive, creating the folders as needed, and returns that path.
+//
+// This is how the CHAT makes an agent (the agent-builder skill). Drive's
+// assistant tools are read-only by design, and the harness's own storage
+// capability already covers its app folder, so writing the folder is the
+// harness's job; the mirror pulls it back on its next pass, which is what
+// makes the agent exist here. The folders are resolved afresh rather than
+// from the path cache: a holder who deleted the agent in Drive and asks for
+// it again must get a new folder, not a write into the old id.
+func (s *Syncer) WriteAgent(name string, files map[string][]byte) (string, error) {
+	if !validAgentName(name) {
+		return "", fmt.Errorf("%q is not a valid agent name", name)
+	}
+	ds, _ := s.store()
+	if ds == nil {
+		return "", errors.New("the user's Drive folder for this assistant is not connected, so there is nowhere to write the agent")
+	}
+	agentsID, err := ds.EnsureFolder(ds.RootID(), agentsFolder)
+	if err != nil {
+		return "", fmt.Errorf("create %s/: %w", agentsFolder, err)
+	}
+	folderID, err := ds.EnsureFolder(agentsID, name)
+	if err != nil {
+		return "", fmt.Errorf("create %s/%s/: %w", agentsFolder, name, err)
+	}
+	rel := agentsFolder + "/" + name
+	names := make([]string, 0, len(files))
+	for n := range files {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, fname := range names {
+		if _, err := ds.PutIn(folderID, fname, files[fname]); err != nil {
+			return "", fmt.Errorf("write %s/%s: %w", rel, fname, err)
+		}
+		s.mu.Lock()
+		if s.uploaded != nil {
+			s.uploaded[rel+"/"+fname] = contentHash(files[fname])
+		}
+		s.mu.Unlock()
+	}
+	return rel, nil
+}
+
 // Agents returns the agents pulled on the last pass, sorted by name.
 func (s *Syncer) Agents() []AgentSpec {
 	s.mu.Lock()

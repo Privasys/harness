@@ -318,6 +318,12 @@ func main() {
 			accessShim(w, r)
 			return
 		}
+		// And its agents server (agents.go): the holder's agents, written
+		// into their Drive by the chat and mirrored back as workspaces.
+		if name == agentsServerName && path == "mcp" {
+			agentsShim(w, r)
+			return
+		}
 		host := cfg.toolHosts[name]
 		if host == "" {
 			http.Error(w, fmt.Sprintf(`{"error":"egress-proxy: unknown tool %q"}`, name), http.StatusNotFound)
