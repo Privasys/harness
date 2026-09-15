@@ -231,7 +231,8 @@ func (s *Syncer) syncSkills(ds *DriveStore) error {
 	if local == "" {
 		return nil
 	}
-	if err := os.MkdirAll(local, 0o700); err != nil {
+	// World-readable: the proxy pulls, the worker's unprivileged dsh reads.
+	if err := os.MkdirAll(local, 0o755); err != nil {
 		return err
 	}
 	root, err := s.folderIfExists(ds, skillsFolder)
@@ -262,7 +263,11 @@ func (s *Syncer) syncSkills(ds *DriveStore) error {
 // pullSkills mirrors one Drive folder down, writing only what differs. The
 // count is files written, so a quiet pass logs nothing.
 func (s *Syncer) pullSkills(ds *DriveStore, nodeID, dir, rel string) (int, error) {
-	return s.pullTree(ds, nodeID, dir, rel, 0o600, nil)
+	// Root-owned and world-readable, like an agent definition: the proxy
+	// writes these as root every pass, and the worker's own uid must be able
+	// to read them (prod 2026-09-15: pulled at 0600, a skill edited in Drive
+	// after boot was invisible to dsh).
+	return s.pullTree(ds, nodeID, dir, rel, 0o644, nil)
 }
 
 // sameOnDisk reports whether the local file already holds exactly this

@@ -317,7 +317,7 @@ func (s *Syncer) pullTree(ds *DriveStore, nodeID, dir, rel string, perm os.FileM
 	if err != nil {
 		return 0, err
 	}
-	if err := os.MkdirAll(dir, perm|0o100); err != nil {
+	if err := os.MkdirAll(dir, dirModeFor(perm)); err != nil {
 		return 0, err
 	}
 	if present != nil {
@@ -419,6 +419,16 @@ func ownDefinition(local string, uid int) {
 		return nil
 	})
 	_ = uid
+}
+
+// dirModeFor is the mode of a directory holding files of mode perm: a
+// world-readable file needs a world-searchable directory to be reached by the
+// worker's uid (a skill pulled from Drive is read by dsh, not by the proxy).
+func dirModeFor(perm os.FileMode) os.FileMode {
+	if perm&0o004 != 0 {
+		return 0o755
+	}
+	return perm | 0o100
 }
 
 // chownAll hands a tree to a uid (no-op for uid 0 or off platform).

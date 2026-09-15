@@ -44,3 +44,12 @@ func TestSameOnDiskRecognisesAnEdit(t *testing.T) {
 		t.Fatal("a file that is not there cannot be up to date")
 	}
 }
+
+func TestPulledSkillsAreReadableByTheWorker(t *testing.T) {
+	if dirModeFor(0o644) != 0o755 {
+		t.Fatalf("a world-readable file needs a world-searchable directory, got %o", dirModeFor(0o644))
+	}
+	if dirModeFor(0o600) != 0o700 {
+		t.Fatalf("a private file keeps a private directory, got %o", dirModeFor(0o600))
+	}
+}
