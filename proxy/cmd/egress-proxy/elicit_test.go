@@ -127,6 +127,52 @@ func TestElicitationDeclineEndsTheCallReadably(t *testing.T) {
 	}
 }
 
+// The client validates the request against MCP's wire schema before its
+// handler runs, and "password" is not a format it knows: the mark must leave
+// the schema and travel in _meta (first live test, 2026-09-15: the request
+// was refused and the form never appeared).
+func TestSecretsAreLiftedIntoMetaAndTheSchemaGoesOutStandard(t *testing.T) {
+	schema, secrets := liftSecrets(json.RawMessage(`{"type":"object","properties":{"user":{"type":"string","format":"email"},"password":{"type":"string","format":"password","title":"App password"}},"required":["user","password"]}`))
+	if len(secrets) != 1 || secrets[0] != "password" {
+		t.Fatalf("secrets = %v", secrets)
+	}
+	if strings.Contains(string(schema), `"format":"password"`) {
+		t.Fatalf("the non-standard format must leave the schema: %s", schema)
+	}
+	if !strings.Contains(string(schema), `"format":"email"`) || !strings.Contains(string(schema), `"title":"App password"`) {
+		t.Fatalf("standard fields must survive: %s", schema)
+	}
+
+	rec := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/tool/mail/mcp", nil)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		elicitAndRetry(rec, r, json.RawMessage(`9`), "mail", "connect_mailbox", json.RawMessage(`{}`),
+			elicitAsk{Message: "q", RequestedSchema: json.RawMessage(`{"type":"object","properties":{"password":{"type":"string","format":"password"}}}`)}, "", "holder-1",
+			func(json.RawMessage, string) ([]byte, int, error) { return nil, 0, nil })
+	}()
+	var id string
+	for i := 0; i < 100 && id == ""; i++ {
+		if m := elicitIDRe.FindStringSubmatch(rec.Body.String()); m != nil {
+			id = m[1]
+		} else {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	out := rec.Body.String()
+	if strings.Contains(out, `"format":"password"`) || !strings.Contains(out, `"privasysSecrets":["password"]`) {
+		t.Fatalf("the wire must carry a standard schema and the secret names in _meta: %q", out)
+	}
+	// A client that refuses the question ends the call readably, not as a
+	// five-minute wait.
+	deliverElicitResponse(id, "holder-1", []byte(`{"jsonrpc":"2.0","id":"`+id+`","error":{"code":-32602,"message":"Invalid elicitation request"}}`))
+	<-done
+	if !strings.Contains(rec.Body.String(), "could not be read") {
+		t.Fatalf("a refused question must end the call: %q", rec.Body.String())
+	}
+}
+
 func TestAnAnswerFromAnotherSubjectIsIgnored(t *testing.T) {
 	ch := make(chan []byte, 1)
 	elicitPending.Store("elicit-test", &pendingElicit{ch: ch, sub: "holder-1"})

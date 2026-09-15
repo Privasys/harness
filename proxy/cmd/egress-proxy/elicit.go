@@ -44,6 +44,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 )
@@ -199,13 +200,21 @@ func elicitAndRetry(w http.ResponseWriter, r *http.Request, reqID json.RawMessag
 	elicitPending.Store(id, &pendingElicit{ch: ch, sub: sub})
 	defer elicitPending.Delete(id)
 
+	// The client validates the request against MCP's strict wire schema
+	// BEFORE its handler runs, and "password" is not one of MCP's string
+	// formats (email, uri, date, date-time): sent as is, the request is
+	// refused with InvalidParams and the person never sees the form (first
+	// live test, 2026-09-15 17:24). So the secret marking travels in _meta,
+	// which the client passes through, and the schema goes out standard.
+	schema, secrets := liftSecrets(ask.RequestedSchema)
 	params := map[string]any{
 		"message":         ask.Message,
-		"requestedSchema": ask.RequestedSchema,
+		"requestedSchema": schema,
 		"_meta": map[string]any{
 			"privasysSession": sessionID,
 			"privasysServer":  toolName,
 			"privasysTool":    fn,
+			"privasysSecrets": secrets,
 		},
 	}
 	if err := sse.send(map[string]any{"jsonrpc": "2.0", "id": id, "method": "elicitation/create", "params": params}); err != nil {
@@ -232,10 +241,21 @@ func elicitAndRetry(w http.ResponseWriter, r *http.Request, reqID json.RawMessag
 	}
 
 	var resp struct {
-		Result *elicitResult   `json:"result"`
-		Error  json.RawMessage `json:"error"`
+		Result *elicitResult `json:"result"`
+		Error  *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
 	}
 	if err := json.Unmarshal(answer, &resp); err != nil || resp.Result == nil {
+		// The client answered with a JSON-RPC error: it refused the request
+		// (schema validation, an unsupported mode) or its handler failed. No
+		// answer is in it, so the code and message may be logged.
+		if resp.Error != nil {
+			log.Printf("[mcp %s] elicitation %s: the client refused the question: %d %s", toolName, id, resp.Error.Code, resp.Error.Message)
+		} else {
+			log.Printf("[mcp %s] elicitation %s: the client's reply was not an answer", toolName, id)
+		}
 		final("the user's answer could not be read; ask whether to try again", true)
 		return
 	}
@@ -264,6 +284,36 @@ func elicitAndRetry(w http.ResponseWriter, r *http.Request, reqID json.RawMessag
 	}
 	log.Printf("[mcp %s] elicitation %s: answered; %s -> %d", toolName, id, fn, status)
 	final(string(result), status < 200 || status >= 300)
+}
+
+// liftSecrets returns the schema with `format: "password"` removed from its
+// string properties, and the names of those properties, sorted. A tool app
+// marks a secret that way (our contract with tool apps); the wire carries
+// the mark in _meta because the client's schema would refuse it.
+func liftSecrets(schema json.RawMessage) (json.RawMessage, []string) {
+	secrets := []string{}
+	var s map[string]any
+	if err := json.Unmarshal(schema, &s); err != nil {
+		return schema, secrets
+	}
+	props, _ := s["properties"].(map[string]any)
+	names := make([]string, 0, len(props))
+	for name := range props {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		p, _ := props[name].(map[string]any)
+		if f, _ := p["format"].(string); f == "password" {
+			delete(p, "format")
+			secrets = append(secrets, name)
+		}
+	}
+	out, err := json.Marshal(s)
+	if err != nil {
+		return schema, secrets
+	}
+	return out, secrets
 }
 
 // mergeArgs lays the answers over the model's arguments; an answer wins.
