@@ -2,20 +2,20 @@
 // Licensed under the GNU Affero General Public License v3.0.
 //
 // Privasys routines: the loopback door through which the egress proxy starts
-// an UNATTENDED run of one of the holder's agents (plan §3.3, 2026-09-14).
+// an UNATTENDED run of one of the holder's agents (proxy routines.go).
 //
 // dsh has no scheduler and nothing that wakes a cold session. What it has is
 // the webhook runtime: a trusted rule turns a delivery into a NEW root
-// session in a named workspace, with a preset and a prompt, committed with
-// `followup()`. The workspace is resolved or registered on the way, and the
-// session shows in the sidebar live. This plugin is that rule plus the
-// smallest possible ingress for it: one exact route on a second web server
-// that lives in its own isolated realm (composed by the proxy in the
-// per-worker patch), bound to loopback, reachable by the proxy alone because
-// every call must carry this worker's ingress token.
+// session in a named workspace, with a preset and a prompt. The workspace is
+// resolved or registered on the way, and the session shows in the sidebar
+// live. This plugin is that rule plus one exact route on the worker's OWN
+// web server. That server is bound to loopback and admits only requests
+// carrying the ingress token the proxy minted for this worker (overlay 2b'),
+// and the proxy never forwards the door's path from outside, so the proxy is
+// the only caller there can be. No second listener, no second token.
 //
-// The proxy owns the clock and the events (a held `changes` poll on the
-// connector, timers for `every`); this file owns nothing but the door.
+// The proxy owns the clock and the events; this file owns nothing but the
+// door.
 
 import { randomUUID } from 'node:crypto'
 import { isAbsolute } from 'node:path'
@@ -28,9 +28,7 @@ const KIND = 'privasys-routine'
 const MAX_BODY = 64 * 1024
 
 export function apply(ctx, config) {
-  const token = String(config?.token ?? '')
-  if (token.length < 16) throw new Error('privasys-routines: a token of at least 16 characters is required')
-  const path = String(config?.path ?? '/privasys/run')
+  const path = String(config?.path ?? '/privasys/internal/run')
   const agentPreset = String(config?.agentPreset ?? 'standard')
   const permissionPreset = String(config?.permissionPreset ?? 'workspace-write')
   const source = WebhookSourceId(String(config?.source ?? 'privasys-proxy'))
@@ -46,13 +44,12 @@ export function apply(ctx, config) {
     },
   }), 'privasys-routines: rule')
 
-  // The door: POST {workspacePath, title, prompt} with the worker's token.
+  // The door: POST {workspacePath, title, prompt}.
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact',
     path,
     async handler(req, res) {
       if (req.method !== 'POST') return respond(res, 405, 'POST only')
-      if (req.headers['x-privasys-routine-token'] !== token) return respond(res, 401, 'no')
       let body = ''
       for await (const chunk of req) {
         body += chunk

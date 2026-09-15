@@ -421,9 +421,10 @@ func main() {
 		syncer.SetReady()
 		log.Printf("[workers] per-user dsh workers enabled (uids=%v idle=%s)", mgr.useUIDs, mgr.idle)
 		// Unattended runs of the holders' agents (routines.go): the proxy
-		// owns the clock and holds the mail change feed; a run is a session
-		// dispatched into the worker through its routines door.
-		routines := newRoutineEngine(mgr, client, cfg.toolHosts["mail"], envOr("HARNESS_USERS_DIR", "/data/users"))
+		// owns the clock and holds each agent's change feed on whichever
+		// mounted tool serves it; a run is a session dispatched into the
+		// worker through its routines door.
+		routines := newRoutineEngine(mgr, client, cfg.toolHosts, envOr("HARNESS_USERS_DIR", "/data/users"))
 		routines.Load()
 		routines.Start(context.Background())
 	} else {
@@ -633,8 +634,10 @@ func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp 
 	registerResourceCapabilityAPI(mux, legs...)
 	registerCapabilityAPI(mux, broker, func(sub string) bool {
 		if mgr != nil {
-			if w := mgr.Get(sub); w != nil && w.syncer != nil {
-				return w.syncer.AccessWithdrawn()
+			if w := mgr.Get(sub); w != nil {
+				if s := w.Syncer(); s != nil {
+					return s.AccessWithdrawn()
+				}
 			}
 			return false
 		}
@@ -657,6 +660,11 @@ func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp 
 		// Operators' view of the workers (no subjects, only keys).
 		mux.HandleFunc("GET /privasys/workers", func(w http.ResponseWriter, _ *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]any{"workers": mgr.Snapshot()})
+		})
+		// The workers' internal routes (the routines door) are this proxy's
+		// to call, never the browser's: nothing under the prefix is forwarded.
+		mux.HandleFunc("/privasys/internal/", func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "not found", http.StatusNotFound)
 		})
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			// The subject is the relay's assertion, and the relay reaches

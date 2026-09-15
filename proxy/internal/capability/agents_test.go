@@ -15,13 +15,12 @@ func TestAgentSpecParsesTriggerAndDefaults(t *testing.T) {
 prompt: Triage what arrived since the last run.
 trigger:
   on: mail.changes
-resources: [mail.mailbox]
 min_interval: 15m
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if spec.Trigger.On != "mail.changes" || !spec.Scheduled() || len(spec.Resources) != 1 {
+	if spec.Trigger.On != "mail.changes" || !spec.Scheduled() {
 		t.Fatalf("parsed %+v", spec)
 	}
 	debounce, minInterval := spec.Durations()
@@ -33,6 +32,9 @@ min_interval: 15m
 func TestAgentSpecRejectsABadEveryAndAcceptsAnEmptyFile(t *testing.T) {
 	if _, err := parseAgentSpec([]byte("trigger:\n  every: twice\n")); err == nil {
 		t.Fatal("a trigger that is not a duration must be refused")
+	}
+	if _, err := parseAgentSpec([]byte("trigger:\n  on: changes\n")); err == nil {
+		t.Fatal("an event source must name its tool: <tool>.<call>")
 	}
 	spec, err := parseAgentSpec([]byte("  \n"))
 	if err != nil || spec.Scheduled() {

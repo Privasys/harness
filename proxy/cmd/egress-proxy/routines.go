@@ -3,34 +3,47 @@
 
 package main
 
-// Routines: unattended runs of the holder's agents (plan §3.3, decided
-// 2026-09-14). Unattended runs come from THIS proxy, not from dsh, which has
-// no scheduler and nothing that wakes a cold session.
+// Routines: unattended runs of the holder's agents.
 //
-// Each agent folder in the holder's Drive carries an agent.yaml with a
-// trigger (capability/agents.go). This engine owns the clock and the events:
+// dsh has no scheduler and nothing that wakes a cold session, so unattended
+// runs come from THIS proxy. Each agent folder in the holder's Drive carries
+// an agent.yaml with a trigger (capability/agents.go); this engine owns the
+// clock and the events, and is generic over both:
 //
-//   - `every: 2h`        a timer.
-//   - `on: mail.changes` ONE held long poll per holder and agent on the mail
-//                        connector's `changes` tool, over the same attested
-//                        tool leg the agent uses, as the holder (the connector
-//                        parks it on IMAP IDLE for a minute at a time, so a
-//                        quiet mailbox costs one held request a minute and a
-//                        message wakes the routine within seconds). The
-//                        connector never calls in; the harness has no attested
-//                        door and the tool stays the callee.
+//   - `every: 2h`          a timer.
+//   - `on: <tool>.<call>`  an EVENT SOURCE: one held long poll per holder and
+//                          agent on the named tool's call, over the same
+//                          attested tool leg the agent uses, as the holder.
+//                          The tool must be one this deployment mounts
+//                          (HARNESS_TOOLS) and the call must follow the
+//                          change-feed contract below. The tool never calls
+//                          in: the harness has no attested door and the tool
+//                          stays the callee.
+//
+// The change-feed contract. The engine calls `<call>` with
+//
+//	{"since": "<cursor or empty>", "wait_seconds": N}
+//
+// and expects `{"changes": [...], "cursor": "<opaque>"}`. The tool holds the
+// request for up to N seconds until something changes (a quiet source costs
+// one held request a minute); a non-empty changes list opens or extends a
+// burst, the cursor is remembered per agent. Any tool that answers this shape
+// can drive an agent; the harness knows nothing about what the changes are.
 //
 // A run is dispatched through the worker's routines door (workers.go,
-// app/privasys-routines.mjs): a POST that dsh's webhook runtime turns into a
-// new session in the agent's workspace, so the holder reads it where they
-// read everything else. Bursts are debounced and runs are spaced by the
-// agent's minimum interval, which is also the one-run-at-a-time guard: the
-// door answers 202 at dispatch and never reports completion.
+// app/privasys-routines.mjs): one POST on the worker's own loopback server,
+// behind its ingress token, that dsh's webhook runtime turns into a new
+// session in the agent's workspace, so the holder reads it where they read
+// everything else. Bursts are debounced and runs are spaced by the agent's
+// minimum interval, which is also the one-run-at-a-time guard: the door
+// answers 202 at dispatch and never reports completion.
 //
 // Authority is durable without a browser: grants live on the manager, the
 // worker is started from the subject string alone, and the agents a holder
 // declared are remembered on the encrypted volume so the poll is held while
-// they are away.
+// they are away. A source that keeps failing (a withdrawn grant, a tool that
+// is down) backs off to a quarter of an hour and says so once, not once a
+// minute.
 
 import (
 	"bytes"
@@ -44,6 +57,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -51,44 +65,68 @@ import (
 )
 
 const (
-	routineTick      = 30 * time.Second
-	routinePollWait  = 60 // seconds the connector parks one changes call
-	routinesFile     = "routines.json"
-	routineDoorToken = "X-Privasys-Routine-Token"
+	routineTick     = 30 * time.Second
+	routinePollWait = 60 // seconds a tool may hold one change-feed call
+	routinesFile    = "routines.json"
 	// routineStartWait bounds how long a dispatch waits for a cold worker.
 	routineStartWait = 3 * time.Minute
-	// mailChangesTrigger is the one event source this release understands.
-	mailChangesTrigger = "mail.changes"
+	// routinePollBackoffMax caps the wait between failed change-feed calls.
+	routinePollBackoffMax = 15 * time.Minute
 )
 
+// eventSource splits `on: <tool>.<call>` into the tool that serves the feed
+// and the call to hold. Anything else is not an event source.
+func eventSource(on string) (tool, call string, ok bool) {
+	tool, call, ok = strings.Cut(on, ".")
+	if !ok || tool == "" || call == "" || strings.Contains(call, ".") {
+		return "", "", false
+	}
+	return tool, call, true
+}
+
+// pollBackoff is the wait after the n-th consecutive failure (n >= 1): one
+// minute, doubling, capped.
+func pollBackoff(failures int) time.Duration {
+	d := time.Minute
+	for i := 1; i < failures && d < routinePollBackoffMax; i++ {
+		d *= 2
+	}
+	if d > routinePollBackoffMax {
+		d = routinePollBackoffMax
+	}
+	return d
+}
+
 // routineState is what the engine remembers per holder, persisted beside
-// their cache on the volume so a restart, or a holder who never opens the
-// assistant, still gets their runs.
+// their cache on the encrypted volume so a restart, or a holder who never
+// opens the assistant, still gets their runs. The subject is kept because it
+// is what starts the worker; the directory name is its hash for path
+// hygiene, not secrecy, and the volume is the enclave's.
 type routineState struct {
 	Subject string                 `json:"subject"`
 	Agents  []capability.AgentSpec `json:"agents"`
-	// Cursors is the connector's change cursor per agent; LastRun the last
-	// dispatch per agent.
+	// Cursors is the change-feed cursor per agent; LastRun the last dispatch.
 	Cursors map[string]string    `json:"cursors"`
 	LastRun map[string]time.Time `json:"last_run"`
 
-	pending map[string]time.Time          // agent -> first event of the current burst
-	pollers map[string]context.CancelFunc // agent -> the held poll
+	pending     map[string]time.Time          // agent -> first event of the current burst
+	pollers     map[string]context.CancelFunc // agent -> the held poll
+	dispatching map[string]bool               // agent -> a dispatch in flight
 }
 
 type routineEngine struct {
-	mgr      *WorkerManager
-	client   *http.Client
-	mailHost string
-	usersDir string
-	now      func() time.Time
+	mgr       *WorkerManager
+	client    *http.Client
+	toolHosts map[string]string
+	usersDir  string
+	now       func() time.Time
 
 	mu       sync.Mutex
 	subjects map[string]*routineState
 }
 
-func newRoutineEngine(mgr *WorkerManager, client *http.Client, mailHost, usersDir string) *routineEngine {
-	return &routineEngine{mgr: mgr, client: client, mailHost: mailHost, usersDir: usersDir,
+func newRoutineEngine(mgr *WorkerManager, client *http.Client, toolHosts map[string]string, usersDir string) *routineEngine {
+	return &routineEngine{mgr: mgr, client: client, toolHosts: toolHosts, usersDir: usersDir,
 		now: time.Now, subjects: map[string]*routineState{}}
 }
 
@@ -130,6 +168,7 @@ func (e *routineEngine) fresh(st *routineState) *routineState {
 	}
 	st.pending = map[string]time.Time{}
 	st.pollers = map[string]context.CancelFunc{}
+	st.dispatching = map[string]bool{}
 	return st
 }
 
@@ -150,13 +189,16 @@ func (e *routineEngine) Start(ctx context.Context) {
 }
 
 // tick refreshes each running worker's agents, arms or disarms polls, and
-// dispatches whatever is due.
+// dispatches whatever is due. Nothing here waits on a worker: a dispatch
+// runs on its own goroutine, so one cold start never holds the others.
 func (e *routineEngine) tick(ctx context.Context) {
 	e.mgr.Each(func(w *Worker) {
-		if w.Subject == systemSubject || w.Syncer() == nil {
+		if w.Subject == systemSubject {
 			return
 		}
-		e.update(w.Subject, w.Syncer().Agents())
+		if s := w.Syncer(); s != nil {
+			e.update(w.Subject, s.Agents())
+		}
 	})
 	e.mu.Lock()
 	subs := make([]*routineState, 0, len(e.subjects))
@@ -198,8 +240,9 @@ func sameAgents(a, b []capability.AgentSpec) bool {
 	return bytes.Equal(x, y)
 }
 
-// reconcile arms one held poll per mail-triggered agent, cancels polls of
-// agents no longer scheduled, and dispatches due runs.
+// reconcile arms one held poll per event-driven agent whose source this
+// deployment mounts, cancels polls of agents no longer scheduled, and
+// dispatches due runs.
 func (e *routineEngine) reconcile(ctx context.Context, st *routineState) {
 	now := e.now()
 	e.mu.Lock()
@@ -210,26 +253,34 @@ func (e *routineEngine) reconcile(ctx context.Context, st *routineState) {
 		}
 	}
 	for name, cancel := range st.pollers {
-		if a, ok := scheduled[name]; !ok || a.Trigger.On != mailChangesTrigger {
+		if a, ok := scheduled[name]; !ok || a.Trigger.On == "" {
 			cancel()
 			delete(st.pollers, name)
 		}
 	}
 	var due []capability.AgentSpec
 	for name, a := range scheduled {
-		if a.Trigger.On == mailChangesTrigger && st.pollers[name] == nil && e.mailHost != "" {
-			pctx, cancel := context.WithCancel(ctx)
-			st.pollers[name] = cancel
-			go e.poll(pctx, st, a)
+		if tool, _, ok := eventSource(a.Trigger.On); ok && st.pollers[name] == nil {
+			if e.toolHosts[tool] == "" {
+				// Declared against a tool this deployment does not mount:
+				// not an error to retry, a fact to state once per change.
+				log.Printf("[routines] %.8s…/%s: %q names a tool this deployment does not mount; not polled", st.Subject, name, a.Trigger.On)
+				st.pollers[name] = func() {}
+			} else {
+				pctx, cancel := context.WithCancel(ctx)
+				st.pollers[name] = cancel
+				go e.poll(pctx, st, a)
+			}
 		}
-		if runDue(a, now, st.LastRun[name], st.pending[name]) {
+		if !st.dispatching[name] && runDue(a, now, st.LastRun[name], st.pending[name]) {
 			due = append(due, a)
+			st.dispatching[name] = true
 		}
 	}
 	e.mu.Unlock()
 	sort.Slice(due, func(i, j int) bool { return due[i].Name < due[j].Name })
 	for _, a := range due {
-		e.dispatch(ctx, st, a)
+		go e.dispatch(ctx, st, a)
 	}
 }
 
@@ -253,26 +304,37 @@ func runDue(a capability.AgentSpec, now, lastRun, pendingSince time.Time) bool {
 	return false
 }
 
-// poll holds the connector's changes call for one holder and agent, as the
+// poll holds the source's change-feed call for one holder and agent, as the
 // holder, over the attested tool leg; arrivals open or extend a burst.
 func (e *routineEngine) poll(ctx context.Context, st *routineState, a capability.AgentSpec) {
-	log.Printf("[routines] %.8s…/%s: holding the mailbox change feed", st.Subject, a.Name)
+	tool, call, _ := eventSource(a.Trigger.On)
+	log.Printf("[routines] %.8s…/%s: holding the %s change feed", st.Subject, a.Name, a.Trigger.On)
+	failures := 0
 	for ctx.Err() == nil {
 		e.mu.Lock()
 		cursor := st.Cursors[a.Name]
 		e.mu.Unlock()
-		changes, next, err := e.changes(ctx, st.Subject, cursor)
+		changes, next, err := e.changes(ctx, st.Subject, tool, call, cursor)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
 			}
-			log.Printf("[routines] %.8s…/%s: change feed: %v (retrying in a minute)", st.Subject, a.Name, err)
+			failures++
+			wait := pollBackoff(failures)
+			if failures == 1 || wait == routinePollBackoffMax && failures == 5 {
+				log.Printf("[routines] %.8s…/%s: change feed: %v (retrying in %s%s)", st.Subject, a.Name, err, wait,
+					map[bool]string{true: ", and quietly from now on", false: ""}[wait == routinePollBackoffMax])
+			}
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(time.Minute):
+			case <-time.After(wait):
 			}
 			continue
+		}
+		if failures > 0 {
+			log.Printf("[routines] %.8s…/%s: change feed answers again", st.Subject, a.Name)
+			failures = 0
 		}
 		e.mu.Lock()
 		if next != "" {
@@ -288,13 +350,13 @@ func (e *routineEngine) poll(ctx context.Context, st *routineState, a capability
 	}
 }
 
-// changes makes one held call to the connector's changes tool as the holder.
-func (e *routineEngine) changes(ctx context.Context, sub, cursor string) (int, string, error) {
+// changes makes one held change-feed call as the holder.
+func (e *routineEngine) changes(ctx context.Context, sub, tool, call, cursor string) (int, string, error) {
 	args, _ := json.Marshal(map[string]any{"since": cursor, "wait_seconds": routinePollWait})
 	cctx, cancel := context.WithTimeout(ctx, (routinePollWait+30)*time.Second)
 	defer cancel()
 	carrier, _ := http.NewRequestWithContext(cctx, http.MethodPost, "/", nil)
-	raw, status, _, err := callTool(carrier, e.client, e.mailHost, "changes", args, "", sub)
+	raw, status, _, err := callTool(carrier, e.client, e.toolHosts[tool], call, args, "", sub)
 	if err != nil {
 		return 0, "", err
 	}
@@ -320,6 +382,11 @@ func (e *routineEngine) dispatch(ctx context.Context, st *routineState, a capabi
 	st.LastRun[a.Name] = now
 	delete(st.pending, a.Name)
 	e.mu.Unlock()
+	defer func() {
+		e.mu.Lock()
+		delete(st.dispatching, a.Name)
+		e.mu.Unlock()
+	}()
 	e.persist(st)
 
 	w := e.mgr.Ensure(st.Subject)
@@ -343,7 +410,9 @@ func (e *routineEngine) dispatch(ctx context.Context, st *routineState, a capabi
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(routineDoorToken, w.Ingress)
+	// The door is a route on the worker's own server, behind the same token
+	// this proxy presents on every request to it.
+	req.Header.Set("X-Privasys-Ingress-Token", w.Ingress)
 	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
 	if err != nil {
 		log.Printf("[routines] %.8s…/%s: the routines door did not answer: %v", st.Subject, a.Name, err)

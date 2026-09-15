@@ -11,7 +11,7 @@ import (
 	"github.com/Privasys/attested-harness/proxy/internal/capability"
 )
 
-func mailAgent() capability.AgentSpec {
+func feedAgent() capability.AgentSpec {
 	var a capability.AgentSpec
 	a.Name, a.Path = "Inbox triage", "/data/users/k/workspace/Inbox triage"
 	a.Trigger.On = "mail.changes"
@@ -19,8 +19,29 @@ func mailAgent() capability.AgentSpec {
 	return a
 }
 
+func TestEventSourceIsToolDotCall(t *testing.T) {
+	tool, call, ok := eventSource("mail.changes")
+	if !ok || tool != "mail" || call != "changes" {
+		t.Fatalf("mail.changes -> %q %q %v", tool, call, ok)
+	}
+	for _, bad := range []string{"", "mail", ".changes", "mail.", "a.b.c"} {
+		if _, _, ok := eventSource(bad); ok {
+			t.Errorf("%q must not be an event source", bad)
+		}
+	}
+}
+
+func TestPollBackoffDoublesToAQuarterHour(t *testing.T) {
+	want := []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute, 15 * time.Minute, 15 * time.Minute}
+	for i, w := range want {
+		if got := pollBackoff(i + 1); got != w {
+			t.Fatalf("failure %d: %s, want %s", i+1, got, w)
+		}
+	}
+}
+
 func TestEventRunWaitsForTheBurstToSettle(t *testing.T) {
-	a := mailAgent()
+	a := feedAgent()
 	now := time.Date(2026, 9, 14, 9, 0, 0, 0, time.UTC)
 	if runDue(a, now, time.Time{}, now.Add(-time.Minute)) {
 		t.Fatal("a burst one minute old must not run yet (debounce 2m)")
@@ -34,7 +55,7 @@ func TestEventRunWaitsForTheBurstToSettle(t *testing.T) {
 }
 
 func TestMinimumIntervalSpacesRunsWhateverArrives(t *testing.T) {
-	a := mailAgent()
+	a := feedAgent()
 	now := time.Date(2026, 9, 14, 9, 0, 0, 0, time.UTC)
 	if runDue(a, now, now.Add(-5*time.Minute), now.Add(-4*time.Minute)) {
 		t.Fatal("five minutes after a run nothing may start (min_interval 10m)")
@@ -64,8 +85,25 @@ func TestTimerRunsOnItsPeriodAndNotBefore(t *testing.T) {
 	}
 }
 
+func TestReconcilePollsOnlyMountedSourcesAndDispatchesOnce(t *testing.T) {
+	// No worker manager is needed for this path: the agent's source is not
+	// mounted, so no poll starts, and nothing is due.
+	e := newRoutineEngine(nil, nil, map[string]string{"drive": "drive.example"}, t.TempDir())
+	st := e.fresh(&routineState{Subject: "sub-1", Agents: []capability.AgentSpec{feedAgent()}})
+	e.mu.Lock()
+	e.subjects["sub-1"] = st
+	e.mu.Unlock()
+	e.reconcile(t.Context(), st)
+	if _, held := st.pollers["Inbox triage"]; !held {
+		t.Fatal("an unmounted source is recorded so it is stated once, not every tick")
+	}
+	if st.dispatching["Inbox triage"] {
+		t.Fatal("nothing was due")
+	}
+}
+
 func TestRunPromptSaysWhyItStarted(t *testing.T) {
-	a := mailAgent()
+	a := feedAgent()
 	title, prompt := runTitleAndPrompt(a, time.Date(2026, 9, 14, 9, 20, 0, 0, time.UTC))
 	if title != "Inbox triage 2026-09-14 09:20" {
 		t.Fatalf("title %q", title)

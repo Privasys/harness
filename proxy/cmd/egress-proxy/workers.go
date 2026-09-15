@@ -89,14 +89,15 @@ type Worker struct {
 // Upstream is the worker's loopback web server.
 func (w *Worker) Upstream() string { return fmt.Sprintf("http://127.0.0.1:%d", w.Port) }
 
-// routinePortOffset separates the routines door from the worker's UI port:
-// a second loopback listener in dsh's isolated realm (app/privasys-routines.mjs).
-const routinePortOffset = 10000
+// routineDoorPath is the route on the worker's own server through which this
+// proxy starts an unattended run (app/privasys-routines.mjs). It sits behind
+// the worker's ingress token like every other route there, and the ingress
+// never forwards /privasys/internal/ from outside (main.go), so the proxy is
+// its only caller.
+const routineDoorPath = "/privasys/internal/run"
 
 // RoutineDoor is where this proxy starts an unattended run in the worker.
-func (w *Worker) RoutineDoor() string {
-	return fmt.Sprintf("http://127.0.0.1:%d/privasys/run", w.Port+routinePortOffset)
-}
+func (w *Worker) RoutineDoor() string { return w.Upstream() + routineDoorPath }
 
 func (w *Worker) touch() {
 	w.mu.Lock()
@@ -192,7 +193,11 @@ func (m *WorkerManager) Each(fn func(*Worker)) {
 }
 
 // Syncer returns the worker's mirror, nil for the system worker or before start.
-func (w *Worker) Syncer() *capability.Syncer { return w.syncer }
+func (w *Worker) Syncer() *capability.Syncer {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.syncer
+}
 
 // IsReady reports whether dsh answers on the worker's port.
 func (w *Worker) IsReady() bool { return w.isReady() }
@@ -314,24 +319,30 @@ func (m *WorkerManager) start(w *Worker) {
 	}
 	if w.Subject != systemSubject {
 		// Restore BEFORE dsh starts: it lists its workspaces once at boot.
-		w.syncer = capability.NewSyncerFor(m.broker, m.client, m.driveHost, m.appID, w.Sessions, w.Workspace, w.Subject)
+		sy := capability.NewSyncerFor(m.broker, m.client, m.driveHost, m.appID, w.Sessions, w.Workspace, w.Subject)
 		// The holder's own skills: read from their Drive, seeded once from the
 		// deployment's reference set. What the assistant DOES is then a folder
 		// they can open and edit, with no build and no deploy in their path.
-		w.syncer.SetSkillsRoot(w.Skills, envOr("HARNESS_SEED_SKILLS", "/data/skills"))
+		sy.SetSkillsRoot(w.Skills, envOr("HARNESS_SEED_SKILLS", "/data/skills"))
 		// The holder's agents: a folder each in their Drive, a workspace each
 		// here, beside their other workspaces (capability/agents.go).
-		w.syncer.SetAgentsRoot(w.Workspace, w.UID)
+		sy.SetAgentsRoot(w.Workspace, w.UID)
 		// dsh's workspace registry (titles, archived set) names the Drive
 		// folders the mirror files sessions under.
-		w.syncer.SetRegistryFile(filepath.Join(w.Home, "storages", "workspace.json"))
-		w.syncer.LoadState()
-		if n, err := w.syncer.RestoreFor(w.Subject); err != nil {
+		sy.SetRegistryFile(filepath.Join(w.Home, "storages", "workspace.json"))
+		sy.LoadState()
+		if n, err := sy.RestoreFor(w.Subject); err != nil {
 			log.Printf("[workers] %s: restore: %v", w.Key, err)
 		} else if n > 0 {
 			log.Printf("[workers] %s: restored %d file(s) from the holder's Drive", w.Key, n)
 		}
-		w.syncer.SetReady()
+		sy.SetReady()
+		// Published only now: the routine engine reads it from another
+		// goroutine (Syncer()), and a mirror that is not restored yet has
+		// no agents to report.
+		w.mu.Lock()
+		w.syncer = sy
+		w.mu.Unlock()
 		if w.UID != 0 {
 			chownTree(w.Sessions, w.UID)
 			chownTree(w.Workspace, w.UID)
@@ -392,8 +403,8 @@ func (m *WorkerManager) start(w *Worker) {
 				w.ready = true
 				w.mu.Unlock()
 				log.Printf("[workers] %s: ready after %s", w.Key, time.Since(w.started).Round(time.Second))
-				if w.syncer != nil {
-					w.syncer.Start(15 * time.Second)
+				if s := w.Syncer(); s != nil {
+					s.Start(15 * time.Second)
 				}
 				return
 			}
@@ -439,17 +450,13 @@ func (m *WorkerManager) prepare(w *Worker) error {
 	}
 	patch := fmt.Sprintf("- id: webserver\n  name: \"@deepseek-ai/dsh-host-webserver\"\n  config:\n    host: \"127.0.0.1\"\n    port: %d\n"+
 		"- id: session-persistence-jsonl\n  name: \"@deepseek-ai/dsh-session-persistence-jsonl\"\n  config:\n    root: %s\n", w.Port, w.Sessions)
-	// The routines door: dsh's webhook runtime on the main context, and in
-	// an isolated realm a second loopback listener carrying the one plugin
-	// that turns a POST from this proxy into a new session in an agent's
-	// workspace. The token is the worker's ingress token, which never
-	// leaves this proxy (app/privasys-routines.mjs).
+	// The routines door: dsh's webhook runtime plus the one plugin that turns
+	// a POST from this proxy into a new session in an agent's workspace, as a
+	// route on the worker's own server (app/privasys-routines.mjs).
 	patch += fmt.Sprintf("- insert:\n"+
 		"    - id: webhook-runtime\n      name: \"@deepseek-ai/dsh-webhook\"\n"+
-		"    - id: privasys-routine-ingress\n      name: cordis:group\n      group: true\n      isolate: { webServer: true }\n      config:\n"+
-		"        - id: privasys-routine-server\n          name: \"@deepseek-ai/dsh-host-webserver\"\n          config: { host: \"127.0.0.1\", port: %d }\n"+
-		"        - id: privasys-routines\n          name: %q\n          config: { token: %q, agentPreset: standard, permissionPreset: workspace-write }\n",
-		w.Port+routinePortOffset, envOr("HARNESS_ROUTINES_PLUGIN", "/dsh/apps/cli/config/privasys/privasys-routines.mjs"), w.Ingress)
+		"    - id: privasys-routines\n      name: %q\n      config: { path: %q, agentPreset: standard, permissionPreset: workspace-write }\n",
+		envOr("HARNESS_ROUTINES_PLUGIN", "/dsh/apps/cli/config/privasys/privasys-routines.mjs"), routineDoorPath)
 	if err := os.WriteFile(filepath.Join(w.Dir, "worker.cordis.yml"), []byte(patch), 0o600); err != nil {
 		return err
 	}
@@ -625,8 +632,8 @@ func (m *WorkerManager) forget(w *Worker) {
 		m.freePorts = append(m.freePorts, w.Port)
 		w.Port = 0
 	}
-	if w.syncer != nil {
-		w.syncer.SaveState()
+	if s := w.Syncer(); s != nil {
+		s.SaveState()
 	}
 }
 
@@ -642,11 +649,11 @@ func (m *WorkerManager) failed(w *Worker) {
 
 // Stop ends a worker: a last mirror pass, then SIGTERM to its process group.
 func (m *WorkerManager) Stop(w *Worker) {
-	if w.syncer != nil {
-		if err := w.syncer.SyncOnce(); err != nil {
+	if s := w.Syncer(); s != nil {
+		if err := s.SyncOnce(); err != nil {
 			log.Printf("[workers] %s: final mirror: %v", w.Key, err)
 		}
-		w.syncer.SaveState()
+		s.SaveState()
 	}
 	if w.cmd != nil && w.cmd.Process != nil {
 		_ = signalGroup(w.cmd.Process.Pid, syscall.SIGTERM)

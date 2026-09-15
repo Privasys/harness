@@ -33,6 +33,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -71,26 +72,22 @@ type AgentSpec struct {
 	Debounce    string `yaml:"debounce"`
 	MinInterval string `yaml:"min_interval"`
 	Paused      bool   `yaml:"paused"`
-	// Resources the agent declares it needs, by resource kind, so the
-	// conversation can ask for each consent it lacks.
-	Resources []string `yaml:"resources"`
-	Budget    struct {
-		CreditsPerRun int `yaml:"credits_per_run"`
-		CreditsPerDay int `yaml:"credits_per_day"`
-	} `yaml:"budget"`
 }
 
-// AgentTrigger is one of: every (a Go duration), at (a cron line), on (an
-// event source, e.g. "mail.changes").
+// AgentTrigger is one of: every (a Go duration), or on (an event source
+// named "<tool>.<call>": a mounted tool's change-feed call, held by the proxy
+// as the holder; the contract is in proxy routines.go).
 type AgentTrigger struct {
 	Every string `yaml:"every"`
-	At    string `yaml:"at"`
 	On    string `yaml:"on"`
 }
 
+// eventSourcePattern is "<tool>.<call>", each a plain lowercase identifier.
+var eventSourcePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$`)
+
 // Scheduled reports whether the agent has any unattended trigger.
 func (a AgentSpec) Scheduled() bool {
-	return !a.Paused && (a.Trigger.Every != "" || a.Trigger.At != "" || a.Trigger.On != "")
+	return !a.Paused && (a.Trigger.Every != "" || a.Trigger.On != "")
 }
 
 // Durations returns the debounce and minimum interval with their defaults
@@ -120,6 +117,9 @@ func parseAgentSpec(data []byte) (AgentSpec, error) {
 		if _, err := time.ParseDuration(spec.Trigger.Every); err != nil {
 			return AgentSpec{}, fmt.Errorf("trigger.every %q is not a duration", spec.Trigger.Every)
 		}
+	}
+	if spec.Trigger.On != "" && !eventSourcePattern.MatchString(spec.Trigger.On) {
+		return AgentSpec{}, fmt.Errorf("trigger.on %q is not an event source (<tool>.<call>)", spec.Trigger.On)
 	}
 	return spec, nil
 }
