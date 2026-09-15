@@ -68,8 +68,9 @@ code reads them back:
 | `HARNESS_TOOLS` | The attested tools, by name. The overlay bakes one MCP row per name into every agent preset (`/tool/<name>/mcp` on the proxy); `HARNESS_TOOL_HOSTS` maps each name to the attested app that answers for it. The harness's own `access` server is always mounted. |
 | `HARNESS_RESOURCES` | The user-owned resources the enclave runtime brokers for the harness, as the manifest JSON. The measured `LABEL org.privasys.manifest` is built from it and the proxy builds one capability broker per entry (`proxy/cmd/egress-proxy/resources.go`). The entry named by `HARNESS_STORAGE_RESOURCE` (default `storage`) is the holder's folder, where sessions, policy and skills live. |
 
-A deployment with a mail connector, say, adds `mail` to the tools, its host to
-the hosts, and its `mail.mailbox` resource to the manifest. Nothing else in
+The hosted Privasys Harness declares web search, a web reader, the holder's
+Drive and the platform's mail connector; a fork removes or adds lines. A new
+connector is its tool name, its host and its resource, and nothing else in
 the image changes. Every declared resource is offered to the agent by the
 access server (`list_access`, `request_access`, so a missing approval is
 raised in the conversation, never on a screen per tool) and to the browser by

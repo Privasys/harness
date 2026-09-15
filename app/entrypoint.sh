@@ -63,6 +63,9 @@ case "${PRIVASYS_APP_ID:-}" in
     # The user was also, reasonably, looking at drive.test.privasys.org and
     # wondering where their sessions had gone.
     export HARNESS_TOOL_HOSTS="${HARNESS_TOOL_HOSTS/drive=privasys-drive.apps.privasys.org/drive=drive-demo.apps.test.privasys.org}"
+    # The mail connector likewise: a dev harness reads mailboxes through the
+    # dev connector, which keeps its credentials in the dev Drive.
+    export HARNESS_TOOL_HOSTS="${HARNESS_TOOL_HOSTS/mail=mail-connector.apps.privasys.org/mail=mail-connector.apps.test.privasys.org}"
     # Which Drive brokers the storage CONSENT is the runtime's decision
     # (its StorageResourceApp: the fleet's Drive, the dev id on the test
     # control plane), not this script's — the harness no longer names it.
