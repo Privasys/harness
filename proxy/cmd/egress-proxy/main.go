@@ -367,32 +367,26 @@ func main() {
 	// keeps the pending ask, pushes the holder's wallet and answers the
 	// wallet's attested fetch on this hostname. The resource name must match
 	// the `resources` entry in the measured manifest (Dockerfile LABEL).
-	broker := capability.NewBroker(envOr("HARNESS_STORAGE_RESOURCE", "storage"))
+	// One broker per declared resource (resources.go): the deployment's
+	// manifest, read back from the environment. The storage folder's broker
+	// is also the mirror's.
+	broker, legs := resourceLegsFor(declaredResources(), envOr("HARNESS_STORAGE_RESOURCE", "storage"))
 	if !broker.Enabled() {
-		log.Printf("[capability] no runtime broker in the environment: storage consent and persistence are unavailable off-platform")
+		log.Printf("[capability] no runtime broker in the environment: consent and persistence are unavailable off-platform")
+	} else {
+		log.Printf("[capability] declared resources: %s", resourceNames(legs))
 	}
 	// The storage leg rides the ATTESTED client (same transport as the tool
 	// shims): Drive matches the verified peer app id against the grant subject,
 	// and an unattested connection would silently get the weaker key-only check.
 	registerStorageAPI(mux, broker, client, cfg.toolHosts["drive"])
-	// The mailbox is the second declared resource, and the first that is not
-	// storage. It is brokered exactly like the first — the runtime holds the
-	// binding key, pushes the wallet and answers the wallet's attested fetch.
-	//
-	// Built here, MOUNTED ON THE INGRESS (serveIngress), because consent is a
-	// person's gesture in a browser over the sealed session, not something the
-	// agent's loopback plugins reach. Registering it on this mux instead cost
-	// a deploy: the route existed, was unreachable from outside, and the
-	// ingress fell through to dsh, which answered a bare 405 that looks
-	// nothing like "wrong listener".
-	mailbox := capability.NewBroker(envOr("HARNESS_MAILBOX_RESOURCE", "mailbox"))
 	// The same declared resources, offered to the agent through the access
 	// server (access.go): it reports what the user approved and asks their
 	// wallet for more, so a missing approval is raised in the conversation.
-	setAccessLegs(
-		resourceLeg{name: envOr("HARNESS_STORAGE_RESOURCE", "storage"), broker: broker},
-		resourceLeg{name: envOr("HARNESS_MAILBOX_RESOURCE", "mailbox"), broker: mailbox},
-	)
+	// The browser endpoints for them are mounted ON THE INGRESS (serveIngress),
+	// because consent is a person's gesture over the sealed session, not
+	// something the agent's loopback plugins reach.
+	setAccessLegs(legs...)
 	// A tenant's policy is their data too: it lives in their Drive folder,
 	// never on this volume (D6'). In memory until they connect one.
 	tenantDocs := newDriveTenantBackend(broker, client, cfg.toolHosts["drive"])
@@ -470,7 +464,7 @@ func main() {
 	// to dsh on the loopback upstream, 503 until dsh is listening. Putting
 	// ingress here too means the measured Go layer owns every network edge.
 	if cfg.ingressListen != "" && (cfg.dshUpstream != "" || mgr != nil) {
-		go serveIngress(cfg, deps, store, stamp, broker, mailbox, syncer, meter, mgr)
+		go serveIngress(cfg, deps, store, stamp, broker, legs, syncer, meter, mgr)
 	}
 
 	if err := http.ListenAndServe(cfg.listenAddr, mux); err != nil {
@@ -498,7 +492,7 @@ func isLoopbackPeer(remoteAddr string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp *stamper, broker, mailbox *capability.Broker, syncer *capability.Syncer, meter *spendMeter, mgr *WorkerManager) {
+func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp *stamper, broker *capability.Broker, legs []resourceLeg, syncer *capability.Syncer, meter *spendMeter, mgr *WorkerManager) {
 	listen, upstream := cfg.ingressListen, cfg.dshUpstream
 	var target *neturl.URL
 	if upstream != "" {
@@ -634,12 +628,9 @@ func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp 
 	// applying to them, and how a third party checks the product's posture.
 	registerPolicyAPI(mux, store, stamp)
 	// Every declared resource, under one generic pair of paths. Storage keeps
-	// its own unprefixed endpoints below because its answer is Drive-shaped
-	// and the UI already calls them.
-	registerResourceCapabilityAPI(mux,
-		resourceLeg{name: envOr("HARNESS_STORAGE_RESOURCE", "storage"), broker: broker},
-		resourceLeg{name: envOr("HARNESS_MAILBOX_RESOURCE", "mailbox"), broker: mailbox},
-	)
+	// its own unprefixed endpoints below as well, because its answer is
+	// Drive-shaped (a folder, a path, a withdrawal the mirror noticed).
+	registerResourceCapabilityAPI(mux, legs...)
 	registerCapabilityAPI(mux, broker, func(sub string) bool {
 		if mgr != nil {
 			if w := mgr.Get(sub); w != nil && w.syncer != nil {

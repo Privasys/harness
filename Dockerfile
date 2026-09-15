@@ -37,7 +37,14 @@ RUN pnpm install --frozen-lockfile
 # anchor and FAILS the build if upstream moved one — the signal to rebase, never
 # a silent skip. No package.json is touched, so the frozen lockfile still holds.
 COPY web /build/web
-RUN node /build/web/apply-overlay.mjs /dsh
+# The attested tools this deployment mounts (space-separated names). Each is
+# one MCP row in every agent preset (overlay 2c) pointing at the proxy's
+# /tool/<name>/mcp; HARNESS_TOOL_HOSTS below says which attested app answers
+# for it. The rows are baked here because presets compose their own tree,
+# which no runtime patch reaches. The harness's own access server is always
+# mounted. A deployment with a connector adds its name here and its host below.
+ARG HARNESS_TOOLS="web_search web_reader drive"
+RUN HARNESS_TOOLS="${HARNESS_TOOLS}" node /build/web/apply-overlay.mjs /dsh
 # Build the frontend dist (dsh-web-app refuses to load without it) and
 # materialize the web profile so its plugin node_modules are baked into the
 # image — an enclave has no egress for a boot-time install, and the profile
@@ -177,6 +184,7 @@ ENV HARNESS_EGRESS_MODE=open
 # telemetry row at profile composition (profile-boot resolveTelemetryPatch).
 ENV DSH_TELEMETRY_DISABLED=1
 ENV HARNESS_MODEL_HOST=confidential-ai.apps.privasys.org
+# One host per tool named in HARNESS_TOOLS (name=host, comma-separated).
 ENV HARNESS_TOOL_HOSTS=web_search=web-search-brave.apps.privasys.org,web_reader=web-browser-lightpanda.apps.privasys.org,drive=privasys-drive.apps.privasys.org
 # Public browser-UI shell: these prefixes are the forked dsh SPA + Privasys
 # auth/attestation shell (HTML/JS/CSS — public measured code, no user data).
@@ -188,22 +196,23 @@ ENV HARNESS_TOOL_HOSTS=web_search=web-search-brave.apps.privasys.org,web_reader=
 # exemption (manager.go isStaticUnsealedPath).
 LABEL org.privasys.static-unsealed-prefixes="/,/assets/,/privasys/,/plugins/,/favicon.svg,/manifest.webmanifest"
 # The measured manifest. The harness exposes no tools of its own; it declares
-# the one user-owned RESOURCE it wants: a folder in the holder's Drive, which
-# the enclave runtime brokers (consent on the holder's device, per-app sealed
-# binding key, wallet push) and Drive places under AppData/<label>/. The
+# the user-owned RESOURCES it wants brokered by the enclave runtime (consent
+# on the holder's device, per-app sealed binding key, wallet push). The
 # control plane reads this label on every version and hands the declaration
 # to the runtime at deploy; what a user is told the app wants is therefore
-# attested. The resource NAME must match HARNESS_STORAGE_RESOURCE (default
+# attested. The generic harness declares one: a folder in the holder's Drive,
+# which Drive places under AppData/<label>/ and where sessions, policy and
+# skills live. Its name must match HARNESS_STORAGE_RESOURCE (default
 # "storage") in the proxy.
 #
-# The second resource is a MAILBOX, and it is not storage: nothing is kept
-# here, the connector holds the credential, and what the holder approves is
-# "this agent may read my mail and leave me drafts". Its name must match
-# HARNESS_MAILBOX_RESOURCE (default "mailbox"). Declared on both fleets
-# because the manifest is measured and one image serves both; a fleet with no
-# mail connector simply has no resource service for the kind, and the runtime
-# refuses the ask rather than showing the holder a screen it cannot honour.
-LABEL org.privasys.manifest='{"tools":[],"resources":[{"kind":"storage.folder","name":"storage","label":"Harness","permissions":["read","write","delete"]},{"kind":"mail.mailbox","name":"mailbox","label":"Mail Connector","permissions":["read","write"]}]}'
+# A deployment that mounts a connector appends that connector's resource
+# here (a kind the fleet serves, e.g. "mail.mailbox"); the proxy reads the
+# same text back from HARNESS_RESOURCES and builds one broker per entry
+# (proxy resources.go), so the declaration is the only place a resource is
+# named.
+ARG HARNESS_RESOURCES='[{"kind":"storage.folder","name":"storage","label":"Harness","permissions":["read","write","delete"]}]'
+ENV HARNESS_RESOURCES=${HARNESS_RESOURCES}
+LABEL org.privasys.manifest="{\"tools\":[],\"resources\":${HARNESS_RESOURCES}}"
 # Link the GHCR package to this repo so its Actions inherit write access
 # (avoids a personal access token — the package is published by CI).
 LABEL org.opencontainers.image.source="https://github.com/Privasys/attested-harness"

@@ -3,7 +3,7 @@
 
 package main
 
-// A second declared resource, and the shape for every one after it.
+// Every declared resource (resources.go), under one generic pair of paths.
 //
 //	POST /privasys/capability/{resource}/request   begin an ask (user gesture)
 //	GET  /privasys/capability/{resource}/status    what this holder approved
@@ -18,8 +18,8 @@ package main
 // So this is deliberately the GENERIC surface: it reports what the runtime
 // knows — approved, declined, which resource service, which permissions, and
 // whatever opaque result that service returned — and lets the caller phrase
-// it. The next connector adds a manifest entry and a broker, and nothing here
-// changes.
+// it. The next resource is one more entry in the deployment's declaration
+// (Dockerfile ARG HARNESS_RESOURCES), and nothing here changes.
 
 import (
 	"log"

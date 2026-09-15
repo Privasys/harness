@@ -295,34 +295,35 @@ const mcpFleetRow = (id, server) =>
   `    headers:\n` +
   `      authorization: !!js "'Bearer ' + (process.env.PRIVASYS_BEARER || '')"\n` +
   `    failOnStartupError: false\n`
+// The tool list is the deployment's (Dockerfile ARG HARNESS_TOOLS, handed to
+// this script in the environment): one row per attested tool, each pointing
+// at the proxy's /tool/<name>/mcp, plus the harness's own access server
+// (proxy access.go), which lists what the user approved and asks their wallet
+// for more so the agent can raise a missing approval in the conversation.
+// A tool named here without a host at runtime degrades to nothing (the proxy
+// answers 404 and failOnStartupError keeps the preset up).
+const HARNESS_TOOLS = (process.env.HARNESS_TOOLS ?? 'web_search web_reader drive')
+  .split(/[\s,]+/).filter(Boolean)
+for (const tool of HARNESS_TOOLS) {
+  if (!/^[a-z][a-z0-9_]*$/.test(tool)) throw new Error(`HARNESS_TOOLS: "${tool}" is not a tool name (lowercase, digits, underscores)`)
+}
 const MCP_FLEET_ROWS =
   `# Privasys: the built-in web tool is replaced by the attested MCP fleet —\n` +
   `# each row is one attested platform tool app behind the in-TCB egress proxy\n` +
   `# (mutual RA-TLS, DepSet-gated). failOnStartupError: false so an unreachable\n` +
   `# tool app degrades that tool, never the whole preset.\n` +
-  mcpFleetRow('web-search', 'web_search') + `\n` +
-  mcpFleetRow('web-reader', 'web_reader') + `\n` +
-  mcpFleetRow('drive', 'drive') + `\n` +
-  // The mail connector. One image serves both fleets and this overlay runs at
-  // BUILD time, so the row is mounted on both; only dev has a host for it
-  // (entrypoint.sh appends one), and on prod the row degrades to nothing with
-  // a logged catalogue failure until a prod connector exists. That is the
-  // honest state of a tool one fleet does not have, and failOnStartupError
-  // keeps it from touching the rest of the preset.
-  mcpFleetRow('mail', 'mail') + `\n` +
-  // The harness's own access server (proxy access.go): lists what the user
-  // has approved and asks their wallet for more, so the agent can raise a
-  // missing approval in the conversation instead of a screen per tool.
+  HARNESS_TOOLS.map((tool) => mcpFleetRow(tool.replace(/_/g, '-'), tool) + `\n`).join('') +
   mcpFleetRow('access', 'access')
+console.log(`[overlay] attested tools: ${HARNESS_TOOLS.join(', ')} (+ access)`)
 for (const preset of ['standard', 'ptc', 'cordis']) {
   edit(`packages/preset/agent-presets/presets/${preset}/agent.cordis.yml`, [
     [`preset ${preset} attested-fleet swap`, TOOL_WEB_BLOCK, MCP_FLEET_ROWS],
   ])
 }
 
-// The three mcp-client rows all share one module name, so the Plugins
-// inventory would render three identical "mcp-client" cards — show the row's
-// entry id (the tool identity: web-search / web-reader / drive) instead.
+// The mcp-client rows all share one module name, so the Plugins inventory
+// would render identical "mcp-client" cards — show the row's entry id (the
+// tool identity) instead.
 edit('packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx', [
   [
     'mcp-client card title by entry id',
