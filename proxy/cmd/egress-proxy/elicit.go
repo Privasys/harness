@@ -70,7 +70,16 @@ type elicitResult struct {
 
 // elicitPending holds the open asks: elicitation id → the channel its
 // answer arrives on. One entry per open tool call.
+// elicitPending maps an open question's id to the ask waiting for its answer.
+// The answer must come back from the same holder: the id is unguessable,
+// but a session is a person's, and a reply is accepted only from the worker
+// that asked, never from another subject that learned the id.
 var elicitPending sync.Map
+
+type pendingElicit struct {
+	ch  chan []byte
+	sub string
+}
 
 // parseElicit reports whether a tool app's answer is an elicitation ask.
 func parseElicit(status int, body []byte) (elicitAsk, bool) {
@@ -109,14 +118,18 @@ func isRPCResponse(body []byte) (string, bool) {
 }
 
 // deliverElicitResponse hands the client's answer to the waiting tool call.
-func deliverElicitResponse(id string, body []byte) bool {
+func deliverElicitResponse(id, sub string, body []byte) bool {
 	v, ok := elicitPending.Load(id)
 	if !ok {
 		return false
 	}
-	ch := v.(chan []byte)
+	p := v.(*pendingElicit)
+	if p.sub != sub {
+		log.Printf("[mcp] an answer to question %s came from another subject; ignored", id)
+		return false
+	}
 	select {
-	case ch <- body:
+	case p.ch <- body:
 		return true
 	default:
 		return false // already answered
@@ -164,7 +177,7 @@ func (s *sseWriter) send(msg any) error {
 // tool app again with the merged arguments and returns the raw result and
 // status, the way callTool does.
 func elicitAndRetry(w http.ResponseWriter, r *http.Request, reqID json.RawMessage, toolName, fn string,
-	args json.RawMessage, ask elicitAsk, sessionID string,
+	args json.RawMessage, ask elicitAsk, sessionID, sub string,
 	recall func(args json.RawMessage) ([]byte, int, error)) {
 
 	sse, ok := startSSE(w)
@@ -174,7 +187,7 @@ func elicitAndRetry(w http.ResponseWriter, r *http.Request, reqID json.RawMessag
 	}
 	id := newElicitID()
 	ch := make(chan []byte, 1)
-	elicitPending.Store(id, ch)
+	elicitPending.Store(id, &pendingElicit{ch: ch, sub: sub})
 	defer elicitPending.Delete(id)
 
 	params := map[string]any{

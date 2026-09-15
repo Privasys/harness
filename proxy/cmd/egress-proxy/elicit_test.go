@@ -52,7 +52,7 @@ func TestElicitationRoundTrip(t *testing.T) {
 		elicitAndRetry(rec, r, json.RawMessage(`7`), "mail", "connect_mailbox",
 			json.RawMessage(`{"host":"imap.example:993"}`),
 			elicitAsk{Message: "Connect your mailbox", RequestedSchema: json.RawMessage(`{"type":"object"}`)},
-			"session-1",
+			"session-1", "holder-1",
 			func(a json.RawMessage) ([]byte, int, error) {
 				recalled = a
 				return []byte(`{"linked":true}`), 200, nil
@@ -74,7 +74,7 @@ func TestElicitationRoundTrip(t *testing.T) {
 	if !strings.Contains(out, `"method":"elicitation/create"`) || !strings.Contains(out, `"privasysSession":"session-1"`) || !strings.Contains(out, `"privasysServer":"mail"`) {
 		t.Fatalf("the question must carry the schema and the routing meta: %q", out)
 	}
-	if !deliverElicitResponse(id, []byte(`{"jsonrpc":"2.0","id":"`+id+`","result":{"action":"accept","content":{"user":"me@example.com","password":"s3cret"}}}`)) {
+	if !deliverElicitResponse(id, "holder-1", []byte(`{"jsonrpc":"2.0","id":"`+id+`","result":{"action":"accept","content":{"user":"me@example.com","password":"s3cret"}}}`)) {
 		t.Fatal("the answer was not delivered to the open call")
 	}
 	<-done
@@ -101,7 +101,7 @@ func TestElicitationDeclineEndsTheCallReadably(t *testing.T) {
 	go func() {
 		defer close(done)
 		elicitAndRetry(rec, r, json.RawMessage(`8`), "mail", "connect_mailbox", json.RawMessage(`{}`),
-			elicitAsk{Message: "q", RequestedSchema: json.RawMessage(`{"type":"object"}`)}, "",
+			elicitAsk{Message: "q", RequestedSchema: json.RawMessage(`{"type":"object"}`)}, "", "holder-1",
 			func(a json.RawMessage) ([]byte, int, error) { recalled = true; return nil, 0, nil })
 	}()
 	var id string
@@ -112,12 +112,27 @@ func TestElicitationDeclineEndsTheCallReadably(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 		}
 	}
-	deliverElicitResponse(id, []byte(`{"jsonrpc":"2.0","id":"`+id+`","result":{"action":"decline"}}`))
+	deliverElicitResponse(id, "holder-1", []byte(`{"jsonrpc":"2.0","id":"`+id+`","result":{"action":"decline"}}`))
 	<-done
 	if recalled {
 		t.Fatal("the tool app must not be called again after a decline")
 	}
 	if !strings.Contains(rec.Body.String(), "declined") || !strings.Contains(rec.Body.String(), `"isError":true`) {
 		t.Fatalf("a decline must end the call as a readable tool error: %q", rec.Body.String())
+	}
+}
+
+func TestAnAnswerFromAnotherSubjectIsIgnored(t *testing.T) {
+	ch := make(chan []byte, 1)
+	elicitPending.Store("elicit-test", &pendingElicit{ch: ch, sub: "holder-1"})
+	defer elicitPending.Delete("elicit-test")
+	if deliverElicitResponse("elicit-test", "holder-2", []byte(`{"jsonrpc":"2.0","id":"elicit-test","result":{"action":"accept","content":{}}}`)) {
+		t.Fatal("a reply from another subject must not answer the question")
+	}
+	if len(ch) != 0 {
+		t.Fatal("nothing may have been delivered")
+	}
+	if !deliverElicitResponse("elicit-test", "holder-1", []byte(`{"jsonrpc":"2.0","id":"elicit-test","result":{"action":"accept","content":{}}}`)) {
+		t.Fatal("the asking holder's reply is the answer")
 	}
 }

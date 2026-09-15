@@ -1809,4 +1809,126 @@ edit('packages/client/ui-workspace/src/client/locales.ts', [
   ],
 ])
 
+
+// --- 2k. MCP elicitation on dsh's own question surface ---------------------
+// A tool app behind the measured proxy may need the person's answer before
+// it can act (a connector without a credential, a service to set up once).
+// The model must not collect it: it would carry the answer in its context
+// and the session record would keep it. MCP's standard step is elicitation:
+// the SERVER asks the CLIENT for structured input against a JSON schema, the
+// client's own UI collects it, the answer goes back to the server. The
+// proxy's shim speaks the server side (proxy elicit.go: a 428 from the tool
+// becomes an elicitation/create on the call's SSE stream, the answer is
+// merged and the tool called again, and a reply is accepted only from the
+// holder who was asked). This is the client side, on dsh's official MCP
+// client (0.1.6): the connection advertises form elicitation and routes each
+// request to the conversation it belongs to on ctx.userQuestions
+// (overlay/mcp/privasys-elicit.ts). Two fields ride dsh's question wire
+// untouched: `secret` renders as a masked input and is never echoed, and the
+// first question's detail carries the banner that says which tool asks and
+// that the answers stay out of the conversation.
+put('packages/mcp/mcp-client/src/privasys-elicit.ts', 'overlay/mcp/privasys-elicit.ts')
+edit('packages/mcp/mcp-client/src/connection.ts', [
+  [
+    'mcp-client: elicitation import',
+    `import { Client, type Transport } from '@modelcontextprotocol/client'\n`,
+    `import { Client, type Transport } from '@modelcontextprotocol/client'\n` +
+      `import { privasysElicit } from './privasys-elicit.ts'\n`,
+  ],
+  [
+    'mcp-client: elicitation capability',
+    `        capabilities: {},\n` +
+      `        versionNegotiation: { mode: 'auto' },\n`,
+    `        // Privasys: a server may ask the person a structured question in the\n` +
+      `        // middle of a call (form-mode elicitation); the answer never enters\n` +
+      `        // the model's context (privasys-elicit.ts).\n` +
+      `        capabilities: { elicitation: { form: {} } },\n` +
+      `        versionNegotiation: { mode: 'auto' },\n`,
+  ],
+  [
+    'mcp-client: elicitation handler',
+    `    const closed: PromiseWithResolvers<void> = Promise.withResolvers()\n`,
+    `    generation.setRequestHandler('elicitation/create', (request, call) =>\n` +
+      `      privasysElicit(ctx, config.serverName, request, call))\n` +
+      `    const closed: PromiseWithResolvers<void> = Promise.withResolvers()\n`,
+  ],
+])
+edit('packages/interaction/user-questions/src/types.ts', [
+  [
+    'user-questions: secret question field',
+    `  /** Optional presentation intent for capable UIs; absent asks for the generic option list. */\n` +
+      `  intent?: AskUserQuestionIntent\n` +
+      `}\n`,
+    `  /** Optional presentation intent for capable UIs; absent asks for the generic option list. */\n` +
+      `  intent?: AskUserQuestionIntent\n` +
+      `  /**\n` +
+      `   * Privasys: the answer is a secret (a password, a key). Rendered as a\n` +
+      `   * masked input and never echoed by the UI. Set by MCP elicitation for\n` +
+      `   * a string property with format "password"; never by the model.\n` +
+      `   */\n` +
+      `  secret?: boolean\n` +
+      `}\n`,
+  ],
+])
+edit('packages/client/ui-user-questions/src/client/QuestionComposer.tsx', [
+  [
+    'ui-user-questions: secret prop',
+    `  /** Whether this field takes focus on mount. */\n` +
+      `  autoFocus?: boolean\n`,
+    `  /** Whether this field takes focus on mount. */\n` +
+      `  autoFocus?: boolean\n` +
+      `  /** Privasys: a masked, single-line input for a secret; never echoed. */\n` +
+      `  secret?: boolean\n`,
+  ],
+  [
+    'ui-user-questions: masked input',
+    `function AnswerField(props: AnswerFieldProps) {\n` +
+      `  return (\n`,
+    `function AnswerField(props: AnswerFieldProps) {\n` +
+      `  if (props.secret === true) {\n` +
+      `    // Privasys: a secret is typed into a password input, one line, no\n` +
+      `    // mirror (the mirror would render the glyphs), no autocomplete.\n` +
+      `    return (\n` +
+      `      <div className={clsx(css.field, props.variant === 'inline' ? css.customInline : css.customBlock)}>\n` +
+      `        <input\n` +
+      `          type="password"\n` +
+      `          autoComplete="new-password"\n` +
+      `          autoFocus={props.autoFocus}\n` +
+      `          className={css.fieldInput}\n` +
+      `          value={props.value}\n` +
+      `          disabled={props.disabled}\n` +
+      `          placeholder={props.placeholder}\n` +
+      `          onFocus={props.onFocus}\n` +
+      `          onChange={props.onChange as unknown as React.ChangeEventHandler<HTMLInputElement>}\n` +
+      `          onKeyDown={props.onKeyDown as unknown as React.KeyboardEventHandler<HTMLInputElement>}\n` +
+      `        />\n` +
+      `      </div>\n` +
+      `    )\n` +
+      `  }\n` +
+      `  return (\n`,
+  ],
+  [
+    'ui-user-questions: secret on the inline field',
+    `                      <AnswerField\n` +
+      `                        variant="inline"\n` +
+      `                        value={draft.custom}\n`,
+    `                      <AnswerField\n` +
+      `                        variant="inline"\n` +
+      `                        secret={question.secret === true}\n` +
+      `                        value={draft.custom}\n`,
+  ],
+  [
+    'ui-user-questions: secret on the block field',
+    `                    <AnswerField\n` +
+      `                      autoFocus={!focusedQuestions.current.has(index)}\n` +
+      `                      variant="block"\n` +
+      `                      value={draft.custom}\n`,
+    `                    <AnswerField\n` +
+      `                      autoFocus={!focusedQuestions.current.has(index)}\n` +
+      `                      variant="block"\n` +
+      `                      secret={question.secret === true}\n` +
+      `                      value={draft.custom}\n`,
+  ],
+])
+
 console.log('[overlay] done')

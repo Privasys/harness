@@ -76,7 +76,7 @@ func mcpShim(w http.ResponseWriter, r *http.Request, client *http.Client, toolNa
 	// A JSON-RPC RESPONSE from the client is the holder's answer to a tool's
 	// question (elicit.go): it goes to the tool call waiting for it.
 	if id, ok := isRPCResponse(body); ok {
-		if !deliverElicitResponse(id, body) {
+		if !deliverElicitResponse(id, sub, body) {
 			log.Printf("[mcp %s] an answer arrived for no open question (%s)", toolName, id)
 		}
 		w.WriteHeader(http.StatusAccepted)
@@ -191,7 +191,7 @@ func mcpShim(w http.ResponseWriter, r *http.Request, client *http.Client, toolNa
 		// goes to the person on dsh's own surface, the answer to the tool app
 		// alone, and the model sees only the final result.
 		if ask, ok := parseElicit(status, result); ok {
-			elicitAndRetry(w, r, req.ID, toolName, p.Name, args, ask, knowledgeMeta(req.Params),
+			elicitAndRetry(w, r, req.ID, toolName, p.Name, args, ask, knowledgeMeta(req.Params), sub,
 				func(a json.RawMessage) ([]byte, int, error) {
 					res, st, _, err := callTool(r, client, host, p.Name, a, "", sub)
 					return res, st, err
