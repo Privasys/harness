@@ -35,7 +35,7 @@
 // No package.json is touched, so the frozen lockfile still holds.
 //
 // Usage: node apply-overlay.mjs <dsh-root>
-import { readFileSync, writeFileSync, copyFileSync, mkdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, copyFileSync, mkdirSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
@@ -433,7 +433,7 @@ edit('packages/util/values/src/index.ts', [
 // helper (upstream discussion #5709 counts four sites in total). core/tools
 // guards TOOL JSON SCHEMAS, which is why Firefox lost tool calls specifically
 // while plain chat still rendered; the other two cover the host runner and the
-// worker-thread runtime, which use their own intrinsic-capture style.
+// PTC node runtime (json-wire.ts since 0.1.6), which use their own intrinsic-capture style.
 for (const rel of [
   'packages/core/tools/src/json-schema.ts',
   'packages/extensions/cordis-host-runner/src/guard.ts',
@@ -452,7 +452,7 @@ for (const rel of [
     ],
   ])
 }
-edit('packages/code-runtime/code-runtime-worker-thread/src/worker-json.ts', [
+edit('packages/ptc-runtime/ptc-runtime-node/src/json-wire.ts', [
   [
     'engine-agnostic intrinsic constructor check (worker)',
     `    return constructor.name === name\n` +
@@ -475,14 +475,14 @@ edit('packages/code-runtime/code-runtime-worker-thread/src/worker-json.ts', [
 // either, which is exactly what our own chat front-end and Confidential
 // AI's agent loop already do. Harmless against a DeepSeek-cloud endpoint,
 // which keeps emitting reasoning_content.
-edit('packages/llm/llm-deepseek/src/translate.ts', [
+edit('packages/llm/llm-deepseek/src/protocols/chat-completions/translate.ts', [
   [
     'reasoning delta field fallback',
     `      const reasoning = delta?.reasoning_content`,
     `      const reasoning = delta?.reasoning_content ?? delta?.reasoning`,
   ],
 ])
-edit('packages/llm/llm-deepseek/src/types.ts', [
+edit('packages/llm/llm-deepseek/src/protocols/chat-completions/types.ts', [
   [
     'WireDelta reasoning field',
     `  reasoning_content?: string | null\n  tool_calls?: WireToolCallDelta[]`,
@@ -604,8 +604,8 @@ put(
 edit('packages/client/ui-trajectory/src/client/TrajectoryTable.tsx', [
   [
     'attestation tab import',
-    `import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'`,
-    `import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'\n` +
+    `import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'`,
+    `import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'\n` +
       `import { PrivasysAttestationTab } from './PrivasysAttestationTab.tsx'`,
   ],
   [
@@ -617,15 +617,21 @@ edit('packages/client/ui-trajectory/src/client/TrajectoryTable.tsx', [
     'detailTabs tool branch attestation',
     `  return [\n` +
       `    { id: 'overview', labelKey: 'tab.summary' },\n` +
-      `    ...(record.cell.inputDetail ? [{ id: 'input', labelKey: 'tab.payload' } as const] : []),\n` +
-      `    ...(record.cell.outputDetail ? [{ id: 'output', labelKey: 'tab.result' } as const] : []),\n` +
+      `    ...(record.cell.inputDetail ? [{\n` +
+      `      id: 'input', labelKey: codeProgram(record.cell) === undefined ? 'tab.payload' : 'code.source',\n` +
+      `    } as const] : []),\n` +
+      `    ...(record.cell.outputDetail || codeProgram(record.cell) !== undefined\n` +
+      `      ? [{ id: 'output', labelKey: 'tab.result' } as const] : []),\n` +
       `    { id: 'schema', labelKey: 'tab.schema' },\n` +
       `    { id: 'timing', labelKey: 'tab.timing' },\n` +
       `  ]`,
     `  return [\n` +
       `    { id: 'overview', labelKey: 'tab.summary' },\n` +
-      `    ...(record.cell.inputDetail ? [{ id: 'input', labelKey: 'tab.payload' } as const] : []),\n` +
-      `    ...(record.cell.outputDetail ? [{ id: 'output', labelKey: 'tab.result' } as const] : []),\n` +
+      `    ...(record.cell.inputDetail ? [{\n` +
+      `      id: 'input', labelKey: codeProgram(record.cell) === undefined ? 'tab.payload' : 'code.source',\n` +
+      `    } as const] : []),\n` +
+      `    ...(record.cell.outputDetail || codeProgram(record.cell) !== undefined\n` +
+      `      ? [{ id: 'output', labelKey: 'tab.result' } as const] : []),\n` +
       `    { id: 'schema', labelKey: 'tab.schema' },\n` +
       `    { id: 'timing', labelKey: 'tab.timing' },\n` +
       `    { id: 'attestation', labelKey: 'tab.attestation' },\n` +
@@ -723,18 +729,8 @@ edit('packages/client/ui-settings-models/src/client/index.ts', [
 
 // (b) The ?fixture demo transport: always bundled, reachable by URL query in
 // production, serving DeepSeek-authored sample content. Disable outright.
-edit('packages/client/connection/src/client/index.ts', [
-  [
-    'fixture transport removal',
-    `  const fixture = pageLocation !== undefined && new URLSearchParams(pageLocation.search).has('fixture')\n` +
-      `  const fixtureRpc = fixture ? createFixtureConnectionRpc() : undefined`,
-    `  // Privasys: the ?fixture demo transport (DeepSeek-authored sample\n` +
-      `  // content, reachable by query string) is disabled in this deployment.\n` +
-      `  void pageLocation\n` +
-      `  void createFixtureConnectionRpc\n` +
-      `  const fixtureRpc = undefined`,
-  ],
-])
+// dsh 0.1.6 removed the ?fixture demo transport itself (RemoteMock replaced
+// it), so nothing is left to disable here.
 
 // (c) Model-visible sandbox-policy brand: "DSH file policy/sandbox" ->
 // neutral "harness" (these strings ride the runtime-context snapshot into
@@ -837,7 +833,7 @@ edit('packages/preset/agent-presets/presets/cordis/agent.cordis.yml', [
 // request/header and tool/result shapes (core/session surface.ts), and the
 // Turn-usage fold reads named fields, so an extra key is inert everywhere
 // but here.
-edit('packages/llm/llm-deepseek/src/translate.ts', [
+edit('packages/llm/llm-deepseek/src/protocols/chat-completions/translate.ts', [
   [
     'repro: pending slot',
     `  let pendingUsage: TokenUsage | undefined\n`,
@@ -1051,118 +1047,57 @@ edit('packages/client/ui-chat/src/client/locale.ts', [
 // their own. Wire identifiers (the provider route, the settings namespace,
 // the package names) are untouched: they are addresses, not words. The
 // upstream onboarding and welcome dialogs are already unmounted (2g).
-edit('packages/llm/llm-deepseek/src/adapter.ts', [
-  [
-    'provider heading',
-    `    return { id: provider, name: 'DeepSeek' }`,
-    `    return { id: provider, name: 'Privasys' }`,
-  ],
-  [
-    'image input refusal',
-    `          \`DeepSeek model "\${options.model}" does not accept image input.\`,`,
-    `          \`Model "\${options.model}" does not accept image input.\`,`,
-  ],
-  [
-    'image conversion',
-    `          'DeepSeek image conversion requires the durable attachment service.',`,
-    `          'Image conversion requires the durable attachment service.',`,
-  ],
-  [
-    'stream idle timeout',
-    `          \`DeepSeek stream idle timeout after \${connection.streamIdleTimeoutMs}ms\`,`,
-    `          \`Attested model stream idle timeout after \${connection.streamIdleTimeoutMs}ms\`,`,
-  ],
-  [
-    'aborted by caller',
-    `        throw new LlmError('DeepSeek request aborted by caller', 'ABORTED', { cause: error })`,
-    `        throw new LlmError('Model request aborted by caller', 'ABORTED', { cause: error })`,
-  ],
-  [
-    'stream failed',
-    `      throw new LlmError(\`DeepSeek API stream from \${connection.baseURL} failed\`, 'TRANSPORT', { cause: error })`,
-    `      throw new LlmError(\`Attested model stream from \${connection.baseURL} failed\`, 'TRANSPORT', { cause: error })`,
-  ],
-  [
-    'consumer stopped',
-    `      consumer.abort('DeepSeek stream consumer stopped')`,
-    `      consumer.abort('Model stream consumer stopped')`,
-  ],
-  [
-    'extension preparation',
-    `        throw new LlmError('DeepSeek request extension preparation failed', 'REQUEST_EXTENSION', { cause: error })`,
-    `        throw new LlmError('Model request extension preparation failed', 'REQUEST_EXTENSION', { cause: error })`,
-  ],
-  [
-    'extension collision',
-    `          throw new LlmError(\`DeepSeek request extension field \${JSON.stringify(field)} collides with the base request\`, 'REQUEST_EXTENSION')`,
-    `          throw new LlmError(\`Model request extension field \${JSON.stringify(field)} collides with the base request\`, 'REQUEST_EXTENSION')`,
-  ],
-  [
-    'request failed',
-    `          \`DeepSeek API request to \${connection.baseURL} failed\`,`,
-    `          \`Attested model request to \${connection.baseURL} failed\`,`,
-  ],
-  [
-    'api error line',
-    `        let message = \`DeepSeek API error (HTTP \${response.status})\``,
-    `        let message = \`Attested model error (HTTP \${response.status})\``,
-  ],
-  [
-    'http cause',
-    `          cause: new Error(rawResponse.length > 0 ? rawResponse : \`DeepSeek HTTP \${response.status}\`),`,
-    `          cause: new Error(rawResponse.length > 0 ? rawResponse : \`Attested model HTTP \${response.status}\`),`,
-  ],
-  [
-    'extension acceptance',
-    `        throw new LlmError('DeepSeek request extension acceptance failed', 'REQUEST_EXTENSION', { cause: error })`,
-    `        throw new LlmError('Model request extension acceptance failed', 'REQUEST_EXTENSION', { cause: error })`,
-  ],
-  [
-    'empty response',
-    `        throw new LlmError('DeepSeek API returned no response body', 'EMPTY_RESPONSE')`,
-    `        throw new LlmError('Attested model returned no response body', 'EMPTY_RESPONSE')`,
-  ],
-])
-edit('packages/llm/llm-deepseek/src/serialize.ts', [
-  [
-    'effort unsupported',
-    `    \`DeepSeek does not support reasoning effort "\${effort}"\`,`,
-    `    \`The attested model does not support reasoning effort "\${effort}"\`,`,
-  ],
-  [
-    'effort disabled',
-    `      \`DeepSeek deployment does not support reasoning effort "\${effort}"\`,`,
-    `      \`This deployment does not support reasoning effort "\${effort}"\`,`,
-  ],
-  [
-    'image content',
-    `    throw new LlmError('The DeepSeek chat-completions adapter does not support image content.', 'UNSUPPORTED_CONTENT')`,
-    `    throw new LlmError('The attested model adapter does not support image content.', 'UNSUPPORTED_CONTENT')`,
-  ],
-  [
-    'image role',
-    `        \`The DeepSeek chat-completions adapter cannot represent image content in a \${message.role} message.\`,`,
-    `        \`The attested model adapter cannot represent image content in a \${message.role} message.\`,`,
-  ],
-  [
-    'image not prepared (block)',
-    `      \`DeepSeek request image \${block.attachment.attachmentId} was not prepared.\`,`,
-    `      \`Request image \${block.attachment.attachmentId} was not prepared.\`,`,
-  ],
-  [
-    'image not prepared (ref)',
-    `        throw new LlmError(\`DeepSeek request image \${ref.attachmentId} was not prepared.\`, 'INVALID_REQUEST')`,
-    `        throw new LlmError(\`Request image \${ref.attachmentId} was not prepared.\`, 'INVALID_REQUEST')`,
-  ],
-])
 // Settings > Models: the base-URL placeholder named DeepSeek's public API,
 // the one endpoint this deployment must never reach. Name our route instead.
-edit('packages/client/ui-settings-models/src/client/ProviderEditor.tsx', [
+// The plugin's own sentences start with the provider's name, and 0.1.6 split
+// the adapter into protocols/ and common/ (some sixty of them). One rewrite
+// over the tree replaces an anchor per sentence: inside a string literal,
+// "DeepSeek …" / "The DeepSeek …" becomes "The attested model …". Wire
+// identifiers, imports and comments are untouched. The provider heading (the
+// model picker's group title) is named explicitly.
+const MODEL_PLUGIN_SRC = 'packages/llm/llm-deepseek/src'
+const modelPluginFiles = (dir) => readdirSync(join(dsh, dir), { withFileTypes: true }).flatMap((e) =>
+  e.isDirectory() ? modelPluginFiles(`${dir}/${e.name}`) : (e.name.endsWith('.ts') ? [`${dir}/${e.name}`] : []))
+const PROSE = /(['`"])(?:The )?DeepSeek /g
+for (const rel of modelPluginFiles(MODEL_PLUGIN_SRC)) {
+  const path = join(dsh, rel)
+  const before = readFileSync(path, 'utf8')
+  const after = before.split('\n').map((line) =>
+    /^\s*(\/\/|\*|\/\*)/.test(line) ? line : line.replace(PROSE, '$1The attested model ')).join('\n')
+  if (after !== before) {
+    writeFileSync(path, after)
+    console.log(`[overlay] patched ${rel} (wording)`)
+  }
+}
+editAll('packages/llm/llm-deepseek/src/protocols/chat-completions/adapter.ts', [
+  ['provider heading', `return { id: provider, name: 'DeepSeek' }`, `return { id: provider, name: 'Privasys' }`, 1],
+])
+editAll('packages/llm/llm-deepseek/src/protocols/messages/adapter.ts', [
+  ['provider heading (messages)', `return { id: provider, name: 'DeepSeek' }`, `return { id: provider, name: 'Privasys' }`, 1],
+])
+// Guard for the next re-pin: no prose "DeepSeek" may remain in a sentence the
+// plugin can throw or show (a string literal starting with the word).
+for (const rel of modelPluginFiles(MODEL_PLUGIN_SRC)) {
+  const prose = readFileSync(join(dsh, rel), 'utf8').split('\n')
+    .map((line, i) => [i + 1, line])
+    .filter(([, line]) => /['`"](The )?DeepSeek /.test(line) && !/^\s*(\/\/|\*|\/\*)/.test(line))
+  if (prose.length > 0) {
+    throw new Error(`overlay 2h: user-facing DeepSeek wording remains in ${rel}: ` +
+      prose.map(([n, l]) => `${n}: ${l.trim()}`).join(' | '))
+  }
+}
+editAll('packages/client/ui-settings-models/src/client/locales.ts', [
   [
-    'base-url placeholder',
-    `const DEEPSEEK_PUBLIC_BASE_URL = 'https://api.deepseek.com'`,
-    `// Privasys: the attested egress proxy's model route, never a public API.\n` +
-      `const DEEPSEEK_PUBLIC_BASE_URL = 'http://127.0.0.1:9411/model/v1'`,
+    'base-url placeholder (chat completions)',
+    `  deepSeekChatBaseUrl: 'https://api.deepseek.com',`,
+    `  deepSeekChatBaseUrl: 'http://127.0.0.1:9411/model/v1',`,
+    2,
+  ],
+  [
+    'base-url placeholder (messages)',
+    `  deepSeekMessagesBaseUrl: 'https://api.deepseek.com/anthropic',`,
+    `  deepSeekMessagesBaseUrl: 'http://127.0.0.1:9411/model/v1',`,
+    2,
   ],
 ])
 edit('packages/client/ui-settings-models/src/client/locales.ts', [
@@ -1192,36 +1127,6 @@ edit('packages/client/ui-settings-plugins/src/client/locales.ts', [
 // The Files API paths (image attachments) are unreachable behind our text-only
 // catalogue, but their messages are thrown from the same adapter: reword them
 // so the guard below holds and no path can ever print the old name.
-edit('packages/llm/llm-deepseek/src/adapter.ts', [
-  [
-    'files api image resolve',
-    `super('DeepSeek Files API could not resolve a request image.', { cause })`,
-    `super('The model files API could not resolve a request image.', { cause })`,
-  ],
-  [
-    'normalized image rejected (facts)',
-    `return \`DeepSeek rejected normalized image \${normalizedImageFacts(target)}: \${providerMessage}. \``,
-    `return \`The model rejected normalized image \${normalizedImageFacts(target)}: \${providerMessage}. \``,
-  ],
-  [
-    'normalized image rejected (candidates)',
-    `return \`DeepSeek rejected a normalized request image: \${providerMessage}. Candidate images: \``,
-    `return \`The model rejected a normalized request image: \${providerMessage}. Candidate images: \``,
-  ],
-])
-// Guard for the next re-pin: no prose "DeepSeek" may remain in a message the
-// adapter can throw (a string literal starting with the word). Identifiers
-// and comments are fine; a new upstream message is the signal to extend 2h.
-for (const rel of ['packages/llm/llm-deepseek/src/adapter.ts', 'packages/llm/llm-deepseek/src/serialize.ts']) {
-  const lines = readFileSync(join(dsh, rel), 'utf8').split('\n')
-  const prose = lines
-    .map((line, i) => [i + 1, line])
-    .filter(([, line]) => /['`"](The )?DeepSeek /.test(line) && !/^\s*(\/\/|\*|\/\*)/.test(line))
-  if (prose.length > 0) {
-    throw new Error(`overlay 2h: user-facing DeepSeek wording remains in ${rel}: ` +
-      prose.map(([n, l]) => `${n}: ${l.trim()}`).join(' | '))
-  }
-}
 
 // --- 2i. Delete session -------------------------------------------------------
 // dsh can archive a session (a registry flag; the log stays) but never delete
@@ -1604,12 +1509,12 @@ edit('packages/api/session-controller/src/client/contract/sessions.ts', [
 put('packages/client/ui-workspace/src/client/rows/PrivasysSessionDelete.ts', 'overlay/workspace/PrivasysSessionDelete.ts')
 // The client-runtime fake of the session Remote namespace must implement
 // every generated method, tests included (the image build type-checks them).
-edit('packages/api/session-controller/tests/fake-api.client.ts', [
+edit('packages/api/session-controller/tests/remote/session.client.ts', [
   [
     'fake delete',
-    `        cancel: payload => this.record('session.cancel', payload, this.onCancel(payload)),`,
-    `        cancel: payload => this.record('session.cancel', payload, this.onCancel(payload)),\n` +
-      `        delete: payload => this.record('session.delete', payload, Promise.resolve<RemoteResult<{ sessionId: SessionId }>>({ ok: true, value: { sessionId: payload.sessionId } })),`,
+    `    'session/cancel': ok({ accepted: true }),`,
+    `    'session/cancel': ok({ accepted: true }),\n` +
+      `    'session/delete': ok({ sessionId: 'fk-deleted' as SessionId }),`,
   ],
 ])
 
@@ -1636,10 +1541,10 @@ edit('packages/client/ui-workspace/src/client/index.ts', [
 edit('packages/client/ui-workspace/src/client/navigation.ts', [
   [
     'navigation deleteSession (interface)',
-    `  archiveSession(sessionId: SessionId): Promise<void>\n` +
+    `  unarchiveSession(sessionId: SessionId): Promise<void>\n` +
       `  /**\n` +
       `   * Open the Host-native directory picker.`,
-    `  archiveSession(sessionId: SessionId): Promise<void>\n` +
+    `  unarchiveSession(sessionId: SessionId): Promise<void>\n` +
       `  /**\n` +
       `   * Privasys: delete a Session for good and clear it when it is the current selection.\n` +
       `   * @param sessionId - Session to delete.\n` +
@@ -1697,8 +1602,8 @@ edit('packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx', [
   ],
   [
     'browser: deleteSession prop',
-    `  archiveSession,\n  insertSessionBefore,\n  createWorkspace,`,
-    `  archiveSession,\n  deleteSession,\n  insertSessionBefore,\n  createWorkspace,`,
+    `  archiveSession,\n  createWorkspace,\n  searchSessions,`,
+    `  archiveSession,\n  deleteSession,\n  createWorkspace,\n  searchSessions,`,
   ],
   [
     'browser: session delete state',
@@ -1803,14 +1708,13 @@ edit('packages/client/ui-workspace/src/client/locales.ts', [
 edit('packages/mcp/mcp-client/src/tools.ts', [
   [
     'session in _meta',
-    `  return client.request(\n` +
-      `    { method: 'tools/call', params: { name: rawName, arguments: args } },`,
-    `  // Privasys: the calling session rides the request's _meta so the egress\n` +
-      `  // proxy can apply the workspace's Drive-knowledge setting. Never part of\n` +
-      `  // the arguments, so the model's view and the replay digest are untouched.\n` +
-      `  const meta = exec.agent === undefined ? {} : { _meta: { privasysSession: exec.agent.session.id } }\n` +
-      `  return client.request(\n` +
-      `    { method: 'tools/call', params: { name: rawName, arguments: args, ...meta } },`,
+    `      call: (args, execution) => client.callTool(\n` +
+      `        { name: tool.name, arguments: args },`,
+    `      // Privasys: the calling session rides the request's _meta so the egress\n` +
+      `      // proxy can apply the workspace's Drive-knowledge setting. Never part of\n` +
+      `      // the arguments, so the model's view and the replay digest are untouched.\n` +
+      `      call: (args, execution) => client.callTool(\n` +
+      `        { name: tool.name, arguments: args, ...(execution.agent === undefined ? {} : { _meta: { privasysSession: execution.agent.session.id } }) },`,
   ],
 ])
 put('packages/client/ui-workspace/src/client/rows/PrivasysDriveKnowledge.tsx', 'overlay/workspace/PrivasysDriveKnowledge.tsx')
