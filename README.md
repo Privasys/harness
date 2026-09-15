@@ -46,11 +46,94 @@ cannot weaken them.
 
 ## dsh pin
 
-Current pin: `d347e703908d0406b7a7ef80e3a0e594d86b2215` (release
-`dsh-v0.1.3-alpha.1`), set as `DSH_PIN` in the Dockerfile. Upgrades are
+Current pin: `0a15e36e7f82b6ed45af6fa9759f29b40dcd965d` (release
+`dsh-v0.1.6-alpha.1`), set as `DSH_PIN` in the Dockerfile. Upgrades are
 deliberate re-pin commits: regenerate the bundle (`web/gen-bundle.mjs`),
 dry-run the overlay against a checkout of the new pin, rebase any anchor that
 moved, ship a new measured image version. Never a floating branch.
+
+## Building an agent on this harness
+
+The harness is generic: it names no product, no connector and no agent. An
+agent is a deployment of this image plus content in the holder's own Drive.
+Five contracts carry everything a specific agent needs.
+
+### 1. Tools and resources are declared, not coded
+
+Two build arguments in the `Dockerfile` say what a deployment mounts, and the
+code reads them back:
+
+| Declaration | What it does |
+|---|---|
+| `HARNESS_TOOLS` | The attested tools, by name. The overlay bakes one MCP row per name into every agent preset (`/tool/<name>/mcp` on the proxy); `HARNESS_TOOL_HOSTS` maps each name to the attested app that answers for it. The harness's own `access` server is always mounted. |
+| `HARNESS_RESOURCES` | The user-owned resources the enclave runtime brokers for the harness, as the manifest JSON. The measured `LABEL org.privasys.manifest` is built from it and the proxy builds one capability broker per entry (`proxy/cmd/egress-proxy/resources.go`). The entry named by `HARNESS_STORAGE_RESOURCE` (default `storage`) is the holder's folder, where sessions, policy and skills live. |
+
+A deployment with a mail connector, say, adds `mail` to the tools, its host to
+the hosts, and its `mail.mailbox` resource to the manifest. Nothing else in
+the image changes. Every declared resource is offered to the agent by the
+access server (`list_access`, `request_access`, so a missing approval is
+raised in the conversation, never on a screen per tool) and to the browser by
+`/privasys/capability/{resource}/request|status`.
+
+### 2. What the assistant does is a folder of Markdown
+
+The holder's Drive folder for the harness (`AppData/<label>/`) is the source
+of truth for behaviour, mirrored every pass by the proxy
+(`proxy/internal/capability/`):
+
+| Drive folder | Meaning |
+|---|---|
+| `skills/` | The holder's skills, one folder per skill with a `SKILL.md`. Seeded once from the deployment's reference set (`SKILLS_PIN`, cloned from [Privasys/agent-skills](https://github.com/Privasys/agent-skills) at build) and theirs to edit from then on; edits in Drive change the next session, with no deploy. |
+| `agents/<name>/` | One agent: a workspace by that name in the harness, read-only from the agent's side. `agent.md` is its persona, `agent.yaml` its definition (below), `.agents/skills/` its own skills; `state/` and `runs/` are what a run writes, pushed back to Drive. |
+| `sessions/` | Session logs, one file per file, under their workspace's title (`Archived/` apart). |
+| `workspace/` | Content-addressed snapshots of the working tree. |
+
+`agent.yaml`:
+
+```yaml
+prompt: Triage what arrived since the last run.   # what an unattended run is asked
+trigger:
+  every: 2h              # a timer, or
+  on: mail.changes       # an event source: <tool>.<call> on a mounted tool
+debounce: 2m             # a burst of events becomes one run
+min_interval: 10m        # never two runs closer than this
+paused: false
+```
+
+### 3. Unattended runs come from the proxy
+
+dsh has no scheduler, so the proxy owns the clock and the events
+(`proxy/cmd/egress-proxy/routines.go`). A timer runs on its period. An event
+source is any mounted tool call that answers the **change-feed contract**:
+
+```
+call  <tool>.<call>  {"since": "<cursor or empty>", "wait_seconds": 60}
+reply                {"changes": [...], "cursor": "<opaque>"}
+```
+
+The proxy holds one such call per holder and agent, as the holder, over the
+attested tool leg; the tool parks it until something changes. A run is a new
+session in the agent's workspace, opened through a route on the worker's own
+server (`app/privasys-routines.mjs`) that only the proxy can reach. Grants
+live on the manager and declared agents are remembered on the encrypted
+volume, so a holder who is away still gets their runs.
+
+### 4. A tool asks the person, not the model
+
+When a tool needs the holder's own input (a credential, a one-time setup) it
+answers a call with HTTP 428 and an `{"elicit": {"message", "requestedSchema"}}`
+body. The proxy turns that into MCP elicitation on the call's stream
+(`elicit.go`), dsh renders the schema on its own question surface with
+`format: "password"` fields masked (`web/overlay/mcp/privasys-elicit.ts`), and
+the answer goes back to the tool alone. The model sees only the tool's final
+result; nothing of the form enters the session record.
+
+### 5. Everything else is stock dsh
+
+The agent loop, session log, presets, skills discovery and web surface are
+upstream dsh at the pin. The overlay (`web/apply-overlay.mjs`) is the only
+place upstream code is touched, and every edit there is anchored: a missing
+anchor fails the build, which is the signal to rebase on a re-pin.
 
 ## Tenancy
 
