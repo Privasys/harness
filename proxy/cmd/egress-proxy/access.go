@@ -119,8 +119,8 @@ func accessTools(legs []resourceLeg) []map[string]any {
 				"The request goes to the user's wallet on their device, which verifies this assistant and shows them exactly what is asked; " +
 				"nothing is granted unless they approve it there. Ask the user in the conversation first and call this only once they agree. " +
 				"If they declined before, the request is not sent again unless ask_again is true, which you may set only when the user has just told you they changed their mind. " +
-				"If a tool said the user must first set something up with the service itself (for example link an account on the service's own page), pass that on: " +
-				"never ask the user to type a password or other credential into this conversation.",
+				"If a tool says the service must be set up first (for example a mailbox connected), follow that tool's own instructions: " +
+				"it may have you collect the details from the user with your question tool and call one of its tools with them.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
