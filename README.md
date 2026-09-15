@@ -126,8 +126,11 @@ answers a call with HTTP 428 and an `{"elicit": {"message", "requestedSchema"}}`
 body. The proxy turns that into MCP elicitation on the call's stream
 (`elicit.go`), dsh renders the schema on its own question surface with
 `format: "password"` fields masked (`web/overlay/mcp/privasys-elicit.ts`), and
-the answer goes back to the tool alone. The model sees only the tool's final
-result; nothing of the form enters the session record.
+the answer goes back to the tool alone, on a second call marked
+`X-Privasys-Elicitation: <question id>`. The model sees only the tool's final
+result; nothing of the form enters the session record. A tool that wants a
+value only from the person declares no argument for it and accepts it only on
+a marked call: a model that collects it anyway is asked again, not obeyed.
 
 ### 5. Everything else is stock dsh
 

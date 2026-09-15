@@ -192,8 +192,9 @@ func mcpShim(w http.ResponseWriter, r *http.Request, client *http.Client, toolNa
 		// alone, and the model sees only the final result.
 		if ask, ok := parseElicit(status, result); ok {
 			elicitAndRetry(w, r, req.ID, toolName, p.Name, args, ask, knowledgeMeta(req.Params), sub,
-				func(a json.RawMessage) ([]byte, int, error) {
-					res, st, _, err := callTool(r, client, host, p.Name, a, "", sub)
+				func(a json.RawMessage, elicitationID string) ([]byte, int, error) {
+					res, st, _, err := callToolWith(r, client, host, p.Name, a, "", sub,
+						http.Header{elicitationHeader: {elicitationID}})
 					return res, st, err
 				})
 			return
@@ -334,12 +335,24 @@ func fetchCatalogue(r *http.Request, client *http.Client, host, sub string) ([]u
 // byte-exact fee consent (`N credits`) the runtime hosting the tool expects;
 // the returned price is the runtime's X-Billing-Price on a refusal.
 func callTool(r *http.Request, client *http.Client, host, fn string, args json.RawMessage, approved, sub string) (json.RawMessage, int, string, error) {
+	return callToolWith(r, client, host, fn, args, approved, sub, nil)
+}
+
+// callToolWith is callTool with headers this layer adds (the elicitation
+// mark, elicit.go). They are set here, after the request is built from what
+// the model sent, so nothing in the model's arguments can carry one.
+func callToolWith(r *http.Request, client *http.Client, host, fn string, args json.RawMessage, approved, sub string, extra http.Header) (json.RawMessage, int, string, error) {
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost,
 		"https://"+host+"/api/v1/mcp/tools/"+fn, bytes.NewReader(args))
 	if err != nil {
 		return nil, 0, "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	for k, vs := range extra {
+		for _, v := range vs {
+			req.Header.Set(k, v)
+		}
+	}
 	if auth := forwardableAuthorization(r); auth != "" {
 		req.Header.Set("Authorization", auth)
 	}

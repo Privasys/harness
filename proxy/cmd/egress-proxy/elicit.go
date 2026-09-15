@@ -173,12 +173,21 @@ func (s *sseWriter) send(msg any) error {
 	return nil
 }
 
+// elicitationHeader marks the one call that carries the holder's answers,
+// with the question's id. A tool app can then accept a setup value only as
+// an answer to its own question and drop one a model supplied, whatever the
+// skill told the model (2026-09-15: a model asked for a mail password with
+// its question tool and passed it as an argument; the session record kept
+// it). The shim sets it; nothing the model sends can.
+const elicitationHeader = "X-Privasys-Elicitation"
+
 // elicitAndRetry runs steps 2 to 4 for one tool call. `recall` calls the
-// tool app again with the merged arguments and returns the raw result and
-// status, the way callTool does.
+// tool app again with the merged arguments, marked as the answers to the
+// named question, and returns the raw result and status, the way callTool
+// does.
 func elicitAndRetry(w http.ResponseWriter, r *http.Request, reqID json.RawMessage, toolName, fn string,
 	args json.RawMessage, ask elicitAsk, sessionID, sub string,
-	recall func(args json.RawMessage) ([]byte, int, error)) {
+	recall func(args json.RawMessage, elicitationID string) ([]byte, int, error)) {
 
 	sse, ok := startSSE(w)
 	if !ok {
@@ -248,7 +257,7 @@ func elicitAndRetry(w http.ResponseWriter, r *http.Request, reqID json.RawMessag
 	}
 	// The answers are in `merged` from here on and go to the tool app only:
 	// not logged, not echoed to the model.
-	result, status, err := recall(merged)
+	result, status, err := recall(merged, id)
 	if err != nil {
 		final(fmt.Sprintf("tool call: %v", err), true)
 		return

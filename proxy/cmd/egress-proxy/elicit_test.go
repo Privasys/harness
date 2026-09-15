@@ -46,6 +46,7 @@ func TestElicitationRoundTrip(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/tool/mail/mcp", nil)
 	var recalled json.RawMessage
+	var recalledAs string
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -53,8 +54,9 @@ func TestElicitationRoundTrip(t *testing.T) {
 			json.RawMessage(`{"host":"imap.example:993"}`),
 			elicitAsk{Message: "Connect your mailbox", RequestedSchema: json.RawMessage(`{"type":"object"}`)},
 			"session-1", "holder-1",
-			func(a json.RawMessage) ([]byte, int, error) {
+			func(a json.RawMessage, elicitationID string) ([]byte, int, error) {
 				recalled = a
+				recalledAs = elicitationID
 				return []byte(`{"linked":true}`), 200, nil
 			})
 	}()
@@ -81,6 +83,9 @@ func TestElicitationRoundTrip(t *testing.T) {
 	if !strings.Contains(string(recalled), `"password":"s3cret"`) || !strings.Contains(string(recalled), `"host":"imap.example:993"`) {
 		t.Fatalf("the tool app must be called again with the answers merged over the arguments: %s", recalled)
 	}
+	if recalledAs != id {
+		t.Fatalf("the recall must be marked as the answers to question %s, got %q", id, recalledAs)
+	}
 	final := rec.Body.String()
 	if !strings.Contains(final, `"id":7`) || !strings.Contains(final, `{\"linked\":true}`) {
 		t.Fatalf("the final result must close the stream under the original id: %q", final)
@@ -102,7 +107,7 @@ func TestElicitationDeclineEndsTheCallReadably(t *testing.T) {
 		defer close(done)
 		elicitAndRetry(rec, r, json.RawMessage(`8`), "mail", "connect_mailbox", json.RawMessage(`{}`),
 			elicitAsk{Message: "q", RequestedSchema: json.RawMessage(`{"type":"object"}`)}, "", "holder-1",
-			func(a json.RawMessage) ([]byte, int, error) { recalled = true; return nil, 0, nil })
+			func(json.RawMessage, string) ([]byte, int, error) { recalled = true; return nil, 0, nil })
 	}()
 	var id string
 	for i := 0; i < 100 && id == ""; i++ {
