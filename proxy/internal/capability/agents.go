@@ -233,12 +233,17 @@ func (s *Syncer) syncAgents(ds *DriveStore) error {
 		return nil
 	}
 	agentsID, err := s.folderIfExists(ds, agentsFolder)
-	if err != nil || agentsID == "" {
-		return err // no agents folder yet: the chat creates it when asked
-	}
-	children, err := ds.ListIn(agentsID)
 	if err != nil {
 		return err
+	}
+	// No agents folder: nothing to pull, and every agent this mirror created
+	// is gone with it (the holder deleted the whole folder, 2026-09-16), so
+	// the pruning below still runs. The chat creates the folder when asked.
+	var children []Node
+	if agentsID != "" {
+		if children, err = ds.ListIn(agentsID); err != nil {
+			return err
+		}
 	}
 	seen := map[string]AgentSpec{}
 	pulled, pushed := 0, 0
