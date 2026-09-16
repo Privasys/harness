@@ -421,6 +421,13 @@ func (s *Syncer) mirrorSessions(ds *DriveStore) error {
 		if folderErr != nil {
 			failed++
 			log.Printf("[sync] folder for %s: %v", rel, folderErr)
+			if IsRefused(folderErr) {
+				// The refusal usually lands HERE, on the folder walk, not on
+				// the upload below: a holder who withdrew the folder in Drive
+				// saw "In your Drive" for as long as it did (2026-09-16).
+				refused = folderErr
+				return fs.SkipAll
+			}
 			return nil
 		}
 		if _, putErr := ds.PutIn(parent, path.Base(rel), data); putErr != nil {

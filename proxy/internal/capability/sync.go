@@ -529,11 +529,17 @@ func (s *Syncer) SyncOnce() error {
 	// has, which is the deployment's reference skills at worst.
 	if err := s.syncSkills(ds); err != nil {
 		log.Printf("[sync] skills: %v", err)
+		if IsRefused(err) {
+			s.noteOutcome(err)
+		}
 	}
 	// The holder's agents: each a folder in their Drive and a workspace here
 	// (agents.go). Definition down, outputs up, never the other way.
 	if err := s.syncAgents(ds); err != nil {
 		log.Printf("[sync] agents: %v", err)
+		if IsRefused(err) {
+			s.noteOutcome(err)
+		}
 	}
 	sessErr := s.mirrorSessions(ds)
 	wsErr := s.snapshotWorkspace(ds)
