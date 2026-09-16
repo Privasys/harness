@@ -182,6 +182,63 @@ func TestSecretsAreLiftedIntoMetaAndTheSchemaGoesOutStandard(t *testing.T) {
 	}
 }
 
+// A tool may ask again after the first answers (the server that could not
+// be found from the address): the second question rides the same stream,
+// the answers accumulate, and the final result closes the call.
+func TestATSecondQuestionRidesTheSameCall(t *testing.T) {
+	rec := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/tool/mail/mcp", nil)
+	var calls []string
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		elicitAndRetry(rec, r, json.RawMessage(`11`), "mail", "connect_mailbox", json.RawMessage(`{}`),
+			elicitAsk{Message: "Connect", RequestedSchema: json.RawMessage(`{"type":"object","properties":{"user":{"type":"string"}}}`)}, "", "holder-1",
+			func(a json.RawMessage, _ string) ([]byte, int, error) {
+				calls = append(calls, string(a))
+				if len(calls) == 1 {
+					return []byte(`{"elicit":{"message":"Which server?","requestedSchema":{"type":"object","properties":{"host":{"type":"string"}}}}}`), 428, nil
+				}
+				return []byte(`{"linked":true}`), 200, nil
+			})
+	}()
+	answer := func(content string) string {
+		var id string
+		for i := 0; i < 200 && id == ""; i++ {
+			ms := elicitIDRe.FindAllStringSubmatch(rec.Body.String(), -1)
+			if len(ms) > 0 {
+				last := ms[len(ms)-1][1]
+				if _, open := elicitPending.Load(last); open {
+					id = last
+				}
+			}
+			if id == "" {
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+		if id == "" {
+			t.Fatalf("no open question on the stream: %q", rec.Body.String())
+		}
+		deliverElicitResponse(id, "holder-1", []byte(`{"jsonrpc":"2.0","id":"`+id+`","result":{"action":"accept","content":`+content+`}}`))
+		return id
+	}
+	first := answer(`{"user":"me@example.org"}`)
+	for i := 0; i < 200 && len(calls) < 1; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	second := answer(`{"host":"imap.example.org:993"}`)
+	<-done
+	if first == second {
+		t.Fatal("the second question must be a new question")
+	}
+	if len(calls) != 2 || !strings.Contains(calls[1], `"user":"me@example.org"`) || !strings.Contains(calls[1], `"host":"imap.example.org:993"`) {
+		t.Fatalf("the second call must carry both rounds of answers: %v", calls)
+	}
+	if !strings.Contains(rec.Body.String(), `"method":"elicitation/create"`) || !strings.Contains(rec.Body.String(), `Which server?`) || !strings.Contains(rec.Body.String(), `{\"linked\":true}`) {
+		t.Fatalf("stream = %q", rec.Body.String())
+	}
+}
+
 func TestAnAnswerFromAnotherSubjectIsIgnored(t *testing.T) {
 	ch := make(chan []byte, 1)
 	elicitPending.Store("elicit-test", &pendingElicit{ch: ch, sub: "holder-1"})

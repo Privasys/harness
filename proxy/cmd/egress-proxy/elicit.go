@@ -54,6 +54,9 @@ const (
 	elicitWait = 5 * time.Minute
 	// elicitMaxBody bounds the JSON-RPC response carrying the answers.
 	elicitMaxBody = 64 << 10
+	// elicitMaxRounds bounds how many questions one tool call may ask in a
+	// row (a first form, then a follow-up when something did not resolve).
+	elicitMaxRounds = 3
 )
 
 // elicitAsk is what a tool app answers 428 with.
@@ -194,95 +197,112 @@ func elicitAndRetry(w http.ResponseWriter, r *http.Request, reqID json.RawMessag
 		rpcError(w, reqID, -32000, "this listener cannot stream, so the tool's question cannot be asked")
 		return
 	}
-	id := newElicitID()
-	ch := make(chan []byte, 1)
-	elicitPending.Store(id, &pendingElicit{ch: ch, sub: sub})
-	defer elicitPending.Delete(id)
-
-	// The client validates the request against MCP's strict wire schema
-	// BEFORE its handler runs, and "password" is not one of MCP's string
-	// formats (email, uri, date, date-time): sent as is, the request is
-	// refused with InvalidParams and the person never sees the form (first
-	// live test, 2026-09-15 17:24). So the secret marking travels in _meta,
-	// which the client passes through, and the schema goes out standard.
-	schema, secrets := liftSecrets(ask.RequestedSchema)
-	params := map[string]any{
-		"message":         ask.Message,
-		"requestedSchema": schema,
-		"_meta": map[string]any{
-			"privasysSession": sessionID,
-			"privasysServer":  toolName,
-			"privasysTool":    fn,
-			"privasysSecrets": secrets,
-		},
-	}
-	if err := sse.send(map[string]any{"jsonrpc": "2.0", "id": id, "method": "elicitation/create", "params": params}); err != nil {
-		return
-	}
-	log.Printf("[mcp %s] %s asks the user a question (elicitation %s); waiting", toolName, fn, id)
-
 	final := func(text string, isErr bool) {
 		_ = sse.send(map[string]any{"jsonrpc": "2.0", "id": reqID, "result": map[string]any{
 			"content": []map[string]any{{"type": "text", "text": text}},
 			"isError": isErr,
 		}})
 	}
-
 	ctx, cancel := context.WithTimeout(r.Context(), elicitWait)
 	defer cancel()
-	var answer []byte
-	select {
-	case answer = <-ch:
-	case <-ctx.Done():
-		log.Printf("[mcp %s] elicitation %s: no answer (%v)", toolName, id, ctx.Err())
-		final("the user did not answer the tool's question in time; ask whether to try again", true)
-		return
-	}
 
-	var resp struct {
-		Result *elicitResult `json:"result"`
-		Error  *struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(answer, &resp); err != nil || resp.Result == nil {
-		// The client answered with a JSON-RPC error: it refused the request
-		// (schema validation, an unsupported mode) or its handler failed. No
-		// answer is in it, so the code and message may be logged.
-		if resp.Error != nil {
-			log.Printf("[mcp %s] elicitation %s: the client refused the question: %d %s", toolName, id, resp.Error.Code, resp.Error.Message)
-		} else {
-			log.Printf("[mcp %s] elicitation %s: the client's reply was not an answer", toolName, id)
+	// A tool may ask AGAIN after the first answers: a mail connector asks
+	// for the address and the password, infers the server, and asks for it
+	// only when nothing resolves (2026-09-16). Each round is one question on
+	// the stream; the answers accumulate into the arguments of the next
+	// call; a bounded number of rounds keeps a confused tool from looping.
+	for round := 1; round <= elicitMaxRounds; round++ {
+		id := newElicitID()
+		ch := make(chan []byte, 1)
+		elicitPending.Store(id, &pendingElicit{ch: ch, sub: sub})
+
+		// The client validates the request against MCP's strict wire schema
+		// BEFORE its handler runs, and "password" is not one of MCP's string
+		// formats (email, uri, date, date-time): sent as is, the request is
+		// refused with InvalidParams and the person never sees the form
+		// (first live test, 2026-09-15 17:24). So the secret marking travels
+		// in _meta, which the client passes through, and the schema goes out
+		// standard.
+		schema, secrets := liftSecrets(ask.RequestedSchema)
+		params := map[string]any{
+			"message":         ask.Message,
+			"requestedSchema": schema,
+			"_meta": map[string]any{
+				"privasysSession": sessionID,
+				"privasysServer":  toolName,
+				"privasysTool":    fn,
+				"privasysSecrets": secrets,
+			},
 		}
-		final("the user's answer could not be read; ask whether to try again", true)
+		if err := sse.send(map[string]any{"jsonrpc": "2.0", "id": id, "method": "elicitation/create", "params": params}); err != nil {
+			elicitPending.Delete(id)
+			return
+		}
+		log.Printf("[mcp %s] %s asks the user a question (elicitation %s, round %d); waiting", toolName, fn, id, round)
+
+		var answer []byte
+		select {
+		case answer = <-ch:
+		case <-ctx.Done():
+			elicitPending.Delete(id)
+			log.Printf("[mcp %s] elicitation %s: no answer (%v)", toolName, id, ctx.Err())
+			final("the user did not answer the tool's question in time; ask whether to try again", true)
+			return
+		}
+		elicitPending.Delete(id)
+
+		var resp struct {
+			Result *elicitResult `json:"result"`
+			Error  *struct {
+				Code    int    `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(answer, &resp); err != nil || resp.Result == nil {
+			// The client answered with a JSON-RPC error: it refused the
+			// request (schema validation, an unsupported mode) or its handler
+			// failed. No answer is in it, so the code and message may be
+			// logged.
+			if resp.Error != nil {
+				log.Printf("[mcp %s] elicitation %s: the client refused the question: %d %s", toolName, id, resp.Error.Code, resp.Error.Message)
+			} else {
+				log.Printf("[mcp %s] elicitation %s: the client's reply was not an answer", toolName, id)
+			}
+			final("the user's answer could not be read; ask whether to try again", true)
+			return
+		}
+		switch resp.Result.Action {
+		case "accept":
+		case "decline":
+			log.Printf("[mcp %s] elicitation %s: declined", toolName, id)
+			final("the user declined to answer the tool's question; do not ask again unless they say so", true)
+			return
+		default:
+			log.Printf("[mcp %s] elicitation %s: cancelled", toolName, id)
+			final("the user cancelled the tool's question; ask whether to try again later", true)
+			return
+		}
+		merged, err := mergeArgs(args, resp.Result.Content)
+		if err != nil {
+			final("the user's answer could not be applied: "+err.Error(), true)
+			return
+		}
+		args = merged
+		// The answers are in `args` from here on and go to the tool app only:
+		// not logged, not echoed to the model.
+		result, status, err := recall(args, id)
+		if err != nil {
+			final(fmt.Sprintf("tool call: %v", err), true)
+			return
+		}
+		if next, ok := parseElicit(status, result); ok && round < elicitMaxRounds {
+			ask = next
+			continue
+		}
+		log.Printf("[mcp %s] elicitation %s: answered; %s -> %d", toolName, id, fn, status)
+		final(string(result), status < 200 || status >= 300)
 		return
 	}
-	switch resp.Result.Action {
-	case "accept":
-	case "decline":
-		log.Printf("[mcp %s] elicitation %s: declined", toolName, id)
-		final("the user declined to answer the tool's question; do not ask again unless they say so", true)
-		return
-	default:
-		log.Printf("[mcp %s] elicitation %s: cancelled", toolName, id)
-		final("the user cancelled the tool's question; ask whether to try again later", true)
-		return
-	}
-	merged, err := mergeArgs(args, resp.Result.Content)
-	if err != nil {
-		final("the user's answer could not be applied: "+err.Error(), true)
-		return
-	}
-	// The answers are in `merged` from here on and go to the tool app only:
-	// not logged, not echoed to the model.
-	result, status, err := recall(merged, id)
-	if err != nil {
-		final(fmt.Sprintf("tool call: %v", err), true)
-		return
-	}
-	log.Printf("[mcp %s] elicitation %s: answered; %s -> %d", toolName, id, fn, status)
-	final(string(result), status < 200 || status >= 300)
 }
 
 // liftSecrets returns the schema with `format: "password"` removed from its
