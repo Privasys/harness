@@ -49,6 +49,13 @@ const (
 	agentSkillsLocal  = ".agents/skills"
 	agentSpecFile     = "agent.yaml"
 	agentPersonaFile  = "agent.md"
+	// agentMarkerFile says "the mirror made this directory": the claim
+	// survives a restart (agentDirs is memory), so an agent folder deleted
+	// in Drive while the harness was down is still pruned, and an agent
+	// written again under a name whose directory lingers is still mirrored
+	// (2026-09-16: "exists as a workspace that is not an agent; not
+	// mirroring over it", and the new agent never ran).
+	agentMarkerFile = ".privasys-agent"
 	// maxAgentName bounds a folder name that becomes a workspace title.
 	maxAgentName = 64
 )
@@ -148,7 +155,47 @@ func (s *Syncer) SetAgentsRoot(local string, uid int) {
 	if s.agents == nil {
 		s.agents = map[string]AgentSpec{}
 	}
+	// Directories the mirror made before a restart are its own again.
+	for _, name := range markedAgentDirs(local) {
+		s.agentDirs[name] = true
+	}
 	s.mu.Unlock()
+}
+
+// markedAgentDirs lists the workspace root's directories that carry the
+// mirror's marker.
+func markedAgentDirs(root string) []string {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(root, e.Name(), agentMarkerFile)); err == nil {
+			out = append(out, e.Name())
+		}
+	}
+	return out
+}
+
+// onlyMirrorOutput reports whether a directory holds nothing a person made:
+// empty, or only the output folders and the skills root the mirror itself
+// creates. Such a directory is a leftover, never someone's workspace.
+func onlyMirrorOutput(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if agentOutputDirs[e.Name()] || e.Name() == ".agents" || e.Name() == agentMarkerFile {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // ValidAgentName reports whether a name can be an agent folder, and so a
@@ -312,10 +359,11 @@ func (s *Syncer) claimAgentDir(local, name string) bool {
 		return true
 	}
 	if _, err := os.Stat(local); err == nil {
-		if _, perr := os.Stat(filepath.Join(local, agentPersonaFile)); perr != nil {
-			if _, serr := os.Stat(filepath.Join(local, agentSpecFile)); serr != nil {
-				return false
-			}
+		_, marked := os.Stat(filepath.Join(local, agentMarkerFile))
+		_, hasPersona := os.Stat(filepath.Join(local, agentPersonaFile))
+		_, hasSpec := os.Stat(filepath.Join(local, agentSpecFile))
+		if marked != nil && hasPersona != nil && hasSpec != nil && !onlyMirrorOutput(local) {
+			return false
 		}
 	}
 	s.mu.Lock()
@@ -330,6 +378,9 @@ func (s *Syncer) claimAgentDir(local, name string) bool {
 func (s *Syncer) pullAgent(ds *DriveStore, nodeID, local, name string, uid int) (int, AgentSpec, error) {
 	if err := os.MkdirAll(local, 0o755); err != nil {
 		return 0, AgentSpec{}, err
+	}
+	if _, err := os.Stat(filepath.Join(local, agentMarkerFile)); err != nil {
+		_ = os.WriteFile(filepath.Join(local, agentMarkerFile), []byte("made by the harness mirror from agents/"+name+" in the holder's Drive\n"), 0o644)
 	}
 	children, err := ds.ListIn(nodeID)
 	if err != nil {
@@ -459,7 +510,7 @@ func pruneDefinition(local string, present map[string]bool) int {
 		if d.IsDir() {
 			return nil
 		}
-		if !present[path] && !isLockFile(d.Name()) {
+		if !present[path] && !isLockFile(d.Name()) && d.Name() != agentMarkerFile {
 			if os.Remove(path) == nil {
 				removed++
 			}

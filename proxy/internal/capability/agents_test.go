@@ -100,3 +100,41 @@ func TestSnapshotLeavesAgentFoldersOut(t *testing.T) {
 		}
 	}
 }
+
+// A directory the mirror made stays the mirror's across a restart (the
+// marker), and a leftover holding only the output folders is never mistaken
+// for someone's workspace (2026-09-16: a re-created agent was refused with
+// "exists as a workspace that is not an agent" and never ran).
+func TestAgentDirClaimsSurviveARestartAndLeftoversAreClaimable(t *testing.T) {
+	root := t.TempDir()
+	marked := filepath.Join(root, "Inbox triage")
+	if err := os.MkdirAll(filepath.Join(marked, "runs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(marked, agentMarkerFile), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	leftover := filepath.Join(root, "Weekly")
+	if err := os.MkdirAll(filepath.Join(leftover, "state"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	theirs := filepath.Join(root, "Notes")
+	if err := os.MkdirAll(theirs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(theirs, "todo.md"), []byte("mine"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &Syncer{}
+	s.SetAgentsRoot(root, 0)
+	if !s.isAgentDir("Inbox triage") {
+		t.Fatal("the marked directory must be the mirror's again after a restart")
+	}
+	if !s.claimAgentDir(leftover, "Weekly") {
+		t.Fatal("a leftover with only output folders must be claimable")
+	}
+	if s.claimAgentDir(theirs, "Notes") {
+		t.Fatal("a directory with the holder's own files must never be taken over")
+	}
+}
