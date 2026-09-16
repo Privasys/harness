@@ -1934,4 +1934,71 @@ edit('packages/client/ui-user-questions/src/client/QuestionComposer.tsx', [
   ],
 ])
 
+// --- 2l. One-page form presentation for a question set -----------------------
+//
+// dsh's generic flow pages one question at a time, which is wrong for a tool
+// that needs an address, a secret and a server together (first live
+// elicitation, 2026-09-16: "1/3", Skip, Next). A request whose questions all
+// carry the `form` intent renders as one card with every field, the tool in
+// the eyebrow, its message as the title and a notice under it
+// (PrivasysFormPanel.tsx, beside PlanReviewPanel). The intent is presentation
+// only: the answer encoding is the generic one. `required` rides the wire
+// like `secret`. The service validated every intent as a plan review; it now
+// validates only that kind.
+put('packages/client/ui-user-questions/src/client/PrivasysFormPanel.tsx', 'overlay/questions/PrivasysFormPanel.tsx')
+put('packages/client/ui-user-questions/src/client/PrivasysFormPanel.module.css', 'overlay/questions/PrivasysFormPanel.module.css')
+edit('packages/interaction/user-questions/src/types.ts', [
+  [
+    'user-questions: form intent',
+    `  approve: string\n` +
+      `}\n`,
+    `  approve: string\n` +
+      `} | {\n` +
+      `  /** Privasys: every question of the request is one field of ONE form; title and notice on the first. */\n` +
+      `  kind: 'form'\n` +
+      `  title?: string\n` +
+      `  notice?: string\n` +
+      `  /** Never set: keeps \`intent.approve\` readable on the union for the plan-review readers. */\n` +
+      `  approve?: undefined\n` +
+      `}\n`,
+  ],
+  [
+    'user-questions: required question field',
+    `  secret?: boolean\n` +
+      `}\n`,
+    `  secret?: boolean\n` +
+      `  /** Privasys: the form refuses to submit without an answer here. */\n` +
+      `  required?: boolean\n` +
+      `}\n`,
+  ],
+])
+edit('packages/interaction/user-questions/src/index.ts', [
+  [
+    'user-questions: validate only the plan-review intent',
+    `      const intent = question.intent\n` +
+      `      if (intent === undefined) continue\n`,
+    `      const intent = question.intent\n` +
+      `      if (intent === undefined || intent.kind !== 'plan-review') continue\n`,
+  ],
+])
+edit('packages/client/ui-user-questions/src/client/QuestionComposer.tsx', [
+  [
+    'ui-user-questions: form panel import',
+    `import { PlanReviewPanel } from './PlanReviewPanel.tsx'\n`,
+    `import { PlanReviewPanel } from './PlanReviewPanel.tsx'\n` +
+      `import { PrivasysFormPanel, formOf } from './PrivasysFormPanel.tsx'\n`,
+  ],
+  [
+    'ui-user-questions: form route',
+    `  const review = useMemo(() => planReviewOf(question.questions), [question])\n` +
+      `  return review === undefined\n`,
+    `  const review = useMemo(() => planReviewOf(question.questions), [question])\n` +
+      `  // Privasys: a question set that is one form renders on one card.\n` +
+      `  if (formOf(question.questions)) {\n` +
+      `    return <PrivasysFormPanel key={question.key} pending={question} t={props.t} />\n` +
+      `  }\n` +
+      `  return review === undefined\n`,
+  ],
+])
+
 console.log('[overlay] done')

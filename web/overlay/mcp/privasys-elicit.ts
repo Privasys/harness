@@ -48,6 +48,10 @@ interface Question {
   multiSelect?: boolean
   /** Rendered as a masked input; never echoed. */
   secret?: boolean
+  /** The form refuses to submit without it. */
+  required?: boolean
+  /** The one-page form presentation (PrivasysFormPanel); title and notice on the first question. */
+  intent?: { kind: 'form'; title?: string; notice?: string }
 }
 
 interface AnswerItem {
@@ -65,17 +69,16 @@ interface AgentsService {
   roots(): { id: string }[]
 }
 
-/** Banner shown above the form, in the first question's detail. */
-function banner(serverName: string, message: string): string {
-  return `${message}\n\n`
-    + `**Asked by the \`${serverName}\` tool, not by the assistant.** `
+/** The notice under the form's title: who asks, and where the answers go. */
+function notice(serverName: string): string {
+  return `**Asked by the \`${serverName}\` tool, not by the assistant.** `
     + 'Your answers go to that tool only and are not written into this conversation. '
     + 'Masked fields stay hidden.'
 }
 
 /** Turn one schema property into one question. */
 function questionFor(id: string, prop: PropertySchema, required: boolean, secret: boolean): Question {
-  const q: Question = { id, question: prop.title ?? id }
+  const q: Question = { id, question: prop.title ?? id, required, intent: { kind: 'form' } }
   const parts: string[] = []
   if (!required) parts.push('Optional.')
   if (prop.description !== undefined) parts.push(prop.description)
@@ -164,9 +167,11 @@ export async function privasysElicit(ctx: Context, serverName: string, request: 
   const required = new Set(schema.required ?? [])
   const questions = Object.entries(properties).map(([id, prop]) => questionFor(id, prop, required.has(id), secrets.has(id)))
   if (questions.length === 0) return { action: 'accept', content: {} }
+  // One form: the tool in the eyebrow, its message as the title, the notice
+  // under it, then the fields (PrivasysFormPanel in ui-user-questions).
   const first = questions[0] as Question
   first.header = `From the ${serverName} tool`
-  first.detail = banner(serverName, params.message) + (first.detail === undefined ? '' : `\n\n${first.detail}`)
+  first.intent = { kind: 'form', title: params.message, notice: notice(serverName) }
 
   let answers: AnswerItem[]
   try {
