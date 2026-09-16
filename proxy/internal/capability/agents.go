@@ -263,6 +263,30 @@ func (s *Syncer) syncAgents(ds *DriveStore) error {
 		}
 		seen[c.Name] = spec
 	}
+	// An agent whose folder left Drive leaves here too. The mirror owns the
+	// directories it created, and a workspace that no longer exists in Drive
+	// would otherwise stay in the sidebar with the engine still polling for
+	// it. Only reached once Drive answered the listing, so an outage never
+	// reads as a deletion.
+	s.mu.Lock()
+	var gone []string
+	for name := range s.agentDirs {
+		if _, ok := seen[name]; !ok {
+			gone = append(gone, name)
+		}
+	}
+	s.mu.Unlock()
+	sort.Strings(gone)
+	for _, name := range gone {
+		if err := os.RemoveAll(filepath.Join(root, name)); err != nil {
+			log.Printf("[sync] agents: %q left the holder's Drive but its workspace could not be removed: %v", name, err)
+			continue
+		}
+		s.mu.Lock()
+		delete(s.agentDirs, name)
+		s.mu.Unlock()
+		log.Printf("[sync] agents for %.8s…: %q left the holder's Drive; its workspace is removed", s.subject, name)
+	}
 	s.mu.Lock()
 	s.agents = seen
 	s.mu.Unlock()
