@@ -137,6 +137,9 @@ type Syncer struct {
 	// withdrawnGrant is the grant id the refused calls presented, so a fresh
 	// approval (a different grant) clears the flag before the next pass.
 	withdrawnGrant string
+	// passRefused is set by the first refusal of the current pass and reset
+	// when the next pass starts; a later step's success cannot clear it.
+	passRefused bool
 	// registryFile is dsh's workspace registry document for this holder
 	// (titles, paths, archived ids); sessions.go reads it every pass.
 	registryFile string
@@ -177,6 +180,13 @@ func (s *Syncer) noteOutcome(err error, refusedGrant string) {
 	defer s.mu.Unlock()
 	switch {
 	case err == nil:
+		// A step with nothing to send succeeds without touching Drive, so
+		// it must not clear a refusal another step of the SAME pass just
+		// noted (2026-09-16: the flag flapped every pass and the row fell
+		// back to "In your Drive"). Only a pass free of refusals clears it.
+		if s.passRefused {
+			return
+		}
 		s.withdrawn = false
 		s.withdrawnGrant = ""
 	case IsRefused(err):
@@ -185,6 +195,7 @@ func (s *Syncer) noteOutcome(err error, refusedGrant string) {
 		}
 		s.withdrawn = true
 		s.withdrawnGrant = refusedGrant
+		s.passRefused = true
 	}
 }
 
@@ -548,6 +559,9 @@ func (s *Syncer) SyncOnce() error {
 	// Failures here never hold up the mirror; the agent simply runs on what it
 	// has, which is the deployment's reference skills at worst.
 	grant := ds.grantID()
+	s.mu.Lock()
+	s.passRefused = false
+	s.mu.Unlock()
 	if err := s.syncSkills(ds); err != nil {
 		log.Printf("[sync] skills: %v", err)
 		if IsRefused(err) {
