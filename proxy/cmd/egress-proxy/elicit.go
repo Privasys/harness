@@ -44,7 +44,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"sort"
 	"sync"
 	"time"
 )
@@ -287,33 +286,95 @@ func elicitAndRetry(w http.ResponseWriter, r *http.Request, reqID json.RawMessag
 }
 
 // liftSecrets returns the schema with `format: "password"` removed from its
-// string properties, and the names of those properties, sorted. A tool app
-// marks a secret that way (our contract with tool apps); the wire carries
+// string properties, and the names of those properties in wire order. A tool
+// app marks a secret that way (our contract with tool apps); the wire carries
 // the mark in _meta because the client's schema would refuse it.
+//
+// The schema is rewritten key by key rather than through a map: the ORDER of
+// the properties is the order of the form, and a map would sort it (first
+// live form, 2026-09-16: "IMAP server" came before the address).
 func liftSecrets(schema json.RawMessage) (json.RawMessage, []string) {
 	secrets := []string{}
-	var s map[string]any
-	if err := json.Unmarshal(schema, &s); err != nil {
+	top, ok := decodeOrdered(schema)
+	if !ok {
 		return schema, secrets
 	}
-	props, _ := s["properties"].(map[string]any)
-	names := make([]string, 0, len(props))
-	for name := range props {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		p, _ := props[name].(map[string]any)
-		if f, _ := p["format"].(string); f == "password" {
-			delete(p, "format")
-			secrets = append(secrets, name)
+	for i := range top {
+		if top[i].key != "properties" {
+			continue
 		}
+		props, ok := decodeOrdered(top[i].val)
+		if !ok {
+			continue
+		}
+		for j := range props {
+			fields, ok := decodeOrdered(props[j].val)
+			if !ok {
+				continue
+			}
+			kept := fields[:0]
+			for _, f := range fields {
+				if f.key == "format" && string(bytes.TrimSpace(f.val)) == `"password"` {
+					secrets = append(secrets, props[j].key)
+					continue
+				}
+				kept = append(kept, f)
+			}
+			props[j].val = encodeOrdered(kept)
+		}
+		top[i].val = encodeOrdered(props)
 	}
-	out, err := json.Marshal(s)
-	if err != nil {
-		return schema, secrets
+	return encodeOrdered(top), secrets
+}
+
+// orderedPair is one member of a JSON object, kept in wire order.
+type orderedPair struct {
+	key string
+	val json.RawMessage
+}
+
+// decodeOrdered reads a JSON object into its members in wire order; false
+// when the value is not an object.
+func decodeOrdered(raw json.RawMessage) ([]orderedPair, bool) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	t, err := dec.Token()
+	if err != nil || t != json.Delim('{') {
+		return nil, false
 	}
-	return out, secrets
+	var out []orderedPair
+	for dec.More() {
+		t, err := dec.Token()
+		if err != nil {
+			return nil, false
+		}
+		key, ok := t.(string)
+		if !ok {
+			return nil, false
+		}
+		var val json.RawMessage
+		if err := dec.Decode(&val); err != nil {
+			return nil, false
+		}
+		out = append(out, orderedPair{key: key, val: val})
+	}
+	return out, true
+}
+
+// encodeOrdered writes the members back as one JSON object, in order.
+func encodeOrdered(pairs []orderedPair) json.RawMessage {
+	var b bytes.Buffer
+	b.WriteByte('{')
+	for i, p := range pairs {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		k, _ := json.Marshal(p.key)
+		b.Write(k)
+		b.WriteByte(':')
+		b.Write(p.val)
+	}
+	b.WriteByte('}')
+	return b.Bytes()
 }
 
 // mergeArgs lays the answers over the model's arguments; an answer wins.

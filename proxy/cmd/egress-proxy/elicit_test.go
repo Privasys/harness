@@ -142,6 +142,15 @@ func TestSecretsAreLiftedIntoMetaAndTheSchemaGoesOutStandard(t *testing.T) {
 	if !strings.Contains(string(schema), `"format":"email"`) || !strings.Contains(string(schema), `"title":"App password"`) {
 		t.Fatalf("standard fields must survive: %s", schema)
 	}
+	// The order of the properties is the order of the form: a map would
+	// have put "host" before "user" (first live form, 2026-09-16).
+	ordered, _ := liftSecrets(json.RawMessage(`{"type":"object","properties":{"user":{"type":"string"},"password":{"type":"string","format":"password"},"host":{"type":"string","default":"imap.gmail.com:993"}},"required":["user","password"]}`))
+	if u, p, h := strings.Index(string(ordered), `"user"`), strings.Index(string(ordered), `"password"`), strings.Index(string(ordered), `"host"`); !(u < p && p < h) {
+		t.Fatalf("the properties must keep their wire order: %s", ordered)
+	}
+	if !strings.Contains(string(ordered), `"required":["user","password"]`) {
+		t.Fatalf("the rest of the schema must pass through untouched: %s", ordered)
+	}
 
 	rec := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/tool/mail/mcp", nil)

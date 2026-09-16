@@ -67,19 +67,20 @@ interface AgentsService {
 
 /** Banner shown above the form, in the first question's detail. */
 function banner(serverName: string, message: string): string {
-  return `**This form comes from the \`${serverName}\` tool, not from the assistant.** `
-    + 'Your answers go to that service only: they are not written into this conversation, '
-    + 'its record, or anything the assistant reads. Masked fields are never shown back.\n\n'
-    + message
+  return `${message}\n\n`
+    + `**Asked by the \`${serverName}\` tool, not by the assistant.** `
+    + 'Your answers go to that tool only and are not written into this conversation. '
+    + 'Masked fields stay hidden.'
 }
 
 /** Turn one schema property into one question. */
 function questionFor(id: string, prop: PropertySchema, required: boolean, secret: boolean): Question {
   const q: Question = { id, question: prop.title ?? id }
   const parts: string[] = []
-  if (prop.description !== undefined) parts.push(prop.description)
-  if (prop.default !== undefined && !secret) parts.push(`Default: ${String(prop.default)}`)
   if (!required) parts.push('Optional.')
+  if (prop.description !== undefined) parts.push(prop.description)
+  if (prop.default !== undefined && !secret) parts.push(`Leave empty for ${String(prop.default)}.`)
+  if (secret) parts.push('Masked as you type, never shown back.')
   if (parts.length > 0) q.detail = parts.join(' ')
   const single = prop.enum ?? prop.oneOf?.map(o => o.const)
   const multi = prop.items?.enum ?? prop.items?.anyOf?.map(o => o.const)
@@ -164,7 +165,7 @@ export async function privasysElicit(ctx: Context, serverName: string, request: 
   const questions = Object.entries(properties).map(([id, prop]) => questionFor(id, prop, required.has(id), secrets.has(id)))
   if (questions.length === 0) return { action: 'accept', content: {} }
   const first = questions[0] as Question
-  first.header = `Question from the ${serverName} tool`
+  first.header = `From the ${serverName} tool`
   first.detail = banner(serverName, params.message) + (first.detail === undefined ? '' : `\n\n${first.detail}`)
 
   let answers: AnswerItem[]
