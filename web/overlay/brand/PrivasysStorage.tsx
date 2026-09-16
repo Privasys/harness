@@ -65,6 +65,12 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
   const [ask, setAsk] = useState<PendingAsk | undefined>(undefined)
   const [busy, setBusy] = useState(false)
   const [open, setOpen] = useState(false)
+  // Set while an ask is on its way to the device: the row says so, the
+  // button stays down (one tap sends one push; a second click sent a second
+  // notification, 2026-09-16) and the status is polled every two seconds
+  // until the grant lands or the ask goes stale.
+  const [waitingSince, setWaitingSince] = useState<number | undefined>(undefined)
+  const waiting = waitingSince !== undefined
 
   const refresh = (): void => {
     void pvFetch('/privasys/capability/status')
@@ -79,27 +85,46 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
           return
         }
         setState(d ?? {})
-        // The ask is over once the runtime reports the grant: drop the
-        // "approve on your device" box rather than leaving the user on it.
-        if (d?.persistent === true && d?.stale !== true) setAsk(undefined)
+        // The ask is over once the runtime reports the grant and Drive
+        // honours it: drop the "approve on your device" box rather than
+        // leaving the user on it.
+        if (d?.persistent === true && d?.stale !== true && d?.withdrawn !== true) {
+          setAsk(undefined)
+          setWaitingSince(undefined)
+        }
       }, () => { setState({}) })
   }
-  // Poll: quickly until the session is bound to someone, then slowly, so a
-  // grant approved on the device (or withdrawn in Drive) shows without a
+  // Poll: quickly until the session is bound to someone, every two seconds
+  // while an ask is out (the approval lands within a few), then slowly, so
+  // a grant approved on the device (or withdrawn in Drive) shows without a
   // reload. The panel opening also re-checks.
   useEffect(() => {
     refresh()
-    const t = setInterval(refresh, state === undefined ? 3000 : 30000)
+    const t = setInterval(refresh, state === undefined ? 3000 : waiting ? 2000 : 30000)
     return () => { clearInterval(t) }
-  }, [state === undefined])
+  }, [state === undefined, waiting])
   useEffect(() => { if (open) refresh() }, [open])
+  // An ask nobody answers goes stale: after three minutes the button comes
+  // back so the person can send the push again.
+  useEffect(() => {
+    if (waitingSince === undefined) return undefined
+    const t = setTimeout(() => { setWaitingSince(undefined) }, 3 * 60 * 1000)
+    return () => { clearTimeout(t) }
+  }, [waitingSince])
 
   const request = (retry: boolean): void => {
+    if (busy || waiting) return
     setBusy(true)
     void pvFetch(`/privasys/capability/request${retry ? '?retry=1' : ''}`, { method: 'POST' })
       .then(async r => (r.ok ? await r.json() : undefined))
-      .then(d => { setAsk(d); setBusy(false); refresh() },
-        () => { setBusy(false) })
+      .then(d => {
+        setAsk(d)
+        setBusy(false)
+        // Only a push that went out is worth waiting for; "already granted"
+        // or "declined" answers settle at once.
+        if (d?.nonce) setWaitingSince(Date.now())
+        refresh()
+      }, () => { setBusy(false) })
   }
 
   if (state === undefined) return null
@@ -116,8 +141,8 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
   // Not an option with two acceptable answers. Without a Drive this harness
   // cannot keep anything: the session root is a tmpfs and dies with the
   // container. The row says setup is incomplete, not that a preference is unset.
-  const dot = stale ? 'warning' as const : persistent ? 'done' as const : withdrawn ? 'error' as const : 'warning' as const
-  const word = stale ? 'Approval needed' : persistent ? 'In your Drive' : withdrawn ? 'Withdrawn' : 'Not saved'
+  const dot = waiting ? 'warning' as const : stale ? 'warning' as const : persistent ? 'done' as const : withdrawn ? 'error' as const : 'warning' as const
+  const word = waiting ? 'Waiting for your device' : stale ? 'Approval needed' : persistent ? 'In your Drive' : withdrawn ? 'Withdrawn' : 'Not saved'
   const folder = state.folder ?? 'AppData/Harness'
 
   return (
@@ -161,8 +186,8 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
                         updated access on your device to enable it.
                       </p>
                       <div className={css.actions}>
-                        <Button variant="primary" size="sm" disabled={busy} onClick={() => { request(false) }}>
-                          {busy ? 'Preparing…' : 'Approve the updated access'}
+                        <Button variant="primary" size="sm" disabled={busy || waiting} onClick={() => { request(false) }}>
+                          {busy ? 'Preparing…' : waiting ? 'Sent to your device…' : 'Approve the updated access'}
                         </Button>
                       </div>
                     </>
@@ -197,8 +222,8 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
                   ? <p className={css.muted}>You declined this earlier, so you are not being asked again.</p>
                   : null}
                 <div className={css.actions}>
-                  <Button variant="primary" size="sm" disabled={busy} onClick={() => { request(declined || withdrawn) }}>
-                    {busy ? 'Preparing…' : withdrawn ? 'Connect again' : declined ? 'Ask me again' : 'Connect my Drive'}
+                  <Button variant="primary" size="sm" disabled={busy || waiting} onClick={() => { request(declined || withdrawn) }}>
+                    {busy ? 'Preparing…' : waiting ? 'Sent to your device…' : withdrawn ? 'Connect again' : declined ? 'Ask me again' : 'Connect my Drive'}
                   </Button>
                 </div>
               </>
@@ -211,7 +236,8 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
                 <p className={css.muted}>
                   Your wallet verifies this enclave itself and shows you exactly what is
                   being asked for. A notification is on its way to your device; if it does
-                  not arrive, enter these in the wallet by hand.
+                  not arrive, enter these in the wallet by hand. Nothing else to do here:
+                  this row updates by itself a few seconds after you approve.
                 </p>
                 <div className={css.askFacts}>
                   <div><span className={css.muted}>host&nbsp;&nbsp;</span><code>{ask.app_host}</code></div>

@@ -59,6 +59,19 @@ func (g *Granted) Usable() bool {
 // Denied reports a standing refusal.
 func (g *Granted) Denied() bool { return g != nil && g.Status == "denied" }
 
+// GrantID is the resource service's revocation key for this grant (Drive
+// returns it in service_result; older records carry only capability_id,
+// the same value). Two approvals are two grants.
+func (g *Granted) GrantID() string {
+	if g == nil {
+		return ""
+	}
+	if id := g.ServiceResult["grant_id"]; id != "" {
+		return id
+	}
+	return g.CapabilityID
+}
+
 // Path is where the resource service placed the folder, as it told the
 // runtime (Drive: `AppData/<label>`), or "" before a grant exists.
 func (g *Granted) Path() string {

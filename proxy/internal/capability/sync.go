@@ -134,6 +134,9 @@ type Syncer struct {
 	// and cleared by the next pass Drive accepts. The runtime cannot see a
 	// revoke made in Drive, so this is the only place the truth surfaces.
 	withdrawn bool
+	// withdrawnGrant is the grant id the refused calls presented, so a fresh
+	// approval (a different grant) clears the flag before the next pass.
+	withdrawnGrant string
 	// registryFile is dsh's workspace registry document for this holder
 	// (titles, paths, archived ids); sessions.go reads it every pass.
 	registryFile string
@@ -147,24 +150,41 @@ type Syncer struct {
 }
 
 // AccessWithdrawn reports whether Drive last refused the holder's capability.
+// A refusal is remembered WITH the grant it was answered to: the moment the
+// runtime records a different grant (the holder approved afresh on their
+// device), the refusal no longer describes anything, and the row must not
+// keep saying "Withdrawn" until the next mirror pass happens to prove the
+// new grant (2026-09-16: that wait read as a frozen UI after the tap).
 func (s *Syncer) AccessWithdrawn() bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.withdrawn
+	withdrawn, refusedGrant := s.withdrawn, s.withdrawnGrant
+	s.mu.Unlock()
+	if !withdrawn {
+		return false
+	}
+	if sub := s.subjectNow(); sub != "" && s.broker != nil && refusedGrant != "" {
+		if g := s.broker.Granted(sub); g.Usable() && g.GrantID() != refusedGrant {
+			return false
+		}
+	}
+	return true
 }
 
 // noteOutcome records whether Drive accepted the capability on this pass.
-func (s *Syncer) noteOutcome(err error) {
+// refusedGrant names the grant the refused calls presented.
+func (s *Syncer) noteOutcome(err error, refusedGrant string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch {
 	case err == nil:
 		s.withdrawn = false
+		s.withdrawnGrant = ""
 	case IsRefused(err):
 		if !s.withdrawn {
 			log.Printf("[sync] Drive refused the holder's capability; access looks withdrawn: %v", err)
 		}
 		s.withdrawn = true
+		s.withdrawnGrant = refusedGrant
 	}
 }
 
@@ -527,10 +547,11 @@ func (s *Syncer) SyncOnce() error {
 	// is what makes the assistant a folder they edit rather than a build.
 	// Failures here never hold up the mirror; the agent simply runs on what it
 	// has, which is the deployment's reference skills at worst.
+	grant := ds.grantID()
 	if err := s.syncSkills(ds); err != nil {
 		log.Printf("[sync] skills: %v", err)
 		if IsRefused(err) {
-			s.noteOutcome(err)
+			s.noteOutcome(err, grant)
 		}
 	}
 	// The holder's agents: each a folder in their Drive and a workspace here
@@ -538,14 +559,14 @@ func (s *Syncer) SyncOnce() error {
 	if err := s.syncAgents(ds); err != nil {
 		log.Printf("[sync] agents: %v", err)
 		if IsRefused(err) {
-			s.noteOutcome(err)
+			s.noteOutcome(err, grant)
 		}
 	}
 	sessErr := s.mirrorSessions(ds)
 	wsErr := s.snapshotWorkspace(ds)
-	s.noteOutcome(sessErr)
+	s.noteOutcome(sessErr, grant)
 	if sessErr == nil {
-		s.noteOutcome(wsErr)
+		s.noteOutcome(wsErr, grant)
 	}
 
 	s.mu.Lock()
