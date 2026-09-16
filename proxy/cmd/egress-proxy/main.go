@@ -638,7 +638,7 @@ func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp 
 	// its own unprefixed endpoints below as well, because its answer is
 	// Drive-shaped (a folder, a path, a withdrawal the mirror noticed).
 	registerResourceCapabilityAPI(mux, legs...)
-	registerCapabilityAPI(mux, broker, func(sub string) bool {
+	withdrawnFor := func(sub string) bool {
 		if mgr != nil {
 			if w := mgr.Get(sub); w != nil {
 				if s := w.Syncer(); s != nil {
@@ -648,7 +648,13 @@ func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp 
 			return false
 		}
 		return syncer.AccessWithdrawn()
-	})
+	}
+	registerCapabilityAPI(mux, broker, withdrawnFor)
+	// The access server tells the agent the same truth the Sessions row
+	// shows: the storage resource is the one the mirror exercises.
+	accessWithdrawn = func(sub, resource string) bool {
+		return resource == broker.Resource() && withdrawnFor(sub)
+	}
 	toolNames := make([]string, 0, len(cfg.toolHosts))
 	for name := range cfg.toolHosts {
 		toolNames = append(toolNames, name)

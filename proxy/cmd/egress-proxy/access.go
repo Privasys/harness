@@ -42,6 +42,10 @@ const accessServerName = "access"
 var (
 	accessMu   sync.RWMutex
 	accessLegs []resourceLeg
+	// accessWithdrawn reports a resource the service refuses for the holder
+	// although the runtime records it approved (the mirror knows this for
+	// the storage resource); set by main, nil off the platform.
+	accessWithdrawn func(sub, resource string) bool
 )
 
 // setAccessLegs installs the declared resources this server reports on. Legs
@@ -275,8 +279,16 @@ func listAccess(sub string, legs []resourceLeg) map[string]any {
 			item["state"] = "approved_needs_update"
 			item["note"] = "approved earlier for fewer or other permissions than this assistant now uses; it keeps working, and the user can approve the update"
 			item["granted_permissions"] = st.GrantedPermissions
+		case st.Persistent && accessWithdrawn != nil && accessWithdrawn(sub, l.name):
+			// The runtime's record says approved, and the service refuses
+			// the grant (withdrawn in Drive): the runtime cannot see that,
+			// the mirror can, and "approved" here sent an agent straight past
+			// the setup it needed (2026-09-16 21:48).
+			item["state"] = "withdrawn"
+			item["note"] = "the user withdrew this access at the service; the device's record still says approved, so request it again with ask_again true"
 		case st.Persistent:
 			item["state"] = "approved"
+			item["note"] = "as recorded by the user's device; the service is the authority, so if its tools refuse, follow their instructions"
 		case st.Declined:
 			item["state"] = "declined"
 		default:

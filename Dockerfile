@@ -117,7 +117,7 @@ RUN pnpm run build \
 # rather than vendored, so the public repo stays the one place they live, and
 # so the image's identity commits to exactly this text.
 FROM node:22-bookworm AS skills-builder
-ARG SKILLS_PIN=b5b110a71ae1c63ec46c50edfe015f61b2931acb
+ARG SKILLS_PIN=920af36905dfc351edc61b02de2a6c6fcd4bcd5d
 RUN git clone https://github.com/Privasys/agent-skills /skills \
  && git -C /skills checkout "${SKILLS_PIN}" \
  && rm -rf /skills/.git

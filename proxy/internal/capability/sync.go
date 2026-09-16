@@ -112,6 +112,10 @@ type Syncer struct {
 	blobs map[string]bool
 	// folders caches Drive path -> node id for the session tree.
 	folders map[string]string
+	// grantSeen is the grant the caches above were built under. A fresh
+	// approval is a fresh folder: every cached node id and uploaded hash
+	// then names something that no longer exists.
+	grantSeen string
 	// treeSeen/treeSaved are the workspace tree hashes last observed and last
 	// snapshotted: a snapshot is taken only once the tree has held still for
 	// a whole tick, so a file mid-write is never captured torn.
@@ -561,6 +565,17 @@ func (s *Syncer) SyncOnce() error {
 	grant := ds.grantID()
 	s.mu.Lock()
 	s.passRefused = false
+	if s.grantSeen != "" && s.grantSeen != grant {
+		// The holder approved afresh (after withdrawing, or a new folder):
+		// the node ids and the uploaded hashes belong to the old folder.
+		// Kept, they turned every write into a 403 and left "Withdrawn" on
+		// the row for as long as the caches lived (2026-09-16 20:49).
+		log.Printf("[sync] a new grant for %.8s…: forgetting the folder ids and upload marks of the old one", s.subject)
+		s.folders = map[string]string{}
+		s.uploaded = map[string]string{}
+		s.blobs = map[string]bool{}
+	}
+	s.grantSeen = grant
 	s.mu.Unlock()
 	if err := s.syncSkills(ds); err != nil {
 		log.Printf("[sync] skills: %v", err)
