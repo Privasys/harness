@@ -1525,7 +1525,7 @@ edit('packages/api/session-controller/tests/remote/session.client.ts', [
     'fake delete',
     `    'session/cancel': ok({ accepted: true }),`,
     `    'session/cancel': ok({ accepted: true }),\n` +
-      `    'session/delete': ok({ sessionId: 'fk-deleted' as SessionId }),`,
+      `    'session/delete': ok({ sessionId: 'fk-deleted' }),`,
   ],
 ])
 

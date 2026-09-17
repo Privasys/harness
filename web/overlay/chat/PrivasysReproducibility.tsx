@@ -565,7 +565,9 @@ export async function replayTurn(ctx: Context, sessionId: SessionId, request: Re
   } catch {
     // No local record: the panel will show the prompt verdict only.
   }
-  ctx.sessions.open(child)
+  // dsh 0.1.6-alpha.2: the main view is the workspace navigation's, not the
+  // sessions service's (the same call upstream's fork action makes).
+  ctx.uiWorkspace.openSession(child)
   const deadline = Date.now() + 15_000
   let binding = ctx.sessions.binding(child)
   while (binding === undefined && Date.now() < deadline) {
