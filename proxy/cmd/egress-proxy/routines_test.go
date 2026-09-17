@@ -88,7 +88,7 @@ func TestTimerRunsOnItsPeriodAndNotBefore(t *testing.T) {
 func TestReconcilePollsOnlyMountedSourcesAndDispatchesOnce(t *testing.T) {
 	// No worker manager is needed for this path: the agent's source is not
 	// mounted, so no poll starts, and nothing is due.
-	e := newRoutineEngine(nil, nil, map[string]string{"drive": "drive.example"}, t.TempDir())
+	e := newRoutineEngine(nil, nil, map[string]string{"drive": "drive.example"})
 	st := e.fresh(&routineState{Subject: "sub-1", Agents: []capability.AgentSpec{feedAgent()}})
 	e.mu.Lock()
 	e.subjects["sub-1"] = st

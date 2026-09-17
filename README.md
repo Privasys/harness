@@ -116,8 +116,11 @@ The proxy holds one such call per holder and agent, as the holder, over the
 attested tool leg; the tool parks it until something changes. A run is a new
 session in the agent's workspace, opened through a route on the worker's own
 server (`app/privasys-routines.mjs`) that only the proxy can reach. Grants
-live on the manager and declared agents are remembered on the encrypted
-volume, so a holder who is away still gets their runs.
+live on the manager; the proxy holds a holder's agents, cursors and last runs
+in memory only, read from their Drive while their worker runs. The harness
+stores no holder data: a holder who is away keeps their runs for the life of
+the container, and after a restart they resume when the holder next opens the
+harness.
 
 ### 4. A tool asks the person, not the model
 

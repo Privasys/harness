@@ -20,11 +20,13 @@ package main
 //   - shell egress (the forward proxy): each worker runs as its own uid, and
 //     the connecting uid names the subject.
 //
-// A worker's session logs live on tmpfs and its workspace and dsh home on
-// the encrypted volume, both as a write-back CACHE of the user's Drive
-// (drive-as-remote-disk.md, tier C decision): restored before the worker
-// starts, mirrored while it runs. Idle workers are stopped; their cache
-// stays for the next start.
+// The harness stores no holder data. A worker's session logs and skills live
+// on tmpfs; its workspace and dsh home sit on the encrypted volume ONLY while
+// the worker runs, as a scratch (this container's memory filesystem is 64 MiB
+// and cannot hold a working tree). Everything is restored from the holder's
+// Drive before the worker starts and mirrored while it runs; when the worker
+// stops, the scratch is wiped once the Drive verifiably holds all of it, and
+// the entrypoint clears whatever a previous container left behind.
 
 import (
 	"context"
@@ -67,7 +69,7 @@ type Worker struct {
 	Port      int
 	Token     string // the worker's egress bearer: names its subject to this proxy
 	Ingress   string // the token this proxy presents to the worker's dsh on every request
-	Dir       string // per-user cache root on the encrypted volume
+	Dir       string // per-user scratch on the encrypted volume, wiped at stop and at boot
 	Sessions  string
 	Workspace string
 	Home      string
@@ -271,8 +273,9 @@ func (m *WorkerManager) Ensure(sub string) *Worker {
 	return w
 }
 
-// loadOrAssignUID keeps one uid per user across restarts (the cache on the
-// volume is owned by it), allocated from a small file beside the cache.
+// loadOrAssignUID keeps one uid per user for the life of the container (a
+// scratch kept after an incomplete mirror is owned by it), from a small file
+// beside the scratch.
 func (m *WorkerManager) loadOrAssignUID(w *Worker) int {
 	if w.Subject == systemSubject {
 		return workerBaseUID
@@ -330,6 +333,9 @@ func (m *WorkerManager) start(w *Worker) {
 		// dsh's workspace registry (titles, archived set) names the Drive
 		// folders the mirror files sessions under.
 		sy.SetRegistryFile(filepath.Join(w.Home, "storages", "workspace.json"))
+		// What the holder set and attached rides to their Drive too, so the
+		// home on this volume is a scratch (capability/home.go).
+		sy.SetHomeRoot(w.Home)
 		sy.LoadState()
 		if n, err := sy.RestoreFor(w.Subject); err != nil {
 			log.Printf("[workers] %s: restore: %v", w.Key, err)
@@ -347,6 +353,7 @@ func (m *WorkerManager) start(w *Worker) {
 			chownTree(w.Sessions, w.UID)
 			chownTree(w.Workspace, w.UID)
 			chownTree(w.Skills, w.UID)
+			chownTree(w.Home, w.UID)
 		}
 		// A grant approved under other permissions than this image declares
 		// is asked again, once per worker start: the holder sees the ask in
@@ -616,7 +623,7 @@ func (m *WorkerManager) command(w *Worker) (*exec.Cmd, error) {
 	return cmd, nil
 }
 
-// forget drops a worker from the maps (its cache stays on disk) and frees
+// forget drops a worker from the maps and frees
 // its port.
 func (m *WorkerManager) forget(w *Worker) {
 	m.mu.Lock()
@@ -647,14 +654,21 @@ func (m *WorkerManager) failed(w *Worker) {
 	m.mu.Unlock()
 }
 
-// Stop ends a worker: a last mirror pass, then SIGTERM to its process group.
+// Stop ends a worker: SIGTERM to its process group, then a last mirror of
+// what it left, and the scratch on the volume is wiped once the holder's
+// Drive verifiably holds all of it. This enclave keeps a holder's files only
+// while their worker runs.
 func (m *WorkerManager) Stop(w *Worker) {
-	if s := w.Syncer(); s != nil {
-		if err := s.SyncOnce(); err != nil {
-			log.Printf("[workers] %s: final mirror: %v", w.Key, err)
-		}
-		s.SaveState()
-	}
+	// Hold the subject back while this runs: a request landing mid-flush
+	// would start a new worker in the very directories being wiped.
+	m.mu.Lock()
+	m.cooldown[w.Key] = time.Now().Add(10 * time.Minute)
+	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		delete(m.cooldown, w.Key)
+		m.mu.Unlock()
+	}()
 	if w.cmd != nil && w.cmd.Process != nil {
 		_ = signalGroup(w.cmd.Process.Pid, syscall.SIGTERM)
 		select {
@@ -663,7 +677,27 @@ func (m *WorkerManager) Stop(w *Worker) {
 			_ = signalGroup(w.cmd.Process.Pid, syscall.SIGKILL)
 		}
 	}
+	if s := w.Syncer(); s != nil {
+		s.StopTicks()
+		if s.Flush() {
+			w.wipeScratch()
+		} else {
+			log.Printf("[workers] %s: the last mirror was not complete; the scratch is kept until it is", w.Key)
+		}
+		s.SaveState()
+	}
 	m.forget(w)
+}
+
+// wipeScratch removes the holder's working files and dsh home from the
+// volume. Only ever called after Flush said their Drive holds everything.
+func (w *Worker) wipeScratch() {
+	for _, d := range []string{w.Workspace, w.Home} {
+		if err := os.RemoveAll(d); err != nil {
+			log.Printf("[workers] %s: wiping %s: %v", w.Key, filepath.Base(d), err)
+		}
+	}
+	log.Printf("[workers] %s: scratch wiped; the holder's Drive holds their files", w.Key)
 }
 
 // Reap stops workers idle for longer than the configured window. The system

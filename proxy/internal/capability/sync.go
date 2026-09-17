@@ -147,6 +147,9 @@ type Syncer struct {
 	// registryFile is dsh's workspace registry document for this holder
 	// (titles, paths, archived ids); sessions.go reads it every pass.
 	registryFile string
+	// home is this holder's dsh home (home.go): what they set and attached,
+	// carried to their Drive so the local copy can be a scratch.
+	home string
 	// metaCache remembers each local session directory's header (id, cwd):
 	// neither ever changes, and the file is read once instead of per tick.
 	metaCache map[string]sessionMeta
@@ -591,6 +594,12 @@ func (s *Syncer) SyncOnce() error {
 			s.noteOutcome(err, grant)
 		}
 	}
+	if err := s.mirrorHome(ds); err != nil {
+		log.Printf("[sync] home: %v", err)
+		if IsRefused(err) {
+			s.noteOutcome(err, grant)
+		}
+	}
 	sessErr := s.mirrorSessions(ds)
 	wsErr := s.snapshotWorkspace(ds)
 	s.noteOutcome(sessErr, grant)
@@ -849,14 +858,22 @@ func (s *Syncer) snapshotWorkspace(ds *DriveStore) error {
 // copy the record rather than a backup nobody ever reads. Returns the number
 // of files materialised.
 func (s *Syncer) restore(ds *DriveStore) (int, error) {
+	// The home first, and on its own terms: it never writes over a local
+	// file, so it is safe whatever the other two roots hold.
+	homeCount, homeErr := s.restoreHome(ds)
+	if homeErr != nil {
+		log.Printf("[sync] restore home: %v", homeErr)
+	} else if homeCount > 0 {
+		log.Printf("[sync] restored %d home file(s) from the holder's Drive", homeCount)
+	}
 	if !dirEmpty(s.sessions) && !dirEmpty(s.workspace) {
 		// Local content exists. Restoring over it could resurrect a session
 		// the holder deleted, or overwrite a newer local file with an older
 		// remote one — neither is a call this code should make silently.
-		return 0, nil
+		return homeCount, nil
 	}
 	var firstErr error
-	total := 0
+	total := homeCount
 	if dirEmpty(s.sessions) {
 		if id, err := s.folderIfExists(ds, sessionsFolder); err != nil {
 			firstErr = err

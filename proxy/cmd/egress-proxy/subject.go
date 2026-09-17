@@ -6,44 +6,9 @@ package main
 import (
 	"log"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 )
-
-// rememberedSubjectFile keeps the last signed-in subject across container
-// restarts, so the holder's Drive data can be restored BEFORE dsh starts:
-// dsh builds its workspace list once at boot and never re-bootstraps, so a
-// session restored after that start is invisible until the next restart.
-//
-// What is stored is one opaque pairwise identifier — not a name, not a
-// grant, not content — and it is the one per-user fact this single-user
-// deployment keeps on its volume. The clean replacement is a runtime call
-// listing the app's approved subjects, which needs no local memory at all;
-// until the runtime offers it, this file is the bridge.
-const rememberedSubjectFile = "last-subject"
-
-func rememberedSubjectPath() string {
-	return filepath.Join(envOr("HARNESS_POLICY_DIR", "/data/policy"), rememberedSubjectFile)
-}
-
-// loadRememberedSubject returns the subject noted by the previous run, or "".
-func loadRememberedSubject() string {
-	raw, err := os.ReadFile(rememberedSubjectPath())
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(raw))
-}
-
-func rememberSubject(sub string) {
-	path := rememberedSubjectPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return
-	}
-	_ = os.WriteFile(path, []byte(sub+"\n"), 0o600)
-}
 
 // Acting subject for the SINGLE-USER deployment model: the sealed relay
 // asserts the signed-in user's pairwise subject as X-Privasys-Sub on every
@@ -60,6 +25,11 @@ func rememberSubject(sub string) {
 // process-level value then).
 var actingSubject atomic.Value // string
 
+// onFirstSubject runs once, when the single-user layout learns who its holder
+// is. Nothing on this enclave remembers a holder across restarts, so their
+// Drive data is restored at their first request instead of at boot.
+var onFirstSubject func(sub string)
+
 // recordSubject notes the relay-asserted subject from one ingress request.
 func recordSubject(sub string) {
 	if sub == "" {
@@ -72,7 +42,9 @@ func recordSubject(sub string) {
 			log.Printf("[ingress] acting subject bound (%.8s…)", sub)
 		}
 		actingSubject.Store(sub)
-		rememberSubject(sub)
+		if prev == "" && onFirstSubject != nil {
+			go onFirstSubject(sub)
+		}
 	}
 }
 

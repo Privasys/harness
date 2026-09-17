@@ -430,21 +430,20 @@ func main() {
 		// owns the clock and holds each agent's change feed on whichever
 		// mounted tool serves it; a run is a session dispatched into the
 		// worker through its routines door.
-		routines := newRoutineEngine(mgr, client, cfg.toolHosts, envOr("HARNESS_USERS_DIR", "/data/users"))
-		routines.Load()
+		routines := newRoutineEngine(mgr, client, cfg.toolHosts)
 		routines.Start(context.Background())
 	} else {
 		syncer.LoadState()
-		// Boot-time restore for the subject this deployment remembered: dsh
-		// builds its workspace list once at start and never re-bootstraps,
-		// so the holder's sessions must be on disk BEFORE it starts. The
-		// entrypoint waits on /storage/ready for exactly this.
-		if remembered := loadRememberedSubject(); remembered != "" {
-			recordSubject(remembered)
-			if n, err := syncer.RestoreFor(remembered); err != nil {
-				log.Printf("[sync] boot restore for %.8s…: %v", remembered, err)
+		// This enclave remembers nobody across restarts, so the holder's Drive
+		// data comes back at their first request, not at boot. dsh lists its
+		// workspaces once at start, so sessions restored after that show on
+		// its next start; the per-user layout above restores before each
+		// worker's dsh starts and has no such gap.
+		onFirstSubject = func(sub string) {
+			if n, err := syncer.RestoreFor(sub); err != nil {
+				log.Printf("[sync] restore for %.8s…: %v", sub, err)
 			} else if n > 0 {
-				log.Printf("[sync] boot restore for %.8s…: %d file(s)", remembered, n)
+				log.Printf("[sync] restore for %.8s…: %d file(s)", sub, n)
 			}
 		}
 		syncer.SetReady()

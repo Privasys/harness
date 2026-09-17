@@ -49,13 +49,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -67,7 +64,6 @@ import (
 const (
 	routineTick     = 30 * time.Second
 	routinePollWait = 60 // seconds a tool may hold one change-feed call
-	routinesFile    = "routines.json"
 	// routineStartWait bounds how long a dispatch waits for a cold worker.
 	routineStartWait = 3 * time.Minute
 	// routinePollBackoffMax caps the wait between failed change-feed calls.
@@ -97,11 +93,11 @@ func pollBackoff(failures int) time.Duration {
 	return d
 }
 
-// routineState is what the engine remembers per holder, persisted beside
-// their cache on the encrypted volume so a restart, or a holder who never
-// opens the assistant, still gets their runs. The subject is kept because it
-// is what starts the worker; the directory name is its hash for path
-// hygiene, not secrecy, and the volume is the enclave's.
+// routineState is what the engine holds per holder, in MEMORY only: the
+// harness keeps no record of a holder on its enclave. The agents are read
+// from the holder's Drive by their mirror, the cursors start at "now" on a
+// fresh process, and after a restart a holder's runs resume when they (or
+// the runtime's list of approved subjects, once it exists) start the worker.
 type routineState struct {
 	Subject string                 `json:"subject"`
 	Agents  []capability.AgentSpec `json:"agents"`
@@ -118,45 +114,15 @@ type routineEngine struct {
 	mgr       *WorkerManager
 	client    *http.Client
 	toolHosts map[string]string
-	usersDir  string
 	now       func() time.Time
 
 	mu       sync.Mutex
 	subjects map[string]*routineState
 }
 
-func newRoutineEngine(mgr *WorkerManager, client *http.Client, toolHosts map[string]string, usersDir string) *routineEngine {
-	return &routineEngine{mgr: mgr, client: client, toolHosts: toolHosts, usersDir: usersDir,
+func newRoutineEngine(mgr *WorkerManager, client *http.Client, toolHosts map[string]string) *routineEngine {
+	return &routineEngine{mgr: mgr, client: client, toolHosts: toolHosts,
 		now: time.Now, subjects: map[string]*routineState{}}
-}
-
-// Load re-arms every holder remembered on the volume.
-func (e *routineEngine) Load() {
-	entries, err := os.ReadDir(e.usersDir)
-	if err != nil {
-		return
-	}
-	n := 0
-	for _, d := range entries {
-		if !d.IsDir() {
-			continue
-		}
-		raw, err := os.ReadFile(filepath.Join(e.usersDir, d.Name(), routinesFile))
-		if err != nil {
-			continue
-		}
-		var st routineState
-		if json.Unmarshal(raw, &st) != nil || st.Subject == "" {
-			continue
-		}
-		e.mu.Lock()
-		e.subjects[st.Subject] = e.fresh(&st)
-		e.mu.Unlock()
-		n++
-	}
-	if n > 0 {
-		log.Printf("[routines] %d holder(s) with agents remembered from the volume", n)
-	}
 }
 
 func (e *routineEngine) fresh(st *routineState) *routineState {
@@ -223,12 +189,8 @@ func (e *routineEngine) update(sub string, agents []capability.AgentSpec) {
 		st = e.fresh(&routineState{Subject: sub})
 		e.subjects[sub] = st
 	}
-	changed := !sameAgents(st.Agents, agents)
 	st.Agents = agents
 	e.mu.Unlock()
-	if changed {
-		e.persist(st)
-	}
 }
 
 func sameAgents(a, b []capability.AgentSpec) bool {
@@ -344,9 +306,6 @@ func (e *routineEngine) poll(ctx context.Context, st *routineState, a capability
 			st.pending[a.Name] = e.now()
 		}
 		e.mu.Unlock()
-		if next != "" && next != cursor {
-			e.persist(st)
-		}
 	}
 }
 
@@ -387,7 +346,6 @@ func (e *routineEngine) dispatch(ctx context.Context, st *routineState, a capabi
 		delete(st.dispatching, a.Name)
 		e.mu.Unlock()
 	}()
-	e.persist(st)
 
 	w := e.mgr.Ensure(st.Subject)
 	deadline := now.Add(routineStartWait)
@@ -441,21 +399,4 @@ func runTitleAndPrompt(a capability.AgentSpec, now time.Time) (title, prompt str
 		prompt += "\n\n(Started unattended on the schedule of every " + a.Trigger.Every + ".)"
 	}
 	return title, prompt
-}
-
-// persist writes a holder's state beside their cache on the volume.
-func (e *routineEngine) persist(st *routineState) {
-	e.mu.Lock()
-	raw, err := json.MarshalIndent(st, "", "  ")
-	e.mu.Unlock()
-	if err != nil {
-		return
-	}
-	dir := filepath.Join(e.usersDir, workerKey(st.Subject))
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return
-	}
-	if err := os.WriteFile(filepath.Join(dir, routinesFile), raw, 0o600); err != nil && !errors.Is(err, os.ErrPermission) {
-		log.Printf("[routines] %.8s…: remembering agents: %v", st.Subject, err)
-	}
 }

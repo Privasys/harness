@@ -135,16 +135,26 @@ printf -- '- id: session-persistence-jsonl
   config:
     root: %s
 '   "$SESSION_ROOT" > /run/session-root.cordis.yml
-# A store from before this change is no longer read. Say so rather than
-# leaving the user to wonder where their history went, and do not delete it:
-# it is their data, and deleting it is their call, not this script's.
-for legacy in /data/sessions /data/workspace; do
-  if [[ -d "$legacy" ]] && [[ -n "$(ls -A "$legacy" 2>/dev/null)" ]]; then
-    echo "[harness] NOTE: $legacy holds a legacy on-enclave store and is no longer read."
-    echo "[harness]       Sessions and workspace now live in memory and on your Drive."
-    echo "[harness]       It is your data, so this script will not delete it — clear it when ready."
+# The harness stores no holder data. Whatever a previous container left on the
+# volume is removed at every boot: the per-user scratch (working files and dsh
+# homes, which live there only while a worker runs because the memory
+# filesystem is too small for a working tree), the record of who signed in
+# last, the agents once remembered for unattended runs, and the stores from
+# before sessions moved to memory. The holder's Drive is the only home of
+# their data; a worker's files come back from it when the worker starts.
+for stale in /data/users /data/sessions /data/workspace /data/policy/last-subject; do
+  if [[ -e "$stale" ]]; then
+    rm -rf "$stale" && echo "[harness] removed $stale: this enclave keeps no holder data across a restart"
   fi
 done
+# What memory filesystems this container has, and how large: the scratch can
+# leave the volume the day one of them can hold a working tree.
+for cand in /dev/shm /run /tmp; do
+  if [[ -d "$cand" ]]; then
+    echo "[harness] $cand: $(stat -f -c %T "$cand" 2>/dev/null) $(df -k --output=size "$cand" 2>/dev/null | tail -1 | tr -d ' ') KiB"
+  fi
+done
+echo "[harness] memory: $(awk '/MemTotal/{print $2" "$3}' /proc/meminfo 2>/dev/null)"
 # Hand the environment to the browser shell: privasys-shell.js merges
 # window.__PRIVASYS_CFG__ over its dev defaults (its documented seam).
 DIST_INDEX=/dsh/apps/web/dist/index.html
