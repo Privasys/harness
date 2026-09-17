@@ -17,6 +17,10 @@ const DROP = new Set([
   // Mid-transcript in-place tool-result rewriting: a prefix-cache killer for
   // the confidential inference backend.
   'tool-result-pruner',
+  // Runtime plugin installation (dsh 0.1.6-alpha.2): the composition IS the
+  // measured identity, so nothing may add a plugin to it after the build, by
+  // a person or by the model's tool.
+  'plugin-manager', 'tool-plugin-manager',
   // Windows-only shell surface: dead weight in a Linux enclave.
   'tool-pwsh', 'pwsh-sandbox',
 ])

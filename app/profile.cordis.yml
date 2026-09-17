@@ -97,6 +97,12 @@
   disabled: true
 - id: ui-open-in-app
   disabled: true
+# dsh 0.1.6-alpha.2 added runtime plugin management (install, enable, remove
+# a bundle from the sidebar or from the model's tool). The composition is the
+# measured identity: the service and its tool are left out of the bundle
+# (web/gen-bundle.mjs), and the page that would drive them is not mounted.
+- id: ui-plugin-manager
+  disabled: true
 
 # Clock for the agent (dsh injects NO date/time by default). dsh-time-context
 # appends a timestamp message at the ABSOLUTE TAIL of the step batch

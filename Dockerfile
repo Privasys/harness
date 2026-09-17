@@ -19,14 +19,16 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
 
 # ---- dsh at the pin -------------------------------------------------------
 FROM node:22-bookworm AS dsh-builder
-# dsh-v0.1.6-alpha.1 (2026-09-15). Release audit: 800 commits past rc.2. The
-# model plugin split into protocols/ (chat-completions, messages) and common/
-# and now DEFAULTS TO THE MESSAGES PROTOCOL (profile.cordis.yml pins
-# chat-completions, the wire Confidential AI serves); the MCP client moved to
-# the official @modelcontextprotocol/client 2.0; the workspace rows gained
-# unarchive; the fixture transport is gone. Overlay rebased (34 anchors) and
-# applied clean at this pin.
-ARG DSH_PIN=0a15e36e7f82b6ed45af6fa9759f29b40dcd965d
+# dsh-v0.1.6-alpha.2 (2026-09-17). Release audit: 887 commits past alpha.1.
+# Two anchors moved (the workspace navigation clears its main view through
+# clearMain, and the plan-review intent gained a callId); the base bundle
+# gained a runtime plugin manager and its tool, which this deployment drops
+# (the composition is the measured identity) along with the page that drives
+# them. Still true from alpha.1: the model plugin defaults to the Messages
+# wire (profile.cordis.yml pins chat-completions) and the MCP client is the
+# official @modelcontextprotocol/client 2.0, with no elicitation of its own.
+# Overlay applied clean at this pin.
+ARG DSH_PIN=ddefc45fbc7f8e46dd73185e68295696d1297887
 RUN corepack enable \
  && git clone https://github.com/deepseek-ai/deepseek-harness /dsh \
  && git -C /dsh checkout "${DSH_PIN}"

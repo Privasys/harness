@@ -1568,16 +1568,17 @@ edit('packages/client/ui-workspace/src/client/navigation.ts', [
     'navigation deleteSession (impl)',
     `  async archiveSession(sessionId: SessionId): Promise<void> {\n` +
       `    await this.workspaces.archiveSession(sessionId)\n` +
+      `    if (this.mainReference?.sessionId === sessionId) this.clearMain()\n` +
       `  }`,
     `  async archiveSession(sessionId: SessionId): Promise<void> {\n` +
       `    await this.workspaces.archiveSession(sessionId)\n` +
+      `    if (this.mainReference?.sessionId === sessionId) this.clearMain()\n` +
       `  }\n` +
       `\n` +
       `  async deleteSession(sessionId: SessionId): Promise<void> {\n` +
-      `    const current = this.sessions.list.getSnapshot().current\n` +
       `    if (this.sessions.delete === undefined) throw new Error('session deletion is unavailable in this build')\n` +
       `    await this.sessions.delete(sessionId)\n` +
-      `    if (current === sessionId) this.sessions.clear()\n` +
+      `    if (this.mainReference?.sessionId === sessionId) this.clearMain()\n` +
       `  }`,
   ],
 ])
@@ -1950,9 +1951,11 @@ put('packages/client/ui-user-questions/src/client/PrivasysFormPanel.module.css',
 edit('packages/interaction/user-questions/src/types.ts', [
   [
     'user-questions: form intent',
-    `  approve: string\n` +
+    `  /** Logged tool invocation whose arguments contain the reviewed plan. */\n` +
+      `  callId?: ToolCallId\n` +
       `}\n`,
-    `  approve: string\n` +
+    `  /** Logged tool invocation whose arguments contain the reviewed plan. */\n` +
+      `  callId?: ToolCallId\n` +
       `} | {\n` +
       `  /** Privasys: every question of the request is one field of ONE form; title and notice on the first. */\n` +
       `  kind: 'form'\n` +
