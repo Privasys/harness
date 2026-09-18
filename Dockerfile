@@ -215,7 +215,7 @@ LABEL org.privasys.static-unsealed-prefixes="/,/assets/,/privasys/,/plugins/,/fa
 # A fork adds or removes entries here; the proxy reads the same text back
 # from HARNESS_RESOURCES and builds one broker per entry (proxy
 # resources.go), so the declaration is the only place a resource is named.
-ARG HARNESS_RESOURCES='[{"kind":"storage.folder","name":"storage","label":"Harness","permissions":["read","write","delete"]},{"kind":"mail.mailbox","name":"mailbox","label":"Mail Connector","permissions":["read","write"]}]'
+ARG HARNESS_RESOURCES='[{"kind":"storage.folder","name":"storage","label":"Harness","permissions":["read","write","delete"]},{"kind":"app_storage","name":"holders","label":"Your working files","permissions":["read","write"],"options":{"unattended":true}},{"kind":"mail.mailbox","name":"mailbox","label":"Mail Connector","permissions":["read","write"]}]'
 ENV HARNESS_RESOURCES=${HARNESS_RESOURCES}
 LABEL org.privasys.manifest="{\"tools\":[],\"resources\":${HARNESS_RESOURCES}}"
 # Link the GHCR package to this repo so its Actions inherit write access

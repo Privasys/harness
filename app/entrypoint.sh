@@ -144,9 +144,33 @@ printf -- '- id: session-persistence-jsonl
 # their data; a worker's files come back from it when the worker starts.
 for stale in /data/users /data/sessions /data/workspace /data/policy/last-subject; do
   if [[ -e "$stale" ]]; then
-    rm -rf "$stale" && echo "[harness] removed $stale: this enclave keeps no holder data across a restart"
+    # With holder folders the runtime makes the volume root immutable: the
+    # entry itself may then stay, emptied. Either way nothing of a holder's
+    # survives in it.
+    rm -rf "$stale" 2>/dev/null || rm -rf "$stale"/* 2>/dev/null || true
+    echo "[harness] cleared $stale: this enclave keeps no holder data across a restart"
   fi
 done
+# Nothing else on the volume is this script's: the proxy's per-user scratch
+# lives in the container's own writable layer (wiped with it), the reference
+# skills and the policy ceiling are read from the image, and a holder's
+# working files live in their holder folder when the runtime opens one
+# (/data/holders/<holder>, under the holder's own key, opened only by the
+# runtime) or on the scratch until then.
+export HARNESS_USERS_DIR="${HARNESS_USERS_DIR:-/var/tmp/privasys-users}"
+export HARNESS_POLICY_DIR="${HARNESS_POLICY_DIR:-/run/privasys-policy}"
+export HARNESS_SEED_SKILLS="${HARNESS_SEED_SKILLS:-/run/privasys-skills}"
+mkdir -p "$HARNESS_USERS_DIR" "$HARNESS_POLICY_DIR" "$HARNESS_SEED_SKILLS"
+chmod 711 "$HARNESS_USERS_DIR"
+# The deployment's reference skills, from the IMAGE on every boot: they are
+# the measured ones, and a holder's own copies live in their Drive (seeded
+# from here, then theirs). `set -e` is on: a bare `[[ -d … ]] && cp` would
+# END THE BOOT on an image built without the skills stage.
+if [[ -d /app/skills ]]; then
+  cp -a /app/skills/. "$HARNESS_SEED_SKILLS/" 2>/dev/null || echo "[harness] reference skills not copied" >&2
+fi
+rm -rf "$HARNESS_SEED_SKILLS/.github" "$HARNESS_SEED_SKILLS/README.md" 2>/dev/null || true
+chmod -R a+rX "$HARNESS_SEED_SKILLS"
 # What memory filesystems this container has, and how large: the scratch can
 # leave the volume the day one of them can hold a working tree.
 for cand in /dev/shm /run /tmp; do
@@ -182,29 +206,7 @@ DSH_PORT=3080
 # with HARNESS_WORKERS=0 for a deployment that must roll back.
 export HARNESS_WORKERS="${HARNESS_WORKERS:-1}"
 if [[ "$HARNESS_WORKERS" == "1" ]]; then
-  # Volume layout for unprivileged worker uids, settled BEFORE the proxy
-  # starts (it lays out the per-user trees itself, and a root it finds
-  # already there keeps the mode it has). Workers must traverse /data to
-  # reach their own 0700 tree and must read the deployment's skills; the
-  # legacy single-user stores and the proxy's own state stay root-only.
-  chmod 711 /data 2>/dev/null || true
-  mkdir -p /data/users && chmod 711 /data/users
-  for private in /data/sessions /data/workspace /data/policy; do
-    [[ -d "$private" ]] && chmod 700 "$private"
-  done
-  # The deployment's reference skills, refreshed from the IMAGE on every boot:
-  # they are the measured ones, and a holder's own copies live in their Drive
-  # (seeded from here, then theirs), never here.
-  mkdir -p /data/skills
-  # `set -e` is on: a bare `[[ -d … ]] && cp` would END THE BOOT on an image
-  # built without the skills stage (a rollback, say). An absent or unreadable
-  # reference set costs the holder their seeded skills, never their harness.
-  if [[ -d /app/skills ]]; then
-    cp -a /app/skills/. /data/skills/ 2>/dev/null || echo "[harness] reference skills not copied" >&2
-  fi
-  rm -rf /data/skills/.github /data/skills/README.md 2>/dev/null || true
-  chmod -R a+rX /data/skills
-  echo "[harness] volume layout for workers: /data $(stat -c '%a uid=%u' /data), /data/users $(stat -c '%a' /data/users), /data/skills $(stat -c '%a' /data/skills)"
+  echo "[harness] per-user scratch under $HARNESS_USERS_DIR ($(stat -f -c %T "$HARNESS_USERS_DIR")), skills from $HARNESS_SEED_SKILLS"
 fi
 EGRESS_PROXY_LISTEN=127.0.0.1:9411 \
 EGRESS_FORWARD_LISTEN=127.0.0.1:9412 \
@@ -345,14 +347,7 @@ fi
 # harness source tree. Work now belongs on the tmpfs workspace root resolved
 # above, mirrored to the user's Drive — the enclave keeps no copy.
 # The deployment-owned skill root (presets pin skill discovery to it,
-# includeDefaultRoots:false — see app/profile notes + the preset overlay),
-# refreshed from the image so a rollback deployment is not left with an empty
-# one. The workers path above does the same before the proxy starts.
-mkdir -p /data/skills
-if [[ -d /app/skills ]]; then
-  cp -a /app/skills/. /data/skills/ 2>/dev/null || echo "[harness] reference skills not copied" >&2
-fi
-rm -rf /data/skills/.github /data/skills/README.md 2>/dev/null || true
+# includeDefaultRoots:false) was laid out above from the image.
 cd "$WORKSPACE_ROOT"
 
 if [[ "$HARNESS_WORKERS" == "1" ]]; then

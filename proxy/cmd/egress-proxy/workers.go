@@ -80,6 +80,9 @@ type Worker struct {
 
 	cmd    *exec.Cmd
 	syncer *capability.Syncer
+	// holder is set when the worker's roots are the holder's folder
+	// (holders.go), which persists locked instead of being wiped.
+	holder bool
 
 	mu       sync.Mutex
 	ready    bool
@@ -115,7 +118,9 @@ func (w *Worker) isReady() bool {
 
 // WorkerManager owns the workers and the maps that attribute requests.
 type WorkerManager struct {
-	cfg       config
+	cfg config
+	// holders is the app_storage broker (holders.go); nil when not declared.
+	holders   *capability.Broker
 	broker    *capability.Broker
 	client    *http.Client
 	driveHost string
@@ -250,7 +255,7 @@ func (m *WorkerManager) Ensure(sub string) *Worker {
 		Port:     m.allocPort(),
 		Token:    randomToken(),
 		Ingress:  randomToken(),
-		Dir:      filepath.Join(envOr("HARNESS_USERS_DIR", "/data/users"), key),
+		Dir:      filepath.Join(envOr("HARNESS_USERS_DIR", "/var/tmp/privasys-users"), key),
 		exited:   make(chan struct{}),
 		lastSeen: time.Now(), started: time.Now(),
 	}
@@ -308,6 +313,9 @@ func randomToken() string {
 // Drive, and launches dsh. Errors are logged; the ingress keeps answering
 // "starting" and a later request retries a failed start.
 func (m *WorkerManager) start(w *Worker) {
+	// The holder's folder first: when the runtime opens it, the worker's
+	// roots move there before anything is laid out (holders.go).
+	m.openHolderFolder(w)
 	if err := m.prepare(w); err != nil {
 		log.Printf("[workers] %s: prepare: %v", w.Key, err)
 		m.failed(w)
@@ -326,7 +334,7 @@ func (m *WorkerManager) start(w *Worker) {
 		// The holder's own skills: read from their Drive, seeded once from the
 		// deployment's reference set. What the assistant DOES is then a folder
 		// they can open and edit, with no build and no deploy in their path.
-		sy.SetSkillsRoot(w.Skills, envOr("HARNESS_SEED_SKILLS", "/data/skills"))
+		sy.SetSkillsRoot(w.Skills, envOr("HARNESS_SEED_SKILLS", "/run/privasys-skills"))
 		// The holder's agents: a folder each in their Drive, a workspace each
 		// here, beside their other workspaces (capability/agents.go).
 		sy.SetAgentsRoot(w.Workspace, w.UID)
@@ -588,7 +596,7 @@ func (m *WorkerManager) command(w *Worker) (*exec.Cmd, error) {
 	// The holder's own skills FIRST: dsh breaks a duplicate name within one
 	// rank by registration order, so listed the other way round the
 	// deployment's reference copy would shadow the holder's edited one.
-	env["PRIVASYS_SKILL_DIRS"] = w.Skills + ":" + envOr("HARNESS_SEED_SKILLS", "/data/skills")
+	env["PRIVASYS_SKILL_DIRS"] = w.Skills + ":" + envOr("HARNESS_SEED_SKILLS", "/run/privasys-skills")
 	env["PRIVASYS_BEARER"] = w.Token
 	env["DEEPSEEK_API_KEY"] = w.Token
 	// dsh (overlay 2b) refuses any request without this token, so the
@@ -679,13 +687,19 @@ func (m *WorkerManager) Stop(w *Worker) {
 	}
 	if s := w.Syncer(); s != nil {
 		s.StopTicks()
-		if s.Flush() {
+		switch {
+		case w.holder:
+			// The holder's folder is theirs and persists locked; nothing to
+			// wipe, the mirror still carries what belongs in their Drive.
+			_ = s.Flush()
+		case s.Flush():
 			w.wipeScratch()
-		} else {
+		default:
 			log.Printf("[workers] %s: the last mirror was not complete; the scratch is kept until it is", w.Key)
 		}
 		s.SaveState()
 	}
+	m.closeHolderFolder(w)
 	m.forget(w)
 }
 

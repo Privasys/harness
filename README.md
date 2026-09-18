@@ -149,6 +149,18 @@ choices (mutualised or dedicated). Per-user isolation rails inside one
 deployment (per-user keys, proxy-bound capabilities, per-session workers) are
 in design; until they land, share a deployment only within one trust domain.
 
+The harness stores no holder data of its own. A holder's files that they
+author and read (skills, agents, outputs, conversations) live in their Drive.
+A holder's working files (their workspace and dsh home) live in their holder
+folder: one directory of the app's volume, encrypted by the kernel with the
+holder's own key, that the enclave OS opens for their worker under a consent
+the holder gave once on their wallet and locks when the worker stops. This
+proxy never sees that key and never names the path; it asks the runtime to
+open or close the folder (the `app_storage` resource declared in the image).
+On a runtime without holder folders, or before the holder approved, a worker
+runs on a scratch in the container's own layer that is wiped when it stops
+and at every boot.
+
 ## Licence
 
 AGPL-3.0 (see `LICENSE`). The vendored dsh tree remains MIT; its licence and

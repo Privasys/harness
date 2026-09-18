@@ -38,6 +38,8 @@ type resourceDecl struct {
 	Name        string   `json:"name"`
 	Label       string   `json:"label"`
 	Permissions []string `json:"permissions"`
+	// Options ride to the manifest label verbatim (app_storage: unattended).
+	Options map[string]any `json:"options,omitempty"`
 }
 
 // defaultResources is the generic harness's declaration: the holder's folder
@@ -78,7 +80,7 @@ func resourceLegsFor(decls []resourceDecl, storageName string) (storage *capabil
 		if d.Name == storageName {
 			storage = b
 		}
-		legs = append(legs, resourceLeg{name: d.Name, broker: b})
+		legs = append(legs, resourceLeg{name: d.Name, kind: d.Kind, broker: b})
 	}
 	if storage == nil {
 		// The mirror needs a folder even when a deployment declares none by

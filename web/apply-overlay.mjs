@@ -805,7 +805,7 @@ const SKILL_ROW_PRIVASYS =
   `    # worker's own home and are empty; the dsh checkout's development\n` +
   `    # skills are never on the path because no session runs inside it.\n` +
   `    includeDefaultRoots: true\n` +
-  `    customSkillDirs: !!js "(process.env.PRIVASYS_SKILL_DIRS || '/data/skills').split(':').filter(Boolean)"\n` +
+  `    customSkillDirs: !!js "(process.env.PRIVASYS_SKILL_DIRS || '/run/privasys-skills').split(':').filter(Boolean)"\n` +
   `    watch: false\n` +
   `\n` +
   `- id: tool-skill`
@@ -827,7 +827,7 @@ edit('packages/preset/agent-presets/presets/cordis/agent.cordis.yml', [
       `  config:\n` +
       `    includeDefaultRoots: false\n` +
       `    customSkillDirs:\n` +
-      `      - /data/skills\n` +
+      `      - /run/privasys-skills\n` +
       `    watch: false`,
   ],
 ])

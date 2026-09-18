@@ -315,3 +315,76 @@ func (b *Broker) PublicKeyB64() string {
 	defer b.mu.Unlock()
 	return b.pub
 }
+
+// ---- holder folders --------------------------------------------------------
+
+// HolderFolder is the runtime's answer to an open: the holder's folder, one
+// directory of this app's volume encrypted with the holder's own key, which
+// the runtime opens under the holder's consent and this process never keys.
+type HolderFolder struct {
+	// Status is "open", "needs_holder" (the holder's wallet has been asked,
+	// or must deliver the key again), "declined", "revoked", or
+	// "unavailable" (a runtime without holder folders, or an app volume
+	// that cannot carry them).
+	Status string
+	// Path is the folder inside this container when Status is "open".
+	Path string
+	// Nonce and AppHost identify the outstanding ask when Status is
+	// "needs_holder".
+	Nonce, AppHost string
+}
+
+// OpenHolderFolder asks the runtime for the holder's folder, owned by uid
+// (this process's worker for that holder).
+func (b *Broker) OpenHolderFolder(subject string, uid int) (*HolderFolder, error) {
+	if subject == "" {
+		return nil, errors.New("capability: a subject is required")
+	}
+	code, raw, err := b.do(http.MethodPost, "/api/v1/resources/"+url.PathEscape(b.resource)+"/open",
+		map[string]any{"subject": subject, "uid": uid})
+	if err != nil {
+		return nil, err
+	}
+	var body struct {
+		Status  string `json:"status"`
+		Path    string `json:"path"`
+		Nonce   string `json:"nonce"`
+		AppHost string `json:"app_host"`
+	}
+	_ = json.Unmarshal(raw, &body)
+	switch code {
+	case http.StatusOK:
+		if body.Path == "" {
+			return nil, errors.New("capability: the runtime opened the folder but named no path")
+		}
+		return &HolderFolder{Status: "open", Path: body.Path}, nil
+	case http.StatusConflict:
+		return &HolderFolder{Status: "needs_holder", Nonce: body.Nonce, AppHost: body.AppHost}, nil
+	case http.StatusForbidden:
+		if body.Status == "" {
+			body.Status = "declined"
+		}
+		return &HolderFolder{Status: body.Status}, nil
+	case http.StatusNotFound, http.StatusNotImplemented:
+		return &HolderFolder{Status: "unavailable"}, nil
+	}
+	return nil, fmt.Errorf("capability: open holder folder: HTTP %d: %s", code, strings.TrimSpace(string(raw)))
+}
+
+// CloseHolderFolder tells the runtime this process is done with the holder's
+// folder; the runtime removes the key and the folder is locked. busy reports
+// that files were still in use and the key is not fully gone yet.
+func (b *Broker) CloseHolderFolder(subject string) (busy bool, err error) {
+	code, raw, err := b.do(http.MethodPost, "/api/v1/resources/"+url.PathEscape(b.resource)+"/close",
+		map[string]any{"subject": subject})
+	if err != nil {
+		return false, err
+	}
+	switch code {
+	case http.StatusOK:
+		return false, nil
+	case http.StatusAccepted:
+		return true, nil
+	}
+	return false, fmt.Errorf("capability: close holder folder: HTTP %d: %s", code, strings.TrimSpace(string(raw)))
+}

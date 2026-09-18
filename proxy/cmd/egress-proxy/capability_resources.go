@@ -33,7 +33,10 @@ type resourceLeg struct {
 	// name matches the `resources` entry in the measured manifest. A
 	// mismatch is not a configuration error the runtime reports; the ask is
 	// simply refused with "resource not declared in the app manifest".
-	name   string
+	name string
+	// kind is the declared kind; app_storage legs are the worker's business
+	// (holders.go) and never the agent's to ask for.
+	kind   string
 	broker *capability.Broker
 }
 

@@ -351,7 +351,7 @@ func main() {
 	// never been handed a document bootstraps its ceiling from the measured
 	// image environment, so a harness predating this work behaves exactly as
 	// its image says rather than failing closed on an absent file.
-	store := policy.NewStore(envOr("HARNESS_POLICY_DIR", "/data/policy"))
+	store := policy.NewStore(envOr("HARNESS_POLICY_DIR", "/run/privasys-policy"))
 	stamp := newStamper()
 	store.OnCeilingChange = stamp.Stamp
 	ceiling, err := store.LoadCeiling(
@@ -421,6 +421,10 @@ func main() {
 	var mgr *WorkerManager
 	if workersEnabled() {
 		mgr = newWorkerManager(cfg, broker, client)
+		mgr.holders = holderBroker(declaredResources(), legs)
+		if mgr.holders != nil {
+			log.Printf("[workers] holder folders declared as %q: a worker's roots are the holder's folder when the runtime opens it", mgr.holders.Resource())
+		}
 		workerMgr = mgr
 		mgr.Ensure(systemSubject)
 		go mgr.Reap(context.Background())

@@ -53,7 +53,9 @@ var (
 func setAccessLegs(legs ...resourceLeg) {
 	kept := make([]resourceLeg, 0, len(legs))
 	for _, l := range legs {
-		if l.name != "" && l.broker != nil {
+		// A holder folder is opened by this proxy for the holder's worker under
+		// a consent the wallet handles; an agent never lists or asks for it.
+		if l.name != "" && l.broker != nil && l.kind != holderResourceKind {
 			kept = append(kept, l)
 		}
 	}
