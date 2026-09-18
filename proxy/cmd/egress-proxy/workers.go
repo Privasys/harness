@@ -316,7 +316,24 @@ func (m *WorkerManager) start(w *Worker) {
 	// The holder's folder first: when the runtime opens it, the worker's
 	// roots move there before anything is laid out (holders.go).
 	m.openHolderFolder(w)
-	if err := m.prepare(w); err != nil {
+	err := m.prepare(w)
+	if err != nil && w.holder && errors.Is(err, syscall.ENOKEY) {
+		// The runtime recorded the folder open but its key is not loaded (a
+		// volume remounted under that record, 2026-09-18): close it, which
+		// drops the record, and open it again, which loads the key from the
+		// runtime's wrapped copy.
+		log.Printf("[workers] %s: holder folder open without its key; closing and opening it again", w.Key)
+		if _, cerr := m.holders.CloseHolderFolder(w.Subject); cerr != nil {
+			log.Printf("[workers] %s: holder folder close: %v", w.Key, cerr)
+		}
+		w.holder = false
+		w.Dir = filepath.Join(envOr("HARNESS_USERS_DIR", "/var/tmp/privasys-users"), w.Key)
+		w.Workspace = filepath.Join(w.Dir, "workspace")
+		w.Home = filepath.Join(w.Dir, "dsh-home")
+		m.openHolderFolder(w)
+		err = m.prepare(w)
+	}
+	if err != nil {
 		log.Printf("[workers] %s: prepare: %v", w.Key, err)
 		m.failed(w)
 		return
