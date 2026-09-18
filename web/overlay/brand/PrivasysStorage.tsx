@@ -94,40 +94,75 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
         }
       }, () => { setState({}) })
   }
-  // One request at a time, held by the proxy until something about this
-  // holder changes (the runtime's event stream) or 25 seconds pass, then
-  // re-issued: the row updates the moment the wallet answers or a grant is
-  // withdrawn, and never polls. Until the session is bound to someone the
-  // proxy cannot hold the request, so that first phase re-asks every few
-  // seconds. The panel opening also re-checks.
+  // Pushed, never polled: once the session is bound to someone, the row
+  // holds one sealed WebSocket on which the proxy writes the status
+  // whenever something about this holder changes (the runtime's event
+  // stream) and every 25 seconds as a keepalive. A WebSocket, not a held
+  // request: the sealed transport answers unary calls one at a time, in
+  // order, so a request held for 25 seconds queued every dsh call behind it
+  // (workspace actions took 25 seconds each, 2026-09-18). Until the session
+  // is bound the proxy has nobody to push about, so that first phase
+  // re-asks every few seconds. The panel opening also re-checks.
   useEffect(() => {
     let stopped = false
     let timer: ReturnType<typeof setTimeout> | undefined
-    const bound = state !== undefined
-    const loop = (): void => {
-      if (stopped) return
-      void pvFetch(bound ? '/privasys/capability/status?wait=1' : '/privasys/capability/status')
-        .then(async r => (r.ok ? await r.json() : undefined))
-        .then(d => {
-          if (stopped) return
-          if (d !== undefined && d.signed_in === false) {
-            setState(undefined)
-          } else {
-            setState(d ?? {})
-            if (d?.persistent === true && d?.stale !== true && d?.withdrawn !== true) {
-              setAsk(undefined)
-              setWaitingSince(undefined)
-            }
-          }
-          timer = setTimeout(loop, bound && d !== undefined ? 0 : 3000)
-        }, () => {
-          if (stopped) return
-          setState({})
-          timer = setTimeout(loop, 5000)
-        })
+    let ws: WebSocket | undefined
+    const apply = (d: (StorageState & { signed_in?: boolean }) | undefined): boolean => {
+      if (d !== undefined && d.signed_in === false) {
+        setState(undefined)
+        return false
+      }
+      setState(d ?? {})
+      if (d?.persistent === true && d?.stale !== true && d?.withdrawn !== true) {
+        setAsk(undefined)
+        setWaitingSince(undefined)
+      }
+      return true
     }
-    loop()
-    return () => { stopped = true; if (timer !== undefined) clearTimeout(timer) }
+    if (state === undefined) {
+      const loop = (): void => {
+        if (stopped) return
+        void pvFetch('/privasys/capability/status')
+          .then(async r => (r.ok ? await r.json() : undefined))
+          .then(d => {
+            if (stopped) return
+            apply(d)
+            timer = setTimeout(loop, 3000)
+          }, () => {
+            if (stopped) return
+            setState({})
+            timer = setTimeout(loop, 5000)
+          })
+      }
+      loop()
+      return () => { stopped = true; if (timer !== undefined) clearTimeout(timer) }
+    }
+    // The shell routes this URL through the sealed session (privasys-shell.js);
+    // off-platform there is no proxy behind it and the socket simply fails,
+    // in which case the row keeps what it last knew and retries slowly.
+    const listen = (): void => {
+      if (stopped) return
+      try {
+        ws = new WebSocket('/privasys/capability/events')
+      } catch {
+        timer = setTimeout(listen, 15000)
+        return
+      }
+      ws.addEventListener('message', ev => {
+        if (stopped) return
+        try { apply(JSON.parse(String(ev.data))) } catch { /* not ours */ }
+      })
+      ws.addEventListener('close', () => {
+        if (stopped) return
+        timer = setTimeout(listen, 5000)
+      })
+    }
+    listen()
+    return () => {
+      stopped = true
+      if (timer !== undefined) clearTimeout(timer)
+      try { ws?.close() } catch { /* ignore */ }
+    }
   }, [state === undefined])
   useEffect(() => { if (open) refresh() }, [open])
   // An ask nobody answers goes stale: after three minutes the button comes

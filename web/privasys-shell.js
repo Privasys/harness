@@ -277,6 +277,8 @@ function onAuthenticated() {
 //     (addEventListener + string message data). dsh's mux code is untouched.
 const SEALED_WS_SUBPROTOCOL = 'privasys.sealed.v1';
 const MUX_PATH = '/api/remote.mux';
+// The proxy's own sealed event sockets (capability_api.go): /privasys/*/events.
+const HARNESS_EVENTS_PREFIX = '/privasys/';
 
 function installSealedTransport(session) {
     // Unary RPC: FIFO chain so sealed HTTP frames reach the relay in counter
@@ -322,9 +324,24 @@ function installSealedTransport(session) {
         const arr = Array.isArray(protocols) ? protocols : [protocols];
         return arr.indexOf(SEALED_WS_SUBPROTOCOL) !== -1;
     }
+    // The harness's own event sockets ride the same sealed carrier: a socket
+    // is the one channel the relay does not serialise, so a push that must
+    // wait for the wallet never sits in the unary FIFO in front of dsh's
+    // calls (a request the proxy held for 25 s made every workspace action
+    // queue behind it, 2026-09-18).
+    function isHarnessEvents(u) {
+        try {
+            const p = new URL(u, location.origin).pathname;
+            return p.startsWith(HARNESS_EVENTS_PREFIX) && p.endsWith('/events');
+        } catch { return false; }
+    }
     function InterceptingWebSocket(url, protocols) {
         if (isMux(url) && !carriesSealedProto(protocols)) {
             return new SealedWebSocketAdapter(session, MUX_PATH);
+        }
+        if (isHarnessEvents(url) && !carriesSealedProto(protocols)) {
+            const u = new URL(url, location.origin);
+            return new SealedWebSocketAdapter(session, u.pathname + u.search);
         }
         return new NativeWebSocket(url, protocols);
     }
