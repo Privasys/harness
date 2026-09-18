@@ -65,10 +65,10 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
   const [ask, setAsk] = useState<PendingAsk | undefined>(undefined)
   const [busy, setBusy] = useState(false)
   const [open, setOpen] = useState(false)
-  // Set while an ask is on its way to the device: the row says so, the
+  // Set while an ask is on its way to the device: the row says so and the
   // button stays down (one tap sends one push; a second click sent a second
-  // notification, 2026-09-16) and the status is polled every two seconds
-  // until the grant lands or the ask goes stale.
+  // notification, 2026-09-16). The answer arrives through the held request
+  // below the moment the wallet delivers it; nothing polls.
   const [waitingSince, setWaitingSince] = useState<number | undefined>(undefined)
   const waiting = waitingSince !== undefined
 
@@ -94,15 +94,41 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
         }
       }, () => { setState({}) })
   }
-  // Poll: quickly until the session is bound to someone, every two seconds
-  // while an ask is out (the approval lands within a few), then slowly, so
-  // a grant approved on the device (or withdrawn in Drive) shows without a
-  // reload. The panel opening also re-checks.
+  // One request at a time, held by the proxy until something about this
+  // holder changes (the runtime's event stream) or 25 seconds pass, then
+  // re-issued: the row updates the moment the wallet answers or a grant is
+  // withdrawn, and never polls. Until the session is bound to someone the
+  // proxy cannot hold the request, so that first phase re-asks every few
+  // seconds. The panel opening also re-checks.
   useEffect(() => {
-    refresh()
-    const t = setInterval(refresh, state === undefined ? 3000 : waiting ? 2000 : 30000)
-    return () => { clearInterval(t) }
-  }, [state === undefined, waiting])
+    let stopped = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const bound = state !== undefined
+    const loop = (): void => {
+      if (stopped) return
+      void pvFetch(bound ? '/privasys/capability/status?wait=1' : '/privasys/capability/status')
+        .then(async r => (r.ok ? await r.json() : undefined))
+        .then(d => {
+          if (stopped) return
+          if (d !== undefined && d.signed_in === false) {
+            setState(undefined)
+          } else {
+            setState(d ?? {})
+            if (d?.persistent === true && d?.stale !== true && d?.withdrawn !== true) {
+              setAsk(undefined)
+              setWaitingSince(undefined)
+            }
+          }
+          timer = setTimeout(loop, bound && d !== undefined ? 0 : 3000)
+        }, () => {
+          if (stopped) return
+          setState({})
+          timer = setTimeout(loop, 5000)
+        })
+    }
+    loop()
+    return () => { stopped = true; if (timer !== undefined) clearTimeout(timer) }
+  }, [state === undefined])
   useEffect(() => { if (open) refresh() }, [open])
   // An ask nobody answers goes stale: after three minutes the button comes
   // back so the person can send the push again.

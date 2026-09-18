@@ -16,7 +16,9 @@
 package capability
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -387,4 +389,125 @@ func (b *Broker) CloseHolderFolder(subject string) (busy bool, err error) {
 		return true, nil
 	}
 	return false, fmt.Errorf("capability: close holder folder: HTTP %d: %s", code, strings.TrimSpace(string(raw)))
+}
+
+// ---- subjects and events ----------------------------------------------------
+
+// Subject is one holder with a recorded outcome for the resource.
+type Subject struct {
+	Subject      string    `json:"subject"`
+	Status       string    `json:"status"`
+	CapabilityID string    `json:"capability_id"`
+	At           time.Time `json:"at"`
+}
+
+// Subjects lists the holders the runtime has an outcome for, so this process
+// keeps no record of its own of who uses it. A runtime without the route
+// answers an empty list and no error.
+func (b *Broker) Subjects() ([]Subject, error) {
+	code, raw, err := b.do(http.MethodGet, "/api/v1/resources/"+url.PathEscape(b.resource)+"/subjects", nil)
+	if err != nil {
+		return nil, err
+	}
+	if code == http.StatusNotFound {
+		return nil, nil
+	}
+	if code != http.StatusOK {
+		return nil, fmt.Errorf("capability: subjects: HTTP %d: %s", code, strings.TrimSpace(string(raw)))
+	}
+	var body struct {
+		Subjects []Subject `json:"subjects"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return nil, err
+	}
+	return body.Subjects, nil
+}
+
+// Event is one line of the runtime's stream: an approval, a denial, a
+// revoke, a holder folder opened or closed.
+type Event struct {
+	Type         string `json:"-"`
+	Resource     string `json:"resource"`
+	Subject      string `json:"subject"`
+	CapabilityID string `json:"capability_id"`
+	At           string `json:"at"`
+}
+
+// Forget drops the cached status of a subject, so the next Status asks the
+// runtime: what an event about that subject means for this process.
+func (b *Broker) Forget(subject string) {
+	b.mu.Lock()
+	delete(b.cache, subject)
+	b.mu.Unlock()
+}
+
+// Events follows the runtime's event stream until ctx ends, calling fn for
+// each event. The stream carries every resource of this app. A runtime
+// without the route (404) ends the loop quietly: there is nothing to listen
+// to, and the callers poll as before. Any other break reconnects with
+// backoff; nothing here ever polls the status.
+func (b *Broker) Events(ctx context.Context, fn func(Event)) {
+	if !b.Enabled() {
+		return
+	}
+	wait := time.Second
+	for ctx.Err() == nil {
+		err := b.follow(ctx, fn)
+		if errors.Is(err, errNoEvents) {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(wait):
+		}
+		if wait < 30*time.Second {
+			wait *= 2
+		}
+	}
+}
+
+var errNoEvents = errors.New("capability: the runtime has no event stream")
+
+func (b *Broker) follow(ctx context.Context, fn func(Event)) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, b.url+"/api/v1/resources/events", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+b.token)
+	req.Header.Set("Accept", "text/event-stream")
+	// No timeout on a stream; the transport is the same proxy-less one.
+	client := &http.Client{Transport: &http.Transport{Proxy: nil}}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return errNoEvents
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("capability: events: HTTP %d", resp.StatusCode)
+	}
+	sc := bufio.NewScanner(resp.Body)
+	sc.Buffer(make([]byte, 64*1024), 256*1024)
+	var typ string
+	for sc.Scan() {
+		line := sc.Text()
+		switch {
+		case strings.HasPrefix(line, "event: "):
+			typ = strings.TrimPrefix(line, "event: ")
+		case strings.HasPrefix(line, "data: "):
+			var ev Event
+			if json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &ev) == nil && typ != "" {
+				ev.Type = typ
+				fn(ev)
+			}
+			typ = ""
+		case line == "":
+			typ = ""
+		}
+	}
+	return sc.Err()
 }

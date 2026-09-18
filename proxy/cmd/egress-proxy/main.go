@@ -436,6 +436,9 @@ func main() {
 		// worker through its routines door.
 		routines := newRoutineEngine(mgr, client, cfg.toolHosts)
 		routines.Start(context.Background())
+		// The runtime's record of approved holders re-arms their routines at
+		// boot, and its event stream keeps every status current (events.go).
+		go func() { time.Sleep(3 * time.Second); rearmRoutines(broker, mgr) }()
 	} else {
 		syncer.LoadState()
 		// This enclave remembers nobody across restarts, so the holder's Drive
@@ -652,7 +655,9 @@ func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp 
 		}
 		return syncer.AccessWithdrawn()
 	}
-	registerCapabilityAPI(mux, broker, withdrawnFor)
+	notify := newSubjectNotifier()
+	go followRuntimeEvents(context.Background(), broker, legs, broker.Resource(), mgr, notify)
+	registerCapabilityAPI(mux, broker, withdrawnFor, notify)
 	// The access server tells the agent the same truth the Sessions row
 	// shows: the storage resource is the one the mirror exercises.
 	accessWithdrawn = func(sub, resource string) bool {

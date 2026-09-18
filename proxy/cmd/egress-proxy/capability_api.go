@@ -18,6 +18,7 @@ package main
 import (
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/Privasys/attested-harness/proxy/internal/capability"
 )
@@ -27,7 +28,7 @@ import (
 // subject's worker's).
 type withdrawnFor func(sub string) bool
 
-func registerCapabilityAPI(mux *http.ServeMux, broker *capability.Broker, withdrawn withdrawnFor) {
+func registerCapabilityAPI(mux *http.ServeMux, broker *capability.Broker, withdrawn withdrawnFor, notify *subjectNotifier) {
 	// Begin an ask. Called by the harness UI over the sealed session, so the
 	// relay-asserted subject names the holder this capability will belong to.
 	mux.HandleFunc("POST /privasys/capability/request", func(w http.ResponseWriter, r *http.Request) {
@@ -72,6 +73,12 @@ func registerCapabilityAPI(mux *http.ServeMux, broker *capability.Broker, withdr
 		if sub == "" || !broker.Enabled() {
 			writeJSON(w, http.StatusOK, resp)
 			return
+		}
+		// ?wait=1: answer when something about this holder changes (the
+		// runtime's event stream, events.go) or after 25 seconds, whichever
+		// first. The row holds one such request instead of polling.
+		if r.URL.Query().Get("wait") == "1" && notify != nil {
+			notify.Wait(r.Context(), sub, 25*time.Second)
 		}
 		st, err := broker.Status(sub)
 		if err != nil {
