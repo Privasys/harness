@@ -11,6 +11,10 @@ package main
 // clock and the events, and is generic over both:
 //
 //   - `every: 2h`          a timer.
+//   - `at: "0 17 * * FRI"` a cron schedule, read in UTC (the harness knows
+//                          no holder's timezone); a run is due when the next
+//                          schedule time after the last run, or after this
+//                          process started, has passed.
 //   - `on: <tool>.<call>`  an EVENT SOURCE: one held long poll per holder and
 //                          agent on the named tool's call, over the same
 //                          attested tool leg the agent uses, as the holder.
@@ -126,6 +130,9 @@ type routineEngine struct {
 	client    *http.Client
 	toolHosts map[string]string
 	now       func() time.Time
+	// started is when this process's clock began: a schedule's first run is
+	// its next time after this, never one the process was down for.
+	started time.Time
 
 	// resourceFor names the declared resource a tool serves for a holder
 	// (resources.go); askHolder puts that resource to the holder's device,
@@ -145,7 +152,7 @@ type routineEngine struct {
 
 func newRoutineEngine(mgr *WorkerManager, client *http.Client, toolHosts map[string]string) *routineEngine {
 	e := &routineEngine{mgr: mgr, client: client, toolHosts: toolHosts,
-		now: time.Now, subjects: map[string]*routineState{}, holds: map[string][]*holderHold{}}
+		now: time.Now, started: time.Now(), subjects: map[string]*routineState{}, holds: map[string][]*holderHold{}}
 	e.feed = e.changes
 	return e
 }
@@ -277,7 +284,7 @@ func (e *routineEngine) reconcile(ctx context.Context, st *routineState) {
 				go e.poll(pctx, st, a)
 			}
 		}
-		if !st.dispatching[name] && runDue(a, now, st.LastRun[name], st.pending[name]) {
+		if !st.dispatching[name] && runDue(a, now, st.LastRun[name], st.pending[name], e.started) {
 			due = append(due, a)
 			st.dispatching[name] = true
 		}
@@ -289,10 +296,12 @@ func (e *routineEngine) reconcile(ctx context.Context, st *routineState) {
 	}
 }
 
-// runDue decides whether an agent runs now: a timer that elapsed, or a burst
-// of events that settled for the debounce, and in both cases not before the
-// minimum interval since the last run, which is also the one-at-a-time guard.
-func runDue(a capability.AgentSpec, now, lastRun, pendingSince time.Time) bool {
+// runDue decides whether an agent runs now: a timer that elapsed, a schedule
+// whose next time after the last run (or after this engine started, for a
+// fresh process) has passed, or a burst of events that settled for the
+// debounce, and in every case not before the minimum interval since the last
+// run, which is also the one-at-a-time guard.
+func runDue(a capability.AgentSpec, now, lastRun, pendingSince, started time.Time) bool {
 	debounce, minInterval := a.Durations()
 	if !lastRun.IsZero() && now.Sub(lastRun) < minInterval {
 		return false
@@ -300,6 +309,18 @@ func runDue(a capability.AgentSpec, now, lastRun, pendingSince time.Time) bool {
 	if a.Trigger.Every != "" {
 		every, err := time.ParseDuration(a.Trigger.Every)
 		if err == nil && every > 0 && (lastRun.IsZero() || now.Sub(lastRun) >= every) {
+			return true
+		}
+	}
+	if sched := a.Schedule(); sched != nil {
+		// In UTC: the harness knows no holder's timezone, and the README
+		// says so. A schedule time that passed while the process was down
+		// is not caught up on; the next one after the start is.
+		base := lastRun
+		if base.IsZero() {
+			base = started
+		}
+		if next := sched.Next(base.UTC()); !next.After(now.UTC()) {
 			return true
 		}
 	}
@@ -556,6 +577,8 @@ func runTitleAndPrompt(a capability.AgentSpec, now time.Time) (title, prompt str
 		prompt += "\n\n(Started unattended because new activity arrived on " + a.Trigger.On + ".)"
 	case a.Trigger.Every != "":
 		prompt += "\n\n(Started unattended on the schedule of every " + a.Trigger.Every + ".)"
+	case a.Trigger.At != "":
+		prompt += "\n\n(Started unattended on the schedule " + a.Trigger.At + ".)"
 	}
 	return title, prompt
 }

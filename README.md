@@ -99,9 +99,10 @@ thing, written by the proxy as it happens (`proxy/internal/capability/`):
 
 ```yaml
 prompt: Triage what arrived since the last run.   # what an unattended run is asked
-trigger:
-  every: 2h              # a timer, or
-  on: mail.changes       # an event source: <tool>.<call> on a mounted tool
+trigger:                 # exactly one of:
+  every: 2h              #   a timer,
+  at: "0 17 * * FRI"     #   a cron schedule, read in UTC (@daily works too), or
+  on: mail.changes       #   an event source: <tool>.<call> on a mounted tool
 debounce: 2m             # a burst of events becomes one run
 min_interval: 10m        # never two runs closer than this
 paused: false
@@ -110,7 +111,13 @@ paused: false
 ### 3. Unattended runs come from the proxy
 
 dsh has no scheduler, so the proxy owns the clock and the events
-(`proxy/cmd/egress-proxy/routines.go`). A timer runs on its period. An event
+(`proxy/cmd/egress-proxy/routines.go`). A timer runs on its period. A cron
+schedule runs at its next time after the last run, or after the proxy
+started for a fresh process (a time the proxy was down for is not caught
+up on); it is read in UTC, because the harness does not know where the
+holder is. `min_interval` applies to every trigger. A trigger names exactly
+one of `every`, `at` and `on`; a definition naming two is refused, and the
+log says so. An event
 source is any mounted tool call that answers the **change-feed contract**:
 
 ```

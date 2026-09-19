@@ -72,7 +72,7 @@ func agentsTools() []map[string]any {
 			"description": "Create or update one of the user's agents by writing its two definition files, agent.md and agent.yaml, " +
 				"into a workspace of that name among the user's working files. Agree the definition with the user in the conversation and read it back before calling. " +
 				"name becomes the folder and the workspace title. agent_md is the agent's persona and standing instructions, as Markdown. " +
-				"agent_yaml is its definition: prompt, trigger (every: a duration, or on: <tool>.<call>), debounce, min_interval, paused; it is checked before anything is written. " +
+				"agent_yaml is its definition: prompt, trigger (exactly one of every: a duration, at: a cron schedule read in UTC, or on: <tool>.<call>), debounce, min_interval, paused; it is checked before anything is written. " +
 				"The agent exists the moment the files are written; to remove an agent the user asks here, or deletes its folder from the files panel. " +
 				"Never write these files anywhere else.",
 			"inputSchema": map[string]any{
@@ -202,6 +202,9 @@ func listAgents(st agentStore) map[string]any {
 		trigger := map[string]any{}
 		if a.Trigger.Every != "" {
 			trigger["every"] = a.Trigger.Every
+		}
+		if a.Trigger.At != "" {
+			trigger["at"] = a.Trigger.At
 		}
 		if a.Trigger.On != "" {
 			trigger["on"] = a.Trigger.On

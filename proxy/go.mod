@@ -10,6 +10,8 @@ require gopkg.in/yaml.v3 v3.0.1
 
 require github.com/coder/websocket v1.8.15
 
+require github.com/robfig/cron/v3 v3.0.1
+
 // The RA-TLS client SDK rides as a sibling checkout of the repo root
 // (attested-harness/ra-tls-clients, gitignored): CI clones it there, local
 // dev uses a junction/symlink to the platform checkout. Mirrors the

@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/robfig/cron/v3"
 	"gopkg.in/yaml.v3"
 )
 
@@ -71,20 +72,42 @@ type AgentSpec struct {
 	Paused      bool   `yaml:"paused"`
 }
 
-// AgentTrigger is one of: every (a Go duration), or on (an event source
-// named "<tool>.<call>": a mounted tool's change-feed call, held by the proxy
-// as the holder; the contract is in proxy routines.go).
+// AgentTrigger is exactly one of: every (a Go duration), at (a cron
+// schedule, read in UTC since the harness does not know the holder's
+// timezone), or on (an event source named "<tool>.<call>": a mounted tool's
+// change-feed call, held by the proxy as the holder; the contract is in
+// proxy routines.go).
 type AgentTrigger struct {
 	Every string `yaml:"every"`
+	At    string `yaml:"at"`
 	On    string `yaml:"on"`
 }
 
 // eventSourcePattern is "<tool>.<call>", each a plain lowercase identifier.
 var eventSourcePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$`)
 
+// cronParser reads `at`: the five standard fields (minute, hour, day of
+// month, month, day of week) and the descriptors (@daily, @hourly, ...), so
+// "0 17 * * FRI" and "@daily" both work. No seconds field: a run is not a
+// thing that happens twice a minute.
+var cronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
+
+// Schedule is the parsed `at`, or nil when the trigger is not a schedule
+// (or not a valid one; parseAgentSpec refused that already).
+func (a AgentSpec) Schedule() cron.Schedule {
+	if a.Trigger.At == "" {
+		return nil
+	}
+	s, err := cronParser.Parse(a.Trigger.At)
+	if err != nil {
+		return nil
+	}
+	return s
+}
+
 // Scheduled reports whether the agent has any unattended trigger.
 func (a AgentSpec) Scheduled() bool {
-	return !a.Paused && (a.Trigger.Every != "" || a.Trigger.On != "")
+	return !a.Paused && (a.Trigger.Every != "" || a.Trigger.At != "" || a.Trigger.On != "")
 }
 
 // Durations returns the debounce and minimum interval with their defaults
@@ -110,9 +133,25 @@ func parseAgentSpec(data []byte) (AgentSpec, error) {
 	if err := yaml.Unmarshal(data, &spec); err != nil {
 		return AgentSpec{}, err
 	}
+	set := 0
+	for _, v := range []string{spec.Trigger.Every, spec.Trigger.At, spec.Trigger.On} {
+		if v != "" {
+			set++
+		}
+	}
+	if set > 1 {
+		// Two triggers are two opinions about when to run; the definition
+		// says one, and a second one is a mistake to state, not to guess at.
+		return AgentSpec{}, errors.New("trigger names more than one of every, at and on; an agent has exactly one trigger")
+	}
 	if spec.Trigger.Every != "" {
 		if _, err := time.ParseDuration(spec.Trigger.Every); err != nil {
 			return AgentSpec{}, fmt.Errorf("trigger.every %q is not a duration", spec.Trigger.Every)
+		}
+	}
+	if spec.Trigger.At != "" {
+		if _, err := cronParser.Parse(spec.Trigger.At); err != nil {
+			return AgentSpec{}, fmt.Errorf("trigger.at %q is not a cron schedule: %v", spec.Trigger.At, err)
 		}
 	}
 	if spec.Trigger.On != "" && !eventSourcePattern.MatchString(spec.Trigger.On) {

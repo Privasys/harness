@@ -6,6 +6,7 @@ package capability
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -103,5 +104,45 @@ func TestAgentsAreLocalFilesAndTheirRunsStayHome(t *testing.T) {
 	}
 	if _, err := s.WriteAgent("Inbox triage", map[string][]byte{"../escape": []byte("x")}); err == nil {
 		t.Fatal("a file name that leaves the agent directory must be refused")
+	}
+}
+
+func TestAgentSpecReadsACronScheduleInUTC(t *testing.T) {
+	spec, err := parseAgentSpec([]byte("prompt: Send the weekly digest.\ntrigger:\n  at: \"0 17 * * FRI\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !spec.Scheduled() || spec.Schedule() == nil {
+		t.Fatalf("a schedule is a trigger: %+v", spec)
+	}
+	from := time.Date(2026, 9, 14, 9, 0, 0, 0, time.UTC) // a Monday
+	if next := spec.Schedule().Next(from); next != time.Date(2026, 9, 18, 17, 0, 0, 0, time.UTC) {
+		t.Fatalf("next after a Monday morning is Friday 17:00 UTC, got %s", next)
+	}
+	daily, err := parseAgentSpec([]byte("trigger:\n  at: \"@daily\"\n"))
+	if err != nil || daily.Schedule() == nil {
+		t.Fatalf("descriptors are schedules too: %v", err)
+	}
+	for _, bad := range []string{"trigger:\n  at: \"0 17 * *\"\n", "trigger:\n  at: \"every friday\"\n", "trigger:\n  at: \"0 0 0 17 * * FRI\"\n"} {
+		if _, err := parseAgentSpec([]byte(bad)); err == nil {
+			t.Errorf("%q must be refused", bad)
+		}
+	}
+}
+
+func TestAgentSpecHasExactlyOneTrigger(t *testing.T) {
+	for _, two := range []string{
+		"trigger:\n  every: 2h\n  at: \"@daily\"\n",
+		"trigger:\n  every: 2h\n  on: mail.changes\n",
+		"trigger:\n  at: \"@daily\"\n  on: mail.changes\n",
+	} {
+		_, err := parseAgentSpec([]byte(two))
+		if err == nil || !strings.Contains(err.Error(), "exactly one trigger") {
+			t.Errorf("%q: want the one-trigger error, got %v", two, err)
+		}
+	}
+	none, err := parseAgentSpec([]byte("prompt: only when asked\n"))
+	if err != nil || none.Scheduled() {
+		t.Fatalf("no trigger is a valid agent that runs when asked: %v %+v", err, none)
 	}
 }

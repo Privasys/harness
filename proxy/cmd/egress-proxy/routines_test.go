@@ -46,13 +46,13 @@ func TestPollBackoffDoublesToAQuarterHour(t *testing.T) {
 func TestEventRunWaitsForTheBurstToSettle(t *testing.T) {
 	a := feedAgent()
 	now := time.Date(2026, 9, 14, 9, 0, 0, 0, time.UTC)
-	if runDue(a, now, time.Time{}, now.Add(-time.Minute)) {
+	if runDue(a, now, time.Time{}, now.Add(-time.Minute), now.Add(-time.Hour)) {
 		t.Fatal("a burst one minute old must not run yet (debounce 2m)")
 	}
-	if !runDue(a, now, time.Time{}, now.Add(-3*time.Minute)) {
+	if !runDue(a, now, time.Time{}, now.Add(-3*time.Minute), now.Add(-time.Hour)) {
 		t.Fatal("a burst that settled for the debounce must run")
 	}
-	if runDue(a, now, time.Time{}, time.Time{}) {
+	if runDue(a, now, time.Time{}, time.Time{}, now.Add(-time.Hour)) {
 		t.Fatal("no events, no run")
 	}
 }
@@ -60,10 +60,10 @@ func TestEventRunWaitsForTheBurstToSettle(t *testing.T) {
 func TestMinimumIntervalSpacesRunsWhateverArrives(t *testing.T) {
 	a := feedAgent()
 	now := time.Date(2026, 9, 14, 9, 0, 0, 0, time.UTC)
-	if runDue(a, now, now.Add(-5*time.Minute), now.Add(-4*time.Minute)) {
+	if runDue(a, now, now.Add(-5*time.Minute), now.Add(-4*time.Minute), now.Add(-time.Hour)) {
 		t.Fatal("five minutes after a run nothing may start (min_interval 10m)")
 	}
-	if !runDue(a, now, now.Add(-11*time.Minute), now.Add(-4*time.Minute)) {
+	if !runDue(a, now, now.Add(-11*time.Minute), now.Add(-4*time.Minute), now.Add(-time.Hour)) {
 		t.Fatal("past the interval the settled burst runs")
 	}
 }
@@ -73,13 +73,13 @@ func TestTimerRunsOnItsPeriodAndNotBefore(t *testing.T) {
 	a.Name = "Weekly digest"
 	a.Trigger.Every = "2h"
 	now := time.Date(2026, 9, 14, 9, 0, 0, 0, time.UTC)
-	if !runDue(a, now, time.Time{}, time.Time{}) {
+	if !runDue(a, now, time.Time{}, time.Time{}, now.Add(-time.Hour)) {
 		t.Fatal("a timer agent that never ran runs now")
 	}
-	if runDue(a, now, now.Add(-90*time.Minute), time.Time{}) {
+	if runDue(a, now, now.Add(-90*time.Minute), time.Time{}, now.Add(-time.Hour)) {
 		t.Fatal("ninety minutes into a two-hour period is not due")
 	}
-	if !runDue(a, now, now.Add(-121*time.Minute), time.Time{}) {
+	if !runDue(a, now, now.Add(-121*time.Minute), time.Time{}, now.Add(-time.Hour)) {
 		t.Fatal("past the period it is due")
 	}
 	a.Paused = true
@@ -243,5 +243,41 @@ func TestARemovedAgentEndsItsHold(t *testing.T) {
 			t.Fatal("the hold outlived the agent")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestScheduleRunsAtItsNextTimeAfterTheStartOrTheLastRun(t *testing.T) {
+	var a capability.AgentSpec
+	a.Name = "Weekly digest"
+	a.Trigger.At = "0 17 * * FRI"
+	started := time.Date(2026, 9, 14, 9, 0, 0, 0, time.UTC) // Monday
+	friday := time.Date(2026, 9, 18, 17, 0, 0, 0, time.UTC)
+	if runDue(a, started.Add(time.Hour), time.Time{}, time.Time{}, started) {
+		t.Fatal("a fresh process does not run a schedule until its next time")
+	}
+	if runDue(a, friday.Add(-time.Minute), time.Time{}, time.Time{}, started) {
+		t.Fatal("a minute early is not due")
+	}
+	if !runDue(a, friday.Add(time.Minute), time.Time{}, time.Time{}, started) {
+		t.Fatal("past the schedule time it is due")
+	}
+	// A process that starts after a schedule time does not catch it up.
+	if runDue(a, friday.Add(time.Hour), time.Time{}, time.Time{}, friday.Add(30*time.Minute)) {
+		t.Fatal("a time the process was down for is not run late")
+	}
+	// After a run, the next schedule time counts from that run.
+	if runDue(a, friday.Add(2*time.Hour), friday.Add(time.Minute), time.Time{}, started) {
+		t.Fatal("ran this Friday already; next Friday is next")
+	}
+	if !runDue(a, friday.AddDate(0, 0, 7).Add(time.Minute), friday.Add(time.Minute), time.Time{}, started) {
+		t.Fatal("next Friday it is due again")
+	}
+	a.MinInterval = "24h"
+	if runDue(a, friday.Add(time.Minute), friday.Add(-time.Hour), time.Time{}, started) {
+		t.Fatal("min_interval still applies to a schedule")
+	}
+	_, prompt := runTitleAndPrompt(a, friday)
+	if !strings.Contains(prompt, "(Started unattended on the schedule 0 17 * * FRI.)") {
+		t.Fatalf("the prompt names the schedule: %q", prompt)
 	}
 }
