@@ -890,7 +890,7 @@ func hexPort(local string) (int, bool) {
 // that gap was told 'active Service "sessionController" is unavailable'
 // (2026-09-19). The index alone therefore proves nothing.
 func (m *WorkerManager) dshAnswers(w *Worker) (bool, string) {
-	body := `{"type":"client-request","rpcId":"privasys-ready","method":"directoryPicker/list","payload":{}}`
+	body := `{"type":"client-request","rpcId":"privasys-ready","method":"directoryPicker/list","payload":{"args":{}}}`
 	probe, err := http.NewRequest(http.MethodPost, w.Upstream()+"/api/directoryPicker/list", strings.NewReader(body))
 	if err != nil {
 		return false, ""
