@@ -85,6 +85,16 @@ func followRuntimeEvents(ctx context.Context, stream *capability.Broker, legs []
 		}
 		switch {
 		case ev.Type == "capability.approved" && ev.Resource == storageName:
+			// A worker running without its mirror (the previous grant was
+			// withdrawn in Drive) is replaced: the fresh one restores from
+			// the new grant, and dsh only reads its workspaces at boot.
+			if w := mgr.Get(ev.Subject); w != nil {
+				if s := w.Syncer(); s != nil && !s.Ticking() {
+					log.Printf("[events] %.8s… approved their Drive again: restarting the worker on it", ev.Subject)
+					go func() { mgr.Stop(w); mgr.Ensure(ev.Subject) }()
+					return
+				}
+			}
 			mgr.Ensure(ev.Subject)
 		case ev.Type == "capability.revoked" && ev.Resource == holderResourceKindName(legs):
 			if w := mgr.Get(ev.Subject); w != nil {

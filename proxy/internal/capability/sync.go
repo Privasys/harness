@@ -103,6 +103,12 @@ type Syncer struct {
 	stateFile string
 	// stop ends the tick loop started by Start.
 	stop chan struct{}
+	// OnWithdrawn, when set, is called once (off the tick loop) when Drive
+	// first refuses the holder's capability: the owner of this mirror then
+	// drops what it held on that grant's behalf (DropDriveCopies) and stops
+	// the worker. The loop ends with it; a fresh approval is a runtime event
+	// that starts a fresh worker, so nothing keeps asking a Drive that said no.
+	OnWithdrawn func()
 
 	mu sync.Mutex
 	// uploaded maps a session-relative path to the content hash last stored,
@@ -242,8 +248,19 @@ func (s *Syncer) RestoreFor(subject string) (int, error) {
 		s.mu.Lock()
 		s.restoredFor = subject
 		s.mu.Unlock()
+	} else if IsRefused(err) {
+		// Known before the first tick: the worker then runs without a
+		// mirror rather than starting one that would stop it 15 s later.
+		s.noteOutcome(err, g.GrantID())
 	}
 	return n, err
+}
+
+// Ticking reports whether the mirror loop started by Start is running.
+func (s *Syncer) Ticking() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.stop != nil
 }
 
 // SetSkillsRoot wires a local skills directory to `skills/` in the holder's
@@ -504,8 +521,63 @@ func (s *Syncer) Start(interval time.Duration) {
 				s.lastErr = err.Error()
 				s.mu.Unlock()
 			}
+			// A Drive that refused the grant is not asked again on a timer:
+			// the loop ends here, and the owner is told once.
+			if s.AccessWithdrawn() {
+				s.StopTicks()
+				if s.OnWithdrawn != nil {
+					s.OnWithdrawn()
+				}
+				return
+			}
 		}
 	}()
+}
+
+// DropDriveCopies removes what this mirror holds on Drive's behalf: the
+// session files it carried, the skills it read, the agents it pulled and its
+// own state. Called when the holder withdrew the harness's access in Drive:
+// those copies existed only under that grant. The worker's own roots (its
+// working tree and dsh home, under the holder folder's separate grant) are
+// left alone.
+func (s *Syncer) DropDriveCopies() {
+	s.mu.Lock()
+	sessions, skills, agentsRoot := s.sessions, s.skills, s.agentsRoot
+	dirs := make([]string, 0, len(s.agentDirs))
+	for n := range s.agentDirs {
+		dirs = append(dirs, n)
+	}
+	s.agentDirs = map[string]bool{}
+	s.agents = map[string]AgentSpec{}
+	s.uploaded = map[string]string{}
+	s.blobs = map[string]bool{}
+	s.folders = map[string]string{}
+	s.mu.Unlock()
+	sort.Strings(dirs)
+	for _, n := range dirs {
+		if agentsRoot == "" {
+			break
+		}
+		if err := os.RemoveAll(filepath.Join(agentsRoot, n)); err != nil {
+			log.Printf("[sync] agents: %q could not be removed after the withdrawal: %v", n, err)
+		}
+	}
+	for _, d := range []string{sessions, skills} {
+		if d == "" {
+			continue
+		}
+		entries, err := os.ReadDir(d)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if err := os.RemoveAll(filepath.Join(d, e.Name())); err != nil {
+				log.Printf("[sync] %s: %q could not be removed after the withdrawal: %v", filepath.Base(d), e.Name(), err)
+			}
+		}
+	}
+	_ = os.Remove(s.statePath())
+	log.Printf("[sync] Drive copies dropped for %.8s… (%d agent(s), the sessions and the skills): the holder withdrew this harness's access", s.subjectNow(), len(dirs))
 }
 
 // StopTicks ends the loop started by Start. The syncer stays usable for a

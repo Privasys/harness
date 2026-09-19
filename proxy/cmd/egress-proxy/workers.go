@@ -361,6 +361,17 @@ func (m *WorkerManager) start(w *Worker) {
 		// What the holder set and attached rides to their Drive too, so the
 		// home on this volume is a scratch (capability/home.go).
 		sy.SetHomeRoot(w.Home)
+		// The holder withdrew this harness in Drive: what the mirror held on
+		// that grant's behalf goes (sessions, skills, agents), the worker
+		// stops, and nothing asks Drive again on a timer. Their next visit
+		// starts a worker on their holder folder alone, and the row says
+		// "Withdrawn" (capability_api.go). A fresh approval is a runtime
+		// event (events.go) and starts a worker by itself.
+		sy.OnWithdrawn = func() {
+			log.Printf("[workers] %s: the holder withdrew this harness's access in their Drive; dropping the Drive copies and stopping", w.Key)
+			m.Stop(w)
+			sy.DropDriveCopies()
+		}
 		sy.LoadState()
 		if n, err := sy.RestoreFor(w.Subject); err != nil {
 			log.Printf("[workers] %s: restore: %v", w.Key, err)
@@ -436,7 +447,15 @@ func (m *WorkerManager) start(w *Worker) {
 				w.mu.Unlock()
 				log.Printf("[workers] %s: ready after %s", w.Key, time.Since(w.started).Round(time.Second))
 				if s := w.Syncer(); s != nil {
-					s.Start(15 * time.Second)
+					if s.AccessWithdrawn() {
+						// Drive refused the restore: the worker runs on its
+						// holder folder alone, and the mirror is not started
+						// against a Drive that said no (a fresh approval is
+						// a runtime event, events.go).
+						log.Printf("[workers] %s: the holder's Drive refuses this harness; running without the mirror", w.Key)
+					} else {
+						s.Start(15 * time.Second)
+					}
 				}
 				return
 			}
