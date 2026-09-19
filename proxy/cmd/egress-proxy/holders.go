@@ -86,7 +86,8 @@ func (m *WorkerManager) closeHolderFolder(w *Worker) {
 }
 
 // seedSkills copies the deployment's reference skills into the holder's
-// skills directory once: only when that directory does not exist yet. After
+// skills directory once: only when that directory is absent or empty (the
+// worker's layout creates it empty before this runs). After
 // that the directory is theirs; a reference skill they removed stays
 // removed, one they changed stays changed. The reference set itself is still
 // on dsh's skill path (PRIVASYS_SKILL_DIRS), so a holder who deletes
@@ -96,7 +97,7 @@ func seedSkills(dir, seeds string) (int, error) {
 	if dir == "" {
 		return 0, nil
 	}
-	if _, err := os.Stat(dir); err == nil {
+	if entries, err := os.ReadDir(dir); err == nil && len(entries) > 0 {
 		return 0, nil
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
