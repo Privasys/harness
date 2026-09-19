@@ -463,6 +463,9 @@ func (m *WorkerManager) start(w *Worker) {
 				if m.OnChange != nil && w.Subject != systemSubject {
 					m.OnChange(w.Subject)
 				}
+				if w.Subject != systemSubject {
+					go m.watchWorkspaces(w)
+				}
 				if s := w.Syncer(); s != nil {
 					if s.AccessWithdrawn() {
 						// Drive refused the restore: the worker runs on its

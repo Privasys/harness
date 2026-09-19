@@ -163,3 +163,29 @@ func SessionDirsFor(sessionsRoot, cwd string) []string {
 	}
 	return out
 }
+
+// WorkspacePathsByID returns every workspace dsh's registry records, id to
+// directory.
+func WorkspacePathsByID(registryFile string) map[string]string {
+	out := map[string]string{}
+	raw, err := os.ReadFile(registryFile)
+	if err != nil {
+		return out
+	}
+	var doc struct {
+		Tables struct {
+			Workspaces map[string]struct {
+				Path string `json:"path"`
+			} `json:"workspaces"`
+		} `json:"tables"`
+	}
+	if json.Unmarshal(raw, &doc) != nil {
+		return out
+	}
+	for id, w := range doc.Tables.Workspaces {
+		if w.Path != "" {
+			out[id] = filepath.Clean(w.Path)
+		}
+	}
+	return out
+}
