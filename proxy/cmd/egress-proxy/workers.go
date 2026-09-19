@@ -452,7 +452,14 @@ func (m *WorkerManager) start(w *Worker) {
 			return
 		default:
 		}
-		if m.dshAnswers(w) {
+		answers, detail := m.dshAnswers(w)
+		if !answers && detail != "" && time.Since(w.started) > 30*time.Second && m.dshServesIndex(w) {
+			// dsh serves its index but not the call: rather than keeping the
+			// holder out, go on as before this probe existed, and say why.
+			log.Printf("[workers] %s: dsh serves its index but not directoryPicker/list (%s); treating it as ready", w.Key, detail)
+			answers = true
+		}
+		if answers {
 			{
 				w.mu.Lock()
 				w.ready = true
@@ -882,30 +889,50 @@ func hexPort(local string) (int, bool) {
 // its index before its services are registered, and a page that arrived in
 // that gap was told 'active Service "sessionController" is unavailable'
 // (2026-09-19). The index alone therefore proves nothing.
-func (m *WorkerManager) dshAnswers(w *Worker) bool {
+func (m *WorkerManager) dshAnswers(w *Worker) (bool, string) {
 	body := `{"type":"client-request","rpcId":"privasys-ready","method":"directoryPicker/list","payload":{}}`
 	probe, err := http.NewRequest(http.MethodPost, w.Upstream()+"/api/directoryPicker/list", strings.NewReader(body))
 	if err != nil {
-		return false
+		return false, ""
 	}
 	probe.Header.Set("Content-Type", "application/json")
 	probe.Header.Set("X-Privasys-Ingress-Token", w.Ingress)
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(probe)
 	if err != nil {
-		return false
+		return false, ""
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return false
+		return false, fmt.Sprintf("HTTP %d", resp.StatusCode)
 	}
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	var answer struct {
 		Result struct {
 			OK bool `json:"ok"`
 		} `json:"result"`
 	}
-	if json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&answer) != nil {
+	if json.Unmarshal(raw, &answer) != nil {
+		return false, "not a JSON envelope: " + truncate(raw, 200)
+	}
+	if !answer.Result.OK {
+		return false, truncate(raw, 300)
+	}
+	return true, ""
+}
+
+// dshServesIndex is the readiness this proxy used before dshAnswers.
+func (m *WorkerManager) dshServesIndex(w *Worker) bool {
+	probe, err := http.NewRequest(http.MethodGet, w.Upstream()+"/", nil)
+	if err != nil {
 		return false
 	}
-	return answer.Result.OK
+	probe.Header.Set("X-Privasys-Ingress-Token", w.Ingress)
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(probe)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode < 500
 }
