@@ -55,7 +55,7 @@ moved, ship a new measured image version. Never a floating branch.
 ## Building an agent on this harness
 
 The harness is generic: it names no product, no connector and no agent. An
-agent is a deployment of this image plus content in the holder's own Drive.
+agent is a deployment of this image plus files the holder owns.
 Five contracts carry everything a specific agent needs.
 
 ### 1. Tools and resources are declared, not coded
@@ -84,8 +84,8 @@ behaviour lives, as files dsh's right sidebar shows and the chat writes:
 
 | In the holder folder | Meaning |
 |---|---|
-| `skills/` | The holder's skills, one folder per skill with a `SKILL.md`. Seeded once from the deployment's reference set (`SKILLS_PIN`, cloned from [Privasys/agent-skills](https://github.com/Privasys/agent-skills) at build) and theirs to edit from then on; edits in Drive change the next session, with no deploy. |
-| `workspace/<name>/` | One agent: a workspace by that name in the harness, read-only from the agent's side. `agent.md` is its persona, `agent.yaml` its definition (below), `.agents/skills/` its own skills; `state/` and `runs/` are what a run writes, pushed back to Drive. The chat writes the two definition files through the harness's own `agents` server (`write_agent`, `list_agents`; proxy `agents.go`), since Drive's assistant tools are read-only; the holder edits or deletes the folder in Drive. |
+| `skills/` | The holder's skills, one folder per skill with a `SKILL.md`. Seeded once from the deployment's reference set (`SKILLS_PIN`, cloned from [Privasys/agent-skills](https://github.com/Privasys/agent-skills) at build) and theirs from then on; an edit changes the next session, with no deploy. |
+| `workspace/<name>/` | One agent: a workspace by that name in the harness, read-only from the agent's side. `agent.md` is its persona, `agent.yaml` its definition (below), `.agents/skills/` its own skills; `state/` and `runs/` are what a run writes. The chat writes the two definition files through the harness's own `agents` server (`write_agent`, `list_agents`; proxy `agents.go`); the holder browses, downloads or deletes the folder through the window their Drive or wallet opens onto it. |
 | `sessions/` | dsh's session logs; an agent's runs stay here. |
 
 The holder's Drive folder for the harness (`AppData/<label>/`) holds one
@@ -123,7 +123,7 @@ attested tool leg; the tool parks it until something changes. A run is a new
 session in the agent's workspace, opened through a route on the worker's own
 server (`app/privasys-routines.mjs`) that only the proxy can reach. Grants
 live on the manager; the proxy holds a holder's agents, cursors and last runs
-in memory only, read from their Drive while their worker runs. The harness
+in memory only, read from their folder while their worker runs. The harness
 stores no holder data: a holder who is away keeps their runs for the life of
 the container, and after a restart they resume when the holder next opens the
 harness.
