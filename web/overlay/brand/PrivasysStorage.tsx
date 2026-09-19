@@ -165,11 +165,13 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
     }
   }, [state === undefined])
   useEffect(() => { if (open) refresh() }, [open])
-  // An ask nobody answers goes stale: after three minutes the button comes
-  // back so the person can send the push again.
+  // A notification dismissed by mistake is gone from the phone: after 45
+  // seconds the button comes back as "Send it again" (2026-09-19: three
+  // minutes read as a hang). The answer itself arrives on the events socket
+  // whenever it comes; the ask stays valid on the runtime for its own life.
   useEffect(() => {
     if (waitingSince === undefined) return undefined
-    const t = setTimeout(() => { setWaitingSince(undefined) }, 3 * 60 * 1000)
+    const t = setTimeout(() => { setWaitingSince(undefined) }, 45 * 1000)
     return () => { clearTimeout(t) }
   }, [waitingSince])
 
@@ -248,7 +250,7 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
                       </p>
                       <div className={css.actions}>
                         <Button variant="primary" size="sm" disabled={busy || waiting} onClick={() => { request(false) }}>
-                          {busy ? 'Preparing…' : waiting ? 'Sent to your device…' : 'Approve the updated access'}
+                          {busy ? 'Preparing…' : waiting ? 'Sent to your device…' : ask?.nonce ? 'Send it again' : 'Approve the updated access'}
                         </Button>
                       </div>
                     </>
@@ -284,7 +286,7 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
                   : null}
                 <div className={css.actions}>
                   <Button variant="primary" size="sm" disabled={busy || waiting} onClick={() => { request(declined || withdrawn) }}>
-                    {busy ? 'Preparing…' : waiting ? 'Sent to your device…' : withdrawn ? 'Connect again' : declined ? 'Ask me again' : 'Connect my Drive'}
+                    {busy ? 'Preparing…' : waiting ? 'Sent to your device…' : ask?.nonce ? 'Send it again' : withdrawn ? 'Connect again' : declined ? 'Ask me again' : 'Connect my Drive'}
                   </Button>
                 </div>
               </>
@@ -292,22 +294,11 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
 
           {ask?.nonce && (!persistent || stale)
             ? (
-              <div className={css.askBox}>
-                <div className={css.askTitle}>Approve on your device</div>
-                <p className={css.muted}>
-                  Your wallet verifies this enclave itself and shows you exactly what is
-                  being asked for. A notification is on its way to your device; if it does
-                  not arrive, enter these in the wallet by hand. Nothing else to do here:
-                  this row updates by itself a few seconds after you approve.
-                </p>
-                <div className={css.askFacts}>
-                  <div><span className={css.muted}>host&nbsp;&nbsp;</span><code>{ask.app_host}</code></div>
-                  <div><span className={css.muted}>nonce&nbsp;</span><code>{ask.nonce}</code></div>
-                </div>
-                <div className={css.actions}>
-                  <Button variant="outline" size="sm" onClick={refresh}>I have approved it</Button>
-                </div>
-              </div>
+              <p className={css.muted}>
+                Your wallet verifies this enclave itself and shows you exactly what is
+                being asked for. Nothing to do here: this row updates the moment you
+                answer on your device.
+              </p>
             )
             : null}
           {ask?.status === 'declined'

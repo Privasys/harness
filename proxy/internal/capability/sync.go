@@ -553,6 +553,24 @@ func (s *Syncer) DropDriveCopies() {
 	s.blobs = map[string]bool{}
 	s.folders = map[string]string{}
 	s.mu.Unlock()
+	// Agent folders a previous run of this process pulled carry the mirror's
+	// marker on disk: those go too, whatever this run remembers.
+	if agentsRoot != "" {
+		if entries, err := os.ReadDir(agentsRoot); err == nil {
+			known := map[string]bool{}
+			for _, n := range dirs {
+				known[n] = true
+			}
+			for _, e := range entries {
+				if !e.IsDir() || known[e.Name()] {
+					continue
+				}
+				if _, err := os.Stat(filepath.Join(agentsRoot, e.Name(), agentMarkerFile)); err == nil {
+					dirs = append(dirs, e.Name())
+				}
+			}
+		}
+	}
 	sort.Strings(dirs)
 	for _, n := range dirs {
 		if agentsRoot == "" {

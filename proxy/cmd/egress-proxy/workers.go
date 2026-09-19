@@ -375,6 +375,15 @@ func (m *WorkerManager) start(w *Worker) {
 		sy.LoadState()
 		if n, err := sy.RestoreFor(w.Subject); err != nil {
 			log.Printf("[workers] %s: restore: %v", w.Key, err)
+			if sy.AccessWithdrawn() {
+				// Whatever an earlier run left from that Drive goes before
+				// dsh reads its workspaces: the agent folders (by their
+				// marker) and the registry entries pointing at them.
+				sy.DropDriveCopies()
+				if g := sy.PruneRegistry(); g > 0 {
+					log.Printf("[workers] %s: %d workspace(s) whose folder is gone left the registry", w.Key, g)
+				}
+			}
 		} else if n > 0 {
 			log.Printf("[workers] %s: restored %d file(s) from the holder's Drive", w.Key, n)
 		}

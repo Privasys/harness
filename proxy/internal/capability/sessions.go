@@ -755,3 +755,55 @@ func (s *Syncer) restoreSessionFolder(ds *DriveStore, node Node, parentName, rem
 	})
 	return n, nil
 }
+
+// PruneRegistry drops from dsh's workspace registry every workspace whose
+// directory no longer exists, keeping the document otherwise byte-for-byte in
+// meaning (it is re-encoded from the generic tree, never from a struct that
+// could drop fields dsh keeps). Called before dsh starts, after a withdrawal
+// removed the agent workspaces, so the sidebar does not list folders that are
+// gone. Returns how many entries went.
+func (s *Syncer) PruneRegistry() int {
+	s.mu.Lock()
+	file := s.registryFile
+	s.mu.Unlock()
+	if file == "" {
+		return 0
+	}
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		return 0
+	}
+	var doc map[string]any
+	if json.Unmarshal(raw, &doc) != nil {
+		return 0
+	}
+	tables, _ := doc["tables"].(map[string]any)
+	workspaces, _ := tables["workspaces"].(map[string]any)
+	if len(workspaces) == 0 {
+		return 0
+	}
+	gone := 0
+	for id, v := range workspaces {
+		w, _ := v.(map[string]any)
+		p, _ := w["path"].(string)
+		if p == "" {
+			continue
+		}
+		if _, err := os.Stat(p); err != nil {
+			delete(workspaces, id)
+			gone++
+		}
+	}
+	if gone == 0 {
+		return 0
+	}
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return 0
+	}
+	if err := os.WriteFile(file, out, 0o600); err != nil {
+		log.Printf("[sync] registry: %d gone workspace(s) could not be pruned: %v", gone, err)
+		return 0
+	}
+	return gone
+}
