@@ -24,13 +24,15 @@
  * question. The row is dsh's foot control (PrivasysFootRow.tsx) with the
  * state as a dot and a word; the explainer is dsh's Modal.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button, IconFolderOpenOutline16, Modal, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SidebarFooterActionOwnerProps } from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import { FootRow } from './PrivasysFootRow.tsx'
 import css from './PrivasysFoot.module.css'
 
 interface StorageState {
+  /** The holder's current worker (its start time), "" while none runs. */
+  worker?: string
   persistent?: boolean
   declined?: boolean
   signed_in?: boolean
@@ -71,6 +73,17 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
   // below the moment the wallet delivers it; nothing polls.
   const [waitingSince, setWaitingSince] = useState<number | undefined>(undefined)
   const waiting = waitingSince !== undefined
+  // The worker this page booted against. dsh reads its workspaces once at
+  // boot and binds its services to that process: when the harness replaces
+  // the worker (a Drive withdrawal, a fresh approval) the page reloads
+  // itself, instead of showing a stale sidebar and "active Service is
+  // unavailable" until someone presses refresh (2026-09-19).
+  const worker = useRef<string | undefined>(undefined)
+  const noteWorker = (w: string | undefined): void => {
+    if (w === undefined || w === '') return
+    if (worker.current === undefined) { worker.current = w; return }
+    if (worker.current !== w) { worker.current = w; location.reload() }
+  }
 
   const refresh = (): void => {
     void pvFetch('/privasys/capability/status')
@@ -108,6 +121,7 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
     let timer: ReturnType<typeof setTimeout> | undefined
     let ws: WebSocket | undefined
     const apply = (d: (StorageState & { signed_in?: boolean }) | undefined): boolean => {
+      noteWorker(d?.worker)
       if (d !== undefined && d.signed_in === false) {
         setState(undefined)
         return false

@@ -656,8 +656,19 @@ func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp 
 		return syncer.AccessWithdrawn()
 	}
 	notify := newSubjectNotifier()
+	if mgr != nil {
+		mgr.OnChange = notify.Notify
+	}
 	go followRuntimeEvents(context.Background(), broker, legs, broker.Resource(), mgr, notify)
-	registerCapabilityAPI(mux, broker, withdrawnFor, notify)
+	registerCapabilityAPI(mux, broker, withdrawnFor, notify, func(sub string) string {
+		if mgr == nil {
+			return ""
+		}
+		if w := mgr.Get(sub); w != nil && w.IsReady() {
+			return w.started.UTC().Format(time.RFC3339Nano)
+		}
+		return ""
+	})
 	// The access server tells the agent the same truth the Sessions row
 	// shows: the storage resource is the one the mirror exercises.
 	accessWithdrawn = func(sub, resource string) bool {

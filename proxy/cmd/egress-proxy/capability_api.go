@@ -30,7 +30,14 @@ import (
 // subject's worker's).
 type withdrawnFor func(sub string) bool
 
-func registerCapabilityAPI(mux *http.ServeMux, broker *capability.Broker, withdrawn withdrawnFor, notify *subjectNotifier) {
+// workerGeneration names the holder's current worker (its start time), "" when
+// none runs: the row reloads the page when it changes, because dsh reads its
+// workspaces once at boot and a replaced worker (a withdrawal, a fresh
+// approval) would otherwise show a stale sidebar and answer "active Service
+// is unavailable" until a manual refresh (2026-09-19).
+type workerGeneration func(sub string) string
+
+func registerCapabilityAPI(mux *http.ServeMux, broker *capability.Broker, withdrawn withdrawnFor, notify *subjectNotifier, generation workerGeneration) {
 	// Begin an ask. Called by the harness UI over the sealed session, so the
 	// relay-asserted subject names the holder this capability will belong to.
 	mux.HandleFunc("POST /privasys/capability/request", func(w http.ResponseWriter, r *http.Request) {
@@ -61,7 +68,7 @@ func registerCapabilityAPI(mux *http.ServeMux, broker *capability.Broker, withdr
 
 	// Whether this harness can persist for the acting holder, and where.
 	mux.HandleFunc("GET /privasys/capability/status", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, capabilityStatus(broker, withdrawn, r.Header.Get("X-Privasys-Sub")))
+		writeJSON(w, http.StatusOK, capabilityStatus(broker, withdrawn, generation, r.Header.Get("X-Privasys-Sub")))
 	})
 
 	// The same answer, pushed: one sealed WebSocket per open row, written
@@ -87,7 +94,7 @@ func registerCapabilityAPI(mux *http.ServeMux, broker *capability.Broker, withdr
 		defer c.CloseNow()
 		ctx := c.CloseRead(r.Context()) // ends when the browser closes the socket
 		for {
-			body, err := json.Marshal(capabilityStatus(broker, withdrawn, sub))
+			body, err := json.Marshal(capabilityStatus(broker, withdrawn, generation, sub))
 			if err != nil {
 				return
 			}
@@ -115,7 +122,7 @@ func registerCapabilityAPI(mux *http.ServeMux, broker *capability.Broker, withdr
 // capabilityStatus is where this holder's data is kept, truthfully: the
 // body of GET /privasys/capability/status and of every push on the events
 // socket.
-func capabilityStatus(broker *capability.Broker, withdrawn withdrawnFor, sub string) map[string]any {
+func capabilityStatus(broker *capability.Broker, withdrawn withdrawnFor, generation workerGeneration, sub string) map[string]any {
 	// signed_in tells the UI whether this answer is ABOUT someone. Right
 	// after sign-in the sealed session can still be anonymous for a
 	// moment, and "nobody is signed in" must not render as "your Drive
@@ -125,6 +132,9 @@ func capabilityStatus(broker *capability.Broker, withdrawn withdrawnFor, sub str
 		"declined":   false,
 		"signed_in":  sub != "",
 		"folder":     "AppData/Harness",
+	}
+	if generation != nil && sub != "" {
+		resp["worker"] = generation(sub)
 	}
 	if sub == "" || !broker.Enabled() {
 		return resp

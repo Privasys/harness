@@ -33,8 +33,10 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -127,6 +129,11 @@ type WorkerManager struct {
 	appID     string
 	useUIDs   bool
 	idle      time.Duration
+
+	// OnChange, when set, is told the subject whose worker just became ready
+	// or stopped, so whoever pushes status to the browser (capability_api.go)
+	// does so at once.
+	OnChange func(sub string)
 
 	mu        sync.Mutex
 	bySub     map[string]*Worker
@@ -445,16 +452,15 @@ func (m *WorkerManager) start(w *Worker) {
 			return
 		default:
 		}
-		probe, _ := http.NewRequest(http.MethodGet, w.Upstream()+"/", nil)
-		probe.Header.Set("X-Privasys-Ingress-Token", w.Ingress)
-		resp, err := http.DefaultClient.Do(probe)
-		if err == nil {
-			resp.Body.Close()
-			if resp.StatusCode < 500 {
+		if m.dshAnswers(w) {
+			{
 				w.mu.Lock()
 				w.ready = true
 				w.mu.Unlock()
 				log.Printf("[workers] %s: ready after %s", w.Key, time.Since(w.started).Round(time.Second))
+				if m.OnChange != nil && w.Subject != systemSubject {
+					m.OnChange(w.Subject)
+				}
 				if s := w.Syncer(); s != nil {
 					if s.AccessWithdrawn() {
 						// Drive refused the restore: the worker runs on its
@@ -753,6 +759,9 @@ func (m *WorkerManager) Stop(w *Worker) {
 	}
 	m.closeHolderFolder(w)
 	m.forget(w)
+	if m.OnChange != nil && w.Subject != systemSubject {
+		m.OnChange(w.Subject)
+	}
 }
 
 // wipeScratch removes the holder's working files and dsh home from the
@@ -866,4 +875,37 @@ func hexPort(local string) (int, bool) {
 		return 0, false
 	}
 	return int(v), true
+}
+
+// dshAnswers reports whether the worker's dsh serves a real call: one unary
+// RPC through its gateway, on a service the browser calls first. dsh serves
+// its index before its services are registered, and a page that arrived in
+// that gap was told 'active Service "sessionController" is unavailable'
+// (2026-09-19). The index alone therefore proves nothing.
+func (m *WorkerManager) dshAnswers(w *Worker) bool {
+	body := `{"type":"client-request","rpcId":"privasys-ready","method":"directoryPicker/list","payload":{}}`
+	probe, err := http.NewRequest(http.MethodPost, w.Upstream()+"/api/directoryPicker/list", strings.NewReader(body))
+	if err != nil {
+		return false
+	}
+	probe.Header.Set("Content-Type", "application/json")
+	probe.Header.Set("X-Privasys-Ingress-Token", w.Ingress)
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(probe)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+	var answer struct {
+		Result struct {
+			OK bool `json:"ok"`
+		} `json:"result"`
+	}
+	if json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&answer) != nil {
+		return false
+	}
+	return answer.Result.OK
 }
