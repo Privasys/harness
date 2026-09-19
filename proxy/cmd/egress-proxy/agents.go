@@ -7,16 +7,14 @@ package main
 //
 //	/tool/agents/mcp   list_agents, write_agent
 //
-// An agent is a folder in the holder's Drive and a workspace here (README,
-// "Building an agent on this harness", contract 2). The chat builds it, and
-// this is the tool it builds it with: Drive's assistant tools are read-only
-// by design (they read what the holder enabled for the assistant, they do
-// not write into it), while the harness's own storage capability already
-// covers its app folder, where the agents live. So the harness writes the
-// two definition files itself and the mirror (capability/agents.go) pulls
-// them back as a workspace. First live test, 2026-09-15: the skill told the
-// model to write through Drive's tools, the model found none that could, and
-// wrote the files into the chat's own working tree instead.
+// An agent is a folder in the holder's working files (their holder folder,
+// plan §5.9) and a workspace here (README, "Building an agent on this
+// harness", contract 2). The chat builds it, and this is the tool it builds
+// it with: the harness writes the two definition files itself, as root, so
+// the definition is read-only for the worker (capability/agents.go). First
+// live test, 2026-09-15: the skill told the model to write through Drive's
+// tools, the model found none that could, and wrote the files into the
+// chat's own working tree instead.
 //
 // Deliberately generic: the server knows the shape of an agent folder and
 // nothing about what any agent does. The acting user is the calling worker's,
@@ -65,17 +63,17 @@ func agentsTools() []map[string]any {
 	return []map[string]any{
 		{
 			"name": "list_agents",
-			"description": "List the user's agents: the folders under agents/ in this assistant's folder in their Drive, " +
-				"each mirrored here as a workspace of the same name, with what starts each one and whether it is paused.",
+			"description": "List the user's agents: each a folder among their workspaces here, holding agent.md and agent.yaml, " +
+				"with what starts each one and whether it is paused.",
 			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}},
 		},
 		{
 			"name": "write_agent",
 			"description": "Create or update one of the user's agents by writing its two definition files, agent.md and agent.yaml, " +
-				"into agents/<name>/ in this assistant's folder in their Drive. Agree the definition with the user in the conversation and read it back before calling. " +
+				"into a workspace of that name among the user's working files. Agree the definition with the user in the conversation and read it back before calling. " +
 				"name becomes the folder and the workspace title. agent_md is the agent's persona and standing instructions, as Markdown. " +
 				"agent_yaml is its definition: prompt, trigger (every: a duration, or on: <tool>.<call>), debounce, min_interval, paused; it is checked before anything is written. " +
-				"The folder is mirrored back within about a minute and the agent then exists; to remove an agent the user deletes its folder in their Drive. " +
+				"The agent exists the moment the files are written; to remove an agent the user asks here, or deletes its folder from the files panel. " +
 				"Never write these files anywhere else.",
 			"inputSchema": map[string]any{
 				"type": "object",
@@ -163,11 +161,11 @@ func agentsShim(w http.ResponseWriter, r *http.Request) {
 // model reads, and whether it is an error.
 func callAgentsTool(name string, args json.RawMessage, sub string) (map[string]any, bool) {
 	if sub == "" {
-		return map[string]any{"error": "no signed-in user is bound to this session, so there is no Drive to write to"}, true
+		return map[string]any{"error": "no signed-in user is bound to this session, so there is nowhere to write to"}, true
 	}
 	st := agentStoreFor(sub)
 	if st == nil {
-		return map[string]any{"error": "the user's Drive folder for this assistant is not connected yet; list_access reports the storage resource and request_access asks for it"}, true
+		return map[string]any{"error": "this user's worker is not running, so there is nowhere to write to yet"}, true
 	}
 	switch name {
 	case "list_agents":
@@ -219,7 +217,7 @@ func listAgents(st agentStore) map[string]any {
 	return map[string]any{
 		"agents": items,
 		"count":  len(items),
-		"note":   "each agent is the folder agents/<name>/ in this assistant's folder in the user's Drive; the user edits it there, or asks here",
+		"note":   "each agent is a folder of that name among the user's workspaces, holding agent.md and agent.yaml; the user reads it in the files panel and changes it by asking here",
 	}
 }
 
@@ -246,8 +244,7 @@ func writeAgent(st agentStore, name, agentMD, agentYAML string) (map[string]any,
 	return map[string]any{
 		"written": rel,
 		"files":   []string{"agent.md", "agent.yaml"},
-		"next": "the folder is mirrored back within about a minute and the agent then exists; " +
-			"the workspace named after it appears at its first run. Now settle the consents it needs (section 3 of the skill), " +
-			"and tell the user how to change or remove it: edit or delete the folder in their Drive, or ask here.",
+		"next": "the agent exists now and its workspace appears in the sidebar at its first run. Now settle the consents it needs (section 3 of the skill), " +
+			"and tell the user how to change or remove it: ask here.",
 	}, false
 }

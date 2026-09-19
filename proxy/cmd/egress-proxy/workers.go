@@ -20,13 +20,14 @@ package main
 //   - shell egress (the forward proxy): each worker runs as its own uid, and
 //     the connecting uid names the subject.
 //
-// The harness stores no holder data. A worker's session logs and skills live
-// on tmpfs; its workspace and dsh home sit on the encrypted volume ONLY while
-// the worker runs, as a scratch (this container's memory filesystem is 64 MiB
-// and cannot hold a working tree). Everything is restored from the holder's
-// Drive before the worker starts and mirrored while it runs; when the worker
-// stops, the scratch is wiped once the Drive verifiably holds all of it, and
-// the entrypoint clears whatever a previous container left behind.
+// Drive holds the memory; the holder folder holds the agent (plan §5.9).
+// A worker's roots (working trees and the agents among them, dsh home,
+// skills, sessions) are the holder's folder when the runtime opens it: the
+// holder's own data, under their own key, in this app's custody. Their
+// conversations are also mirrored to their Drive while the worker runs,
+// which is what makes them a memory other sessions can use. Without a
+// folder (no approval yet) the same layout is a scratch on the volume, wiped
+// at stop once the Drive verifiably holds the conversations, and at boot.
 
 import (
 	"context"
@@ -355,45 +356,36 @@ func (m *WorkerManager) start(w *Worker) {
 	if w.Subject != systemSubject {
 		// Restore BEFORE dsh starts: it lists its workspaces once at boot.
 		sy := capability.NewSyncerFor(m.broker, m.client, m.driveHost, m.appID, w.Sessions, w.Workspace, w.Subject)
-		// The holder's own skills: read from their Drive, seeded once from the
-		// deployment's reference set. What the assistant DOES is then a folder
-		// they can open and edit, with no build and no deploy in their path.
-		sy.SetSkillsRoot(w.Skills, envOr("HARNESS_SEED_SKILLS", "/run/privasys-skills"))
-		// The holder's agents: a folder each in their Drive, a workspace each
-		// here, beside their other workspaces (capability/agents.go).
+		// The holder's skills: theirs, in their folder, seeded once from the
+		// deployment's reference set when the directory does not exist yet.
+		if n, err := seedSkills(w.Skills, envOr("HARNESS_SEED_SKILLS", "/run/privasys-skills")); err != nil {
+			log.Printf("[workers] %s: skills: %v", w.Key, err)
+		} else if n > 0 {
+			log.Printf("[workers] %s: %d reference skill(s) seeded into the holder's skills", w.Key, n)
+		}
+		// The holder's agents: a folder each among their workspaces
+		// (capability/agents.go); the mirror needs to know them to tell an
+		// agent's run from a conversation.
 		sy.SetAgentsRoot(w.Workspace, w.UID)
 		// dsh's workspace registry (titles, archived set) names the Drive
-		// folders the mirror files sessions under.
+		// folders the mirror files conversations under.
 		sy.SetRegistryFile(filepath.Join(w.Home, "storages", "workspace.json"))
-		// What the holder set and attached rides to their Drive too, so the
-		// home on this volume is a scratch (capability/home.go).
-		sy.SetHomeRoot(w.Home)
-		// The holder withdrew this harness in Drive: what the mirror held on
-		// that grant's behalf goes (sessions, skills, agents), the worker
-		// stops, and nothing asks Drive again on a timer. Their next visit
-		// starts a worker on their holder folder alone, and the row says
-		// "Withdrawn" (capability_api.go). A fresh approval is a runtime
-		// event (events.go) and starts a worker by itself.
+		// The holder withdrew this harness in Drive: the memory stops being
+		// written, nothing asks Drive again on a timer, and the worker goes on
+		// with its folder; the row says "Withdrawn" (capability_api.go). A
+		// fresh approval is a runtime event (events.go) and restarts the
+		// mirror by itself.
 		sy.OnWithdrawn = func() {
-			log.Printf("[workers] %s: the holder withdrew this harness's access in their Drive; dropping the Drive copies and stopping", w.Key)
-			m.Stop(w)
-			sy.DropDriveCopies()
+			log.Printf("[workers] %s: the holder withdrew this harness's access in their Drive; conversations are no longer kept there", w.Key)
 		}
 		sy.LoadState()
 		if n, err := sy.RestoreFor(w.Subject); err != nil {
 			log.Printf("[workers] %s: restore: %v", w.Key, err)
-			if sy.AccessWithdrawn() {
-				// Whatever an earlier run left from that Drive goes before
-				// dsh reads its workspaces: the agent folders (by their
-				// marker) and the registry entries pointing at them.
-				sy.DropDriveCopies()
-			}
 		} else if n > 0 {
-			log.Printf("[workers] %s: restored %d file(s) from the holder's Drive", w.Key, n)
+			log.Printf("[workers] %s: restored %d conversation file(s) from the holder's Drive", w.Key, n)
 		}
-		// Whatever the restore left: a registry naming folders that are gone
-		// (an earlier scratch, a withdrawn Drive's agents) keeps dsh's
-		// workspace domain from activating at all.
+		// A registry naming folders that are gone (an earlier scratch) keeps
+		// dsh's workspace domain from activating at all.
 		if g := sy.PruneRegistry(); g > 0 {
 			log.Printf("[workers] %s: %d registry entr(y/ies) naming a folder that is gone were removed", w.Key, g)
 		}

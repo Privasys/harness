@@ -219,7 +219,7 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
   // cannot keep anything: the session root is a tmpfs and dies with the
   // container. The row says setup is incomplete, not that a preference is unset.
   const dot = waiting ? 'warning' as const : stale ? 'warning' as const : persistent ? 'done' as const : withdrawn ? 'error' as const : 'warning' as const
-  const word = waiting ? 'Waiting for your device' : stale ? 'Approval needed' : persistent ? 'In your Drive' : withdrawn ? 'Withdrawn' : 'Not saved'
+  const word = waiting ? 'Waiting for your device' : stale ? 'Approval needed' : persistent ? 'In your Drive' : withdrawn ? 'Withdrawn' : 'Not in your Drive'
   const folder = state.folder ?? 'AppData/Harness'
 
   return (
@@ -227,11 +227,11 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
       <FootRow
         wide={wide}
         icon={<IconFolderOpenOutline16 size={wide ? 16 : 18} />}
-        label="Sessions"
+        label="Memory"
         status={<><StateDot state={dot} size={10} /><span>{word}</span></>}
         title={persistent
-          ? 'Your sessions are stored in your own Drive'
-          : 'This harness cannot keep your sessions until you connect your Drive'}
+          ? 'Your conversations are written to your own Drive'
+          : 'Connect your Drive to make your conversations a memory'}
         ariaLabel="Session storage"
         haspopup="dialog"
         expanded={open}
@@ -240,7 +240,7 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
       <Modal
         open={open}
         onClose={() => { setOpen(false) }}
-        title="Where your sessions are kept"
+        title="Where your conversations are kept"
         closeLabel="Close"
         className={css.storageDialog ?? ''}
       >
@@ -249,9 +249,11 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
             ? (
               <>
                 <p>
-                  Your conversations and workspace are saved to <strong>{folder}</strong> in
-                  your own Drive, under your own keys. They survive this enclave being
-                  replaced. You can withdraw access at any time in Drive.
+                  Your conversations are written to <strong>{folder}</strong> in your own
+                  Drive, under your own keys, as they happen: that is your memory, and
+                  other sessions and agents can draw on it. Your working files stay in
+                  your own folder here. You can withdraw the Drive access at any time in
+                  Drive.
                 </p>
                 {stale
                   ? (
@@ -275,16 +277,17 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
             : (
               <>
                 <p>
-                  This harness keeps <strong>no copy of your data</strong>. Your
-                  conversations are held in memory for as long as this enclave runs and
-                  are gone the moment it stops — that is deliberate, not a limitation to
-                  work around.
+                  Your working files (your agents, skills and working trees) are in your
+                  own folder here, under your own key, until you revoke that access in
+                  your wallet. Your conversations are not yet a memory you can use
+                  elsewhere.
                 </p>
                 <p>
-                  To keep them, connect your Drive. They are then stored
+                  Connect your Drive and they are also written
                   under <strong>{folder}</strong> in <em>your</em> Drive, under your own
-                  keys, where this harness can reach that one folder and nothing else —
-                  and you can withdraw it at any time in Drive.
+                  keys, where this harness can reach that one folder and nothing else,
+                  and where other sessions and agents can draw on them. You can withdraw
+                  it at any time in Drive.
                 </p>
                 {withdrawn
                   ? (

@@ -3,67 +3,36 @@
 
 package capability
 
-// Carrying the holder's data out to their Drive, and back.
+// Carrying the holder's conversations out to their Drive, and back.
 //
-// Two roots, two shapes, kept apart so a person opening the folder sees their
-// conversations and their files as separate things:
+// Drive holds the memory; the holder folder holds the agent (plan §5.9,
+// 2026-09-19). This mirror does one thing: dsh's CHAT session logs go to
+// `sessions/` in the holder's Drive, one file per local file, filed under
+// the workspace they belong to (and Archived/ once archived); sessions.go
+// owns that mapping and the way back. A session run by one of the holder's
+// agents stays in the holder folder with the agent. Everything else the
+// agent works with (definitions, skills, outputs, working trees, the dsh
+// home) lives in the holder folder and never passes through here.
 //
-//   - sessions/   dsh's session logs, one Drive file per local file, filed
-//                 under the WORKSPACE they belong to (and Archived/ once
-//                 archived) rather than dsh's own directory key; sessions.go
-//                 owns that mapping and the way back.
-//   - workspace/  the working tree, as a content-addressed SNAPSHOT in the
-//                 format Drive renders as one item: `.workspace.json` (the
-//                 tree manifest) beside `.blobs/<sha256>` (each distinct file
-//                 content once). Never file-per-node: a working tree has
-//                 thousands of small files and would otherwise become
-//                 thousands of rows, names and change-feed entries on every
-//                 save (plans/drive-as-remote-disk.md, tier C decision).
-//
-// Both roots are tmpfs. The enclave holds no durable user data, so this is
-// not a backup: it is where the data lives, and the interval is the exposure
-// window. Uploads are content-addressed, so a quiet harness sends nothing.
+// Uploads are content-addressed, so a quiet harness sends nothing.
 
 import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
 )
 
 const (
-	sessionsFolder  = "sessions"
-	workspaceFolder = "workspace"
-	// skillsFolder holds the behaviour the holder can edit: Markdown the
-	// agent reads at run time. Their Drive is the source of truth for it —
-	// the harness only seeds it once and reads it back — so a person can
-	// change what their assistant does in a text editor, with no deploy.
-	skillsFolder = "skills"
-	blobsFolder  = ".blobs"
-	manifestName = ".workspace.json"
-	// maxSnapshotFile bounds one blob. Drive's inline write cap is 64 MiB;
-	// anything larger is a build artefact or a dataset, not a working file
-	// worth carrying on every save, and is left out with a log line.
-	maxSnapshotFile = 32 << 20
+	sessionsFolder = "sessions"
 )
-
-// snapshotSkipDirs are tool caches and dependency trees that any build
-// recreates and that would dominate the snapshot many times over. `.git`
-// is deliberately NOT here: it is the holder's history.
-var snapshotSkipDirs = map[string]bool{
-	"node_modules": true, ".venv": true, "venv": true, "__pycache__": true,
-	".pnpm-store": true, ".cache": true, ".mypy_cache": true, ".pytest_cache": true,
-	".turbo": true, ".next": true, "target": true,
-}
 
 // isLockFile recognises dsh's per-session `session.lock` (a kernel flock
 // target with no content of its own) and any other lock marker. Mirroring
@@ -73,29 +42,19 @@ func isLockFile(name string) bool {
 	return name == "session.lock" || strings.HasSuffix(name, ".lock")
 }
 
-// Syncer mirrors a local session root and snapshots a workspace root into one
-// holder's Drive folder.
+// Syncer mirrors a local session root into one holder's Drive folder, and
+// knows the holder's agents (agents.go) so it can tell their runs apart.
 type Syncer struct {
 	broker    *Broker
 	client    *http.Client
 	driveHost string
 	appID     string
 	sessions  string // local session root
-	workspace string // local workspace root
-	// skills is the local skills root, empty when this deployment does not
-	// carry per-holder skills. Unlike the other two it is pulled every pass:
-	// the holder edits these files in Drive, not here.
-	skills string
-	// seeds is the deployment's reference skills, copied into the holder's
-	// Drive once (and only where they have no skill of that name), so the
-	// folder they open is not empty.
-	seeds string
-	// agentsRoot is where the holder's agents are mirrored (the workspace
-	// root, one directory per agent, agents.go); empty means no agents.
+	workspace string // local workspace root (only the agent workspaces are read here)
+	// agentsRoot is where the holder's agents live (the workspace root, one
+	// directory per agent, agents.go); empty means no agents.
 	agentsRoot string
 	agentUID   int
-	agentDirs  map[string]bool
-	agents     map[string]AgentSpec
 	// subject binds this syncer to one person (per-user workers); empty
 	// means the process-wide acting subject (single-user layout).
 	subject string
@@ -104,34 +63,24 @@ type Syncer struct {
 	// stop ends the tick loop started by Start.
 	stop chan struct{}
 	// OnWithdrawn, when set, is called once (off the tick loop) when Drive
-	// first refuses the holder's capability: the owner of this mirror then
-	// drops what it held on that grant's behalf (DropDriveCopies) and stops
-	// the worker. The loop ends with it; a fresh approval is a runtime event
-	// that starts a fresh worker, so nothing keeps asking a Drive that said no.
+	// first refuses the holder's capability. The loop ends with it; a fresh
+	// approval is a runtime event that starts it again, so nothing keeps
+	// asking a Drive that said no.
 	OnWithdrawn func()
 
 	mu sync.Mutex
 	// uploaded maps a session-relative path to the content hash last stored,
 	// so an unchanged file is never re-sent.
 	uploaded map[string]string
-	// blobs is the set of blob hashes known to exist in Drive's .blobs/.
-	blobs map[string]bool
 	// folders caches Drive path -> node id for the session tree.
 	folders map[string]string
 	// grantSeen is the grant the caches above were built under. A fresh
 	// approval is a fresh folder: every cached node id and uploaded hash
 	// then names something that no longer exists.
 	grantSeen string
-	// treeSeen/treeSaved are the workspace tree hashes last observed and last
-	// snapshotted: a snapshot is taken only once the tree has held still for
-	// a whole tick, so a file mid-write is never captured torn.
-	treeSeen  string
-	treeSaved string
-	savedAt   time.Time
 	last      time.Time
 	lastErr   string
 	files     int
-	blobCount int
 	// restoredFor is the subject whose data was already restored this
 	// process, so a restore is attempted once per sign-in rather than per tick.
 	restoredFor string
@@ -153,9 +102,6 @@ type Syncer struct {
 	// registryFile is dsh's workspace registry document for this holder
 	// (titles, paths, archived ids); sessions.go reads it every pass.
 	registryFile string
-	// home is this holder's dsh home (home.go): what they set and attached,
-	// carried to their Drive so the local copy can be a scratch.
-	home string
 	// metaCache remembers each local session directory's header (id, cwd):
 	// neither ever changes, and the file is read once instead of per tick.
 	metaCache map[string]sessionMeta
@@ -263,167 +209,14 @@ func (s *Syncer) Ticking() bool {
 	return s.stop != nil
 }
 
-// SetSkillsRoot wires a local skills directory to `skills/` in the holder's
-// Drive folder, seeded from the deployment's reference skills. Set per worker;
-// empty leaves the harness on deployment-owned skills alone.
-func (s *Syncer) SetSkillsRoot(local, seeds string) {
-	s.mu.Lock()
-	s.skills, s.seeds = local, seeds
-	s.mu.Unlock()
-}
-
-// syncSkills makes the holder's Drive the source of truth for what their
-// assistant does. Every pass pulls what changed there into the local root, so
-// editing SKILL.md in Drive changes the next session's behaviour with no
-// deploy and no build. It pushes in one case only: a reference skill this
-// deployment ships that the holder does not have yet, so the folder they open
-// has something in it to edit. Nothing local is ever uploaded over a file
-// they changed, because the agent never writes here.
-func (s *Syncer) syncSkills(ds *DriveStore) error {
-	s.mu.Lock()
-	local, seeds := s.skills, s.seeds
-	s.mu.Unlock()
-	if local == "" {
-		return nil
-	}
-	// World-readable: the proxy pulls, the worker's unprivileged dsh reads.
-	if err := os.MkdirAll(local, 0o755); err != nil {
-		return err
-	}
-	root, err := s.folderIfExists(ds, skillsFolder)
-	if err != nil {
-		return err
-	}
-	if root == "" {
-		if root, err = ds.EnsureFolder(ds.RootID(), skillsFolder); err != nil {
-			return err
-		}
-	}
-	pulled, err := s.pullSkills(ds, root, local, skillsFolder)
-	if err != nil {
-		return err
-	}
-	seeded, err := s.seedSkills(ds, root, seeds)
-	if err != nil {
-		return err
-	}
-	if pulled > 0 || seeded > 0 {
-		// The holder is named so that two workers seeding two Drives are
-		// not read as one mirror seeding twice (prod, 2026-09-14).
-		log.Printf("[sync] skills for %.8s…: %d file(s) read from the holder's Drive, %d reference file(s) seeded", s.subject, pulled, seeded)
-	}
-	return nil
-}
-
-// pullSkills mirrors one Drive folder down, writing only what differs. The
-// count is files written, so a quiet pass logs nothing.
-func (s *Syncer) pullSkills(ds *DriveStore, nodeID, dir, rel string) (int, error) {
-	// Root-owned and world-readable, like an agent definition: the proxy
-	// writes these as root every pass, and the worker's own uid must be able
-	// to read them (prod 2026-09-15: pulled at 0600, a skill edited in Drive
-	// after boot was invisible to dsh).
-	return s.pullTree(ds, nodeID, dir, rel, 0o644, nil)
-}
-
-// sameOnDisk reports whether the local file already holds exactly this
-// content. Pulling is therefore a no-op for an unchanged skill, and a holder
-// who edited one in Drive gets their version, byte for byte.
-func sameOnDisk(path string, data []byte) bool {
-	have, err := os.ReadFile(path)
-	return err == nil && contentHash(have) == contentHash(data)
-}
-
-// seedable picks the reference skills to copy into a holder's Drive: the ones
-// they do not already have by name, dotfiles aside. A skill they have is
-// theirs and has diverged, so it is never refreshed from the deployment.
-func seedable(have map[string]bool, names []string) []string {
-	out := make([]string, 0, len(names))
-	for _, n := range names {
-		if have[n] || strings.HasPrefix(n, ".") {
-			continue
-		}
-		out = append(out, n)
-	}
-	return out
-}
-
-// seedSkills copies the deployment's reference skills into the holder's Drive,
-// skipping any whose top-level name they already have: once a skill is theirs
-// it diverges, and a "refresh" that overwrote their edits would make the
-// folder the deployment's again.
-func (s *Syncer) seedSkills(ds *DriveStore, root, seeds string) (int, error) {
-	if seeds == "" {
-		return 0, nil
-	}
-	existing, err := ds.ListIn(root)
-	if err != nil {
-		return 0, err
-	}
-	have := map[string]bool{}
-	for _, c := range existing {
-		have[c.Name] = true
-	}
-	entries, err := os.ReadDir(seeds)
-	if err != nil {
-		return 0, nil // no reference skills shipped: nothing to seed
-	}
-	byName := make(map[string]fs.DirEntry, len(entries))
-	names := make([]string, 0, len(entries))
-	for _, e := range entries {
-		byName[e.Name()] = e
-		names = append(names, e.Name())
-	}
-	count := 0
-	for _, name := range seedable(have, names) {
-		n, err := s.uploadSkillTree(ds, root, filepath.Join(seeds, name), byName[name])
-		count += n
-		if err != nil {
-			return count, err
-		}
-	}
-	return count, nil
-}
-
-// uploadSkillTree puts one reference skill (a file, or a directory of them)
-// into the holder's Drive folder.
-func (s *Syncer) uploadSkillTree(ds *DriveStore, parent, path string, entry fs.DirEntry) (int, error) {
-	if !entry.IsDir() {
-		data, err := os.ReadFile(path)
-		if err != nil || len(data) > maxSnapshotFile {
-			return 0, nil
-		}
-		if _, err := ds.PutIn(parent, entry.Name(), data); err != nil {
-			return 0, err
-		}
-		return 1, nil
-	}
-	folder, err := ds.EnsureFolder(parent, entry.Name())
-	if err != nil {
-		return 0, err
-	}
-	entries, err := os.ReadDir(path)
-	if err != nil {
-		return 0, err
-	}
-	count := 0
-	for _, e := range entries {
-		n, err := s.uploadSkillTree(ds, folder, filepath.Join(path, e.Name()), e)
-		count += n
-		if err != nil {
-			return count, err
-		}
-	}
-	return count, nil
-}
-
-// NewSyncer wires the two local roots to the holder's Drive folder. appID is
-// this app's platform id, recorded in every snapshot manifest. The acting
+// NewSyncer wires the local session root to the holder's Drive folder; the
+// workspace root is where the holder's agents live (agents.go). The acting
 // subject is the process-wide one (single-user layout).
 func NewSyncer(broker *Broker, client *http.Client, driveHost, appID, sessionsRoot, workspaceRoot string) *Syncer {
 	return &Syncer{
 		broker: broker, client: client, driveHost: driveHost, appID: appID,
 		sessions: sessionsRoot, workspace: workspaceRoot,
-		uploaded: map[string]string{}, blobs: map[string]bool{}, folders: map[string]string{},
+		uploaded: map[string]string{}, folders: map[string]string{},
 		metaCache: map[string]sessionMeta{},
 	}
 }
@@ -448,15 +241,13 @@ func (s *Syncer) subjectNow() string {
 
 // Status reports what the UI needs to tell the truth about persistence.
 type SyncStatus struct {
-	Available        bool      `json:"available"`
-	AccessWithdrawn  bool      `json:"access_withdrawn,omitempty"`
-	Reason           string    `json:"reason,omitempty"`
-	Folder           string    `json:"folder,omitempty"`
-	LastSync         time.Time `json:"last_sync,omitempty"`
-	Files            int       `json:"files"`
-	Blobs            int       `json:"blobs"`
-	WorkspaceSavedAt time.Time `json:"workspace_saved_at,omitempty"`
-	LastError        string    `json:"last_error,omitempty"`
+	Available       bool      `json:"available"`
+	AccessWithdrawn bool      `json:"access_withdrawn,omitempty"`
+	Reason          string    `json:"reason,omitempty"`
+	Folder          string    `json:"folder,omitempty"`
+	LastSync        time.Time `json:"last_sync,omitempty"`
+	Files           int       `json:"files"`
+	LastError       string    `json:"last_error,omitempty"`
 	// DeleteRefused: Drive has not granted this harness `delete`, so
 	// PendingDeletes stale session copies remain on the holder's Drive.
 	DeleteRefused  bool `json:"delete_refused,omitempty"`
@@ -466,7 +257,7 @@ type SyncStatus struct {
 func (s *Syncer) Status() SyncStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	st := SyncStatus{LastSync: s.last, Files: s.files, Blobs: s.blobCount, WorkspaceSavedAt: s.savedAt, LastError: s.lastErr, AccessWithdrawn: s.withdrawn,
+	st := SyncStatus{LastSync: s.last, Files: s.files, LastError: s.lastErr, AccessWithdrawn: s.withdrawn,
 		DeleteRefused: s.deleteRefused, PendingDeletes: s.pendingDeletes}
 	sub := s.subjectNow()
 	switch {
@@ -475,7 +266,7 @@ func (s *Syncer) Status() SyncStatus {
 	case !s.broker.Enabled():
 		st.Reason = "no runtime broker: this harness is not running on the platform"
 	case !s.broker.Granted(sub).Usable():
-		st.Reason = "sessions are kept in memory only — connect your Drive to keep them"
+		st.Reason = "conversations are not kept anywhere yet; connect your Drive to keep them"
 	case s.driveHost == "":
 		st.Reason = "no Drive host is configured for this deployment"
 	case s.withdrawn:
@@ -532,70 +323,6 @@ func (s *Syncer) Start(interval time.Duration) {
 			}
 		}
 	}()
-}
-
-// DropDriveCopies removes what this mirror holds on Drive's behalf: the
-// session files it carried, the skills it read, the agents it pulled and its
-// own state. Called when the holder withdrew the harness's access in Drive:
-// those copies existed only under that grant. The worker's own roots (its
-// working tree and dsh home, under the holder folder's separate grant) are
-// left alone.
-func (s *Syncer) DropDriveCopies() {
-	s.mu.Lock()
-	sessions, skills, agentsRoot := s.sessions, s.skills, s.agentsRoot
-	dirs := make([]string, 0, len(s.agentDirs))
-	for n := range s.agentDirs {
-		dirs = append(dirs, n)
-	}
-	s.agentDirs = map[string]bool{}
-	s.agents = map[string]AgentSpec{}
-	s.uploaded = map[string]string{}
-	s.blobs = map[string]bool{}
-	s.folders = map[string]string{}
-	s.mu.Unlock()
-	// Agent folders a previous run of this process pulled carry the mirror's
-	// marker on disk: those go too, whatever this run remembers.
-	if agentsRoot != "" {
-		if entries, err := os.ReadDir(agentsRoot); err == nil {
-			known := map[string]bool{}
-			for _, n := range dirs {
-				known[n] = true
-			}
-			for _, e := range entries {
-				if !e.IsDir() || known[e.Name()] {
-					continue
-				}
-				if _, err := os.Stat(filepath.Join(agentsRoot, e.Name(), agentMarkerFile)); err == nil {
-					dirs = append(dirs, e.Name())
-				}
-			}
-		}
-	}
-	sort.Strings(dirs)
-	for _, n := range dirs {
-		if agentsRoot == "" {
-			break
-		}
-		if err := os.RemoveAll(filepath.Join(agentsRoot, n)); err != nil {
-			log.Printf("[sync] agents: %q could not be removed after the withdrawal: %v", n, err)
-		}
-	}
-	for _, d := range []string{sessions, skills} {
-		if d == "" {
-			continue
-		}
-		entries, err := os.ReadDir(d)
-		if err != nil {
-			continue
-		}
-		for _, e := range entries {
-			if err := os.RemoveAll(filepath.Join(d, e.Name())); err != nil {
-				log.Printf("[sync] %s: %q could not be removed after the withdrawal: %v", filepath.Base(d), e.Name(), err)
-			}
-		}
-	}
-	_ = os.Remove(s.statePath())
-	log.Printf("[sync] Drive copies dropped for %.8s… (%d agent(s), the sessions and the skills): the holder withdrew this harness's access", s.subjectNow(), len(dirs))
 }
 
 // StopTicks ends the loop started by Start. The syncer stays usable for a
@@ -666,49 +393,20 @@ func (s *Syncer) SyncOnce() error {
 		log.Printf("[sync] a new grant for %.8s…: forgetting the folder ids and upload marks of the old one", s.subject)
 		s.folders = map[string]string{}
 		s.uploaded = map[string]string{}
-		s.blobs = map[string]bool{}
 	}
 	s.grantSeen = grant
 	s.mu.Unlock()
-	if err := s.syncSkills(ds); err != nil {
-		log.Printf("[sync] skills: %v", err)
-		if IsRefused(err) {
-			s.noteOutcome(err, grant)
-		}
-	}
-	// The holder's agents: each a folder in their Drive and a workspace here
-	// (agents.go). Definition down, outputs up, never the other way.
-	if err := s.syncAgents(ds); err != nil {
-		log.Printf("[sync] agents: %v", err)
-		if IsRefused(err) {
-			s.noteOutcome(err, grant)
-		}
-	}
-	if err := s.mirrorHome(ds); err != nil {
-		log.Printf("[sync] home: %v", err)
-		if IsRefused(err) {
-			s.noteOutcome(err, grant)
-		}
-	}
 	sessErr := s.mirrorSessions(ds)
-	wsErr := s.snapshotWorkspace(ds)
 	s.noteOutcome(sessErr, grant)
-	if sessErr == nil {
-		s.noteOutcome(wsErr, grant)
-	}
 
 	s.mu.Lock()
 	s.last = time.Now().UTC()
 	s.files = len(s.uploaded)
-	s.blobCount = len(s.blobs)
-	if sessErr == nil && wsErr == nil {
+	if sessErr == nil {
 		s.lastErr = ""
 	}
 	s.mu.Unlock()
-	if sessErr != nil {
-		return sessErr
-	}
-	return wsErr
+	return sessErr
 }
 
 // contentHash is the hex SHA-256 the uploaded-file map is keyed by.
@@ -758,189 +456,6 @@ func (s *Syncer) ensurePath(ds *DriveStore, relDir string) (string, error) {
 
 // ---- workspace: a content-addressed snapshot ---------------------------------
 
-// manifestFile is one entry of `.workspace.json` (Drive's workspace
-// snapshot contract, plans/drive-as-remote-disk.md 2026-09-08).
-type manifestFile struct {
-	Path string `json:"path"`
-	Size int64  `json:"size"`
-	Mode string `json:"mode"`
-	Blob string `json:"blob"`
-}
-
-type manifest struct {
-	Version int            `json:"version"`
-	App     string         `json:"app"`
-	SavedAt string         `json:"saved_at"`
-	Files   []manifestFile `json:"files"`
-	// Dirs lists every directory of the tree, including empty ones. Drive's
-	// contract carries only files; this addition is what lets a workspace
-	// that holds no file yet (a project just created, a session's cwd) come
-	// back as a directory dsh can list a session under — a session whose
-	// working directory does not exist is invisible in the sidebar.
-	Dirs []string `json:"dirs,omitempty"`
-}
-
-// scanWorkspace walks the local tree and returns its manifest entries (blob
-// hashes computed), the directories, plus a hash of the whole tree, cheap to
-// compare tick to tick.
-func (s *Syncer) scanWorkspace() ([]manifestFile, []string, map[string][]byte, string) {
-	var files []manifestFile
-	var dirs []string
-	contents := map[string][]byte{}
-	walkErr := filepath.WalkDir(s.workspace, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() {
-			if path == s.workspace {
-				return nil
-			}
-			if snapshotSkipDirs[d.Name()] {
-				return filepath.SkipDir
-			}
-			if rel, relErr := filepath.Rel(s.workspace, path); relErr == nil {
-				rel = filepath.ToSlash(rel)
-				// An agent's folder is mirrored from Drive by agents.go; the
-				// snapshot would only carry a copy of what Drive already holds.
-				if !strings.Contains(rel, "/") && s.isAgentDir(rel) {
-					return filepath.SkipDir
-				}
-				if rel != blobsFolder {
-					dirs = append(dirs, rel)
-				}
-			}
-			return nil
-		}
-		if !d.Type().IsRegular() {
-			return nil // sockets, devices, symlinks: not part of a portable tree
-		}
-		info, ierr := d.Info()
-		if ierr != nil {
-			return nil
-		}
-		if info.Size() > maxSnapshotFile {
-			return nil
-		}
-		rel, relErr := filepath.Rel(s.workspace, path)
-		if relErr != nil {
-			return nil
-		}
-		rel = filepath.ToSlash(rel)
-		if rel == manifestName || strings.HasPrefix(rel, blobsFolder+"/") {
-			return nil
-		}
-		data, readErr := os.ReadFile(path)
-		if readErr != nil {
-			return nil
-		}
-		sum := sha256.Sum256(data)
-		hash := hex.EncodeToString(sum[:])
-		files = append(files, manifestFile{
-			Path: rel, Size: int64(len(data)), Mode: fmt.Sprintf("%04o", info.Mode().Perm()), Blob: hash,
-		})
-		contents[hash] = data
-		return nil
-	})
-	if walkErr != nil && !os.IsNotExist(walkErr) {
-		log.Printf("[sync] walking %s: %v", s.workspace, walkErr)
-	}
-	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
-	sort.Strings(dirs)
-	h := sha256.New()
-	for _, dir := range dirs {
-		fmt.Fprintf(h, "d\x00%s\n", dir)
-	}
-	for _, f := range files {
-		fmt.Fprintf(h, "%s\x00%s\x00%s\n", f.Path, f.Mode, f.Blob)
-	}
-	return files, dirs, contents, hex.EncodeToString(h.Sum(nil))
-}
-
-// snapshotWorkspace uploads the blobs Drive does not yet hold and then the
-// manifest, once the tree has held still for one tick.
-func (s *Syncer) snapshotWorkspace(ds *DriveStore) error {
-	files, dirs, contents, tree := s.scanWorkspace()
-	if len(files) == 0 && len(dirs) == 0 {
-		return nil // an empty workspace root is not a snapshot worth taking
-	}
-	s.mu.Lock()
-	settled := s.treeSeen == tree
-	alreadySaved := s.treeSaved == tree
-	s.treeSeen = tree
-	s.mu.Unlock()
-	if alreadySaved || !settled {
-		return nil
-	}
-
-	wsID, err := s.ensurePath(ds, workspaceFolder)
-	if err != nil {
-		return err
-	}
-	blobsID, err := s.ensurePath(ds, workspaceFolder+"/"+blobsFolder)
-	if err != nil {
-		return err
-	}
-	// Learn what Drive already holds once, so a fresh process (its state is
-	// tmpfs and dies with the container) does not re-send every blob.
-	s.mu.Lock()
-	known := len(s.blobs) > 0
-	s.mu.Unlock()
-	if !known {
-		if existing, lerr := ds.ListIn(blobsID); lerr == nil {
-			s.mu.Lock()
-			for _, n := range existing {
-				if !n.IsFolder() {
-					s.blobs[n.Name] = true
-				}
-			}
-			s.mu.Unlock()
-		}
-	}
-
-	var sent, failed int
-	for hash, data := range contents {
-		s.mu.Lock()
-		have := s.blobs[hash]
-		s.mu.Unlock()
-		if have {
-			continue
-		}
-		if _, perr := ds.PutIn(blobsID, hash, data); perr != nil {
-			failed++
-			log.Printf("[sync] blob %s: %v", hash[:12], perr)
-			if IsRefused(perr) {
-				return perr
-			}
-			continue
-		}
-		s.mu.Lock()
-		s.blobs[hash] = true
-		s.mu.Unlock()
-		sent++
-	}
-	if failed > 0 {
-		return fmt.Errorf("capability: %d workspace blob(s) could not be stored", failed)
-	}
-
-	now := time.Now().UTC()
-	if files == nil {
-		files = []manifestFile{} // the contract's `files` is a list, never null
-	}
-	body, err := json.MarshalIndent(manifest{Version: 1, App: s.appID, SavedAt: now.Format(time.RFC3339), Files: files, Dirs: dirs}, "", " ")
-	if err != nil {
-		return err
-	}
-	if _, err := ds.PutIn(wsID, manifestName, body); err != nil {
-		return fmt.Errorf("capability: workspace manifest: %w", err)
-	}
-	s.mu.Lock()
-	s.treeSaved = tree
-	s.savedAt = now
-	s.mu.Unlock()
-	log.Printf("[sync] workspace snapshot saved: %d file(s), %d new blob(s)", len(files), sent)
-	return nil
-}
-
 // ---- restore ------------------------------------------------------------------
 
 // restore pulls the holder's stored data back down when the local roots are
@@ -948,61 +463,27 @@ func (s *Syncer) snapshotWorkspace(ds *DriveStore) error {
 // copy the record rather than a backup nobody ever reads. Returns the number
 // of files materialised.
 func (s *Syncer) restore(ds *DriveStore) (int, error) {
-	// The home first, and on its own terms: it never writes over a local
-	// file, so it is safe whatever the other two roots hold.
-	homeCount, homeErr := s.restoreHome(ds)
-	if homeErr != nil {
-		log.Printf("[sync] restore home: %v", homeErr)
-	} else if homeCount > 0 {
-		log.Printf("[sync] restored %d home file(s) from the holder's Drive", homeCount)
+	if !dirEmpty(s.sessions) {
+		// Local conversations exist (the holder folder keeps them across
+		// restarts). Restoring over them could resurrect a session the
+		// holder deleted, or overwrite a newer local file with an older
+		// remote one; neither is a call this code should make silently.
+		return 0, nil
 	}
-	if !dirEmpty(s.sessions) && !dirEmpty(s.workspace) {
-		// Local content exists. Restoring over it could resurrect a session
-		// the holder deleted, or overwrite a newer local file with an older
-		// remote one — neither is a call this code should make silently.
-		return homeCount, nil
+	id, err := s.folderIfExists(ds, sessionsFolder)
+	if err != nil || id == "" {
+		return 0, err
 	}
-	var firstErr error
-	total := homeCount
-	if dirEmpty(s.sessions) {
-		if id, err := s.folderIfExists(ds, sessionsFolder); err != nil {
-			firstErr = err
-		} else if id != "" {
-			n, rerr := s.restoreSessions(ds, id)
-			if rerr != nil && firstErr == nil {
-				firstErr = rerr
-			}
-			if n > 0 {
-				log.Printf("[sync] restored %d session file(s) from the holder's Drive", n)
-				total += n
-				// (restoreSessionFolder seeded the uploaded-hash map with the
-				// Drive path each file came from.)
-				// A session whose working directory is missing is invisible
-				// to dsh, and a workspace that held no file has no snapshot
-				// to bring the directory back — recreate it from the header.
-				if made := s.ensureSessionCwds(); made > 0 {
-					log.Printf("[sync] recreated %d session working director%s", made, map[bool]string{true: "y", false: "ies"}[made == 1])
-				}
-			}
+	n, rerr := s.restoreSessions(ds, id)
+	if n > 0 {
+		log.Printf("[sync] restored %d session file(s) from the holder's Drive", n)
+		// A session whose working directory is missing is invisible to dsh:
+		// recreate it from the header.
+		if made := s.ensureSessionCwds(); made > 0 {
+			log.Printf("[sync] recreated %d session working director%s", made, map[bool]string{true: "y", false: "ies"}[made == 1])
 		}
 	}
-	if dirEmpty(s.workspace) {
-		if id, err := s.folderIfExists(ds, workspaceFolder); err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-		} else if id != "" {
-			n, rerr := s.restoreWorkspace(ds, id)
-			if rerr != nil && firstErr == nil {
-				firstErr = rerr
-			}
-			if n > 0 {
-				log.Printf("[sync] restored %d workspace file(s) from the holder's Drive", n)
-				total += n
-			}
-		}
-	}
-	return total, firstErr
+	return n, rerr
 }
 
 // ensureSessionCwds recreates, under the workspace root, the working
@@ -1066,8 +547,7 @@ func (s *Syncer) folderIfExists(ds *DriveStore, name string) (string, error) {
 	return "", nil
 }
 
-// restoreTree materialises a file-per-node Drive folder locally (sessions,
-// and workspaces saved before the snapshot format).
+// restoreTree materialises a file-per-node Drive folder locally.
 func (s *Syncer) restoreTree(ds *DriveStore, nodeID, dir string) (int, error) {
 	children, err := ds.ListIn(nodeID)
 	if err != nil {
@@ -1075,7 +555,7 @@ func (s *Syncer) restoreTree(ds *DriveStore, nodeID, dir string) (int, error) {
 	}
 	count := 0
 	for _, c := range children {
-		if c.Name == manifestName || c.Name == blobsFolder || isLockFile(c.Name) {
+		if isLockFile(c.Name) || strings.HasPrefix(c.Name, ".") {
 			continue
 		}
 		target := filepath.Join(dir, c.Name)
@@ -1106,103 +586,6 @@ func (s *Syncer) restoreTree(ds *DriveStore, nodeID, dir string) (int, error) {
 	return count, nil
 }
 
-// restoreWorkspace rebuilds the working tree from the snapshot manifest,
-// falling back to the file-per-node layout of snapshots taken before the
-// manifest format existed.
-func (s *Syncer) restoreWorkspace(ds *DriveStore, wsID string) (int, error) {
-	children, err := ds.ListIn(wsID)
-	if err != nil {
-		return 0, err
-	}
-	var manifestID, blobsID string
-	for _, c := range children {
-		switch {
-		case c.Name == manifestName && !c.IsFolder():
-			manifestID = c.ID
-		case c.Name == blobsFolder && c.IsFolder():
-			blobsID = c.ID
-		}
-	}
-	if manifestID == "" || blobsID == "" {
-		return s.restoreTree(ds, wsID, s.workspace)
-	}
-	raw, err := ds.Get(manifestID)
-	if err != nil {
-		return 0, err
-	}
-	var m manifest
-	if err := json.Unmarshal(raw, &m); err != nil {
-		return 0, fmt.Errorf("capability: workspace manifest unreadable: %w", err)
-	}
-	blobNodes, err := ds.ListIn(blobsID)
-	if err != nil {
-		return 0, err
-	}
-	byName := map[string]string{}
-	for _, b := range blobNodes {
-		byName[b.Name] = b.ID
-	}
-	fetched := map[string][]byte{}
-	count := 0
-	for _, dir := range m.Dirs {
-		rel := filepath.Clean(filepath.FromSlash(dir))
-		if rel == "." || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
-			continue
-		}
-		if err := os.MkdirAll(filepath.Join(s.workspace, rel), 0o700); err != nil {
-			return count, err
-		}
-	}
-	for _, f := range m.Files {
-		rel := filepath.Clean(filepath.FromSlash(f.Path))
-		if rel == "." || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
-			continue // an escaping path is dropped, as Drive's own export does
-		}
-		data, ok := fetched[f.Blob]
-		if !ok {
-			id := byName[f.Blob]
-			if id == "" {
-				log.Printf("[sync] restore %s: blob %s missing in Drive", f.Path, f.Blob[:12])
-				continue
-			}
-			data, err = ds.Get(id)
-			if err != nil {
-				log.Printf("[sync] restore %s: %v", f.Path, err)
-				continue
-			}
-			fetched[f.Blob] = data
-		}
-		target := filepath.Join(s.workspace, rel)
-		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-			return count, err
-		}
-		mode := os.FileMode(0o600)
-		if parsed, perr := parseMode(f.Mode); perr == nil {
-			mode = parsed
-		}
-		if err := os.WriteFile(target, data, mode); err != nil {
-			return count, err
-		}
-		count++
-	}
-	// What came down is exactly what Drive holds: seed the caches so the next
-	// tick does not re-send it all.
-	s.mu.Lock()
-	for name := range byName {
-		s.blobs[name] = true
-	}
-	s.mu.Unlock()
-	return count, nil
-}
-
-func parseMode(s string) (os.FileMode, error) {
-	var m uint32
-	if _, err := fmt.Sscanf(s, "%o", &m); err != nil {
-		return 0, err
-	}
-	return os.FileMode(m) & os.ModePerm, nil
-}
-
 // ---- state -------------------------------------------------------------------
 
 // The uploaded-hash and blob maps persist across a proxy restart within one
@@ -1220,9 +603,6 @@ func (s *Syncer) statePath() string {
 
 type syncState struct {
 	Uploaded map[string]string `json:"uploaded"`
-	Blobs    []string          `json:"blobs"`
-	Tree     string            `json:"tree"`
-	SavedAt  time.Time         `json:"saved_at"`
 }
 
 func (s *Syncer) LoadState() {
@@ -1240,27 +620,38 @@ func (s *Syncer) LoadState() {
 		s.uploaded = st.Uploaded
 		s.files = len(st.Uploaded)
 	}
-	for _, b := range st.Blobs {
-		s.blobs[b] = true
-	}
-	s.blobCount = len(s.blobs)
-	s.treeSaved, s.treeSeen, s.savedAt = st.Tree, st.Tree, st.SavedAt
 }
 
 func (s *Syncer) SaveState() {
 	s.mu.Lock()
-	st := syncState{Uploaded: map[string]string{}, Tree: s.treeSaved, SavedAt: s.savedAt}
+	st := syncState{Uploaded: map[string]string{}}
 	for k, v := range s.uploaded {
 		st.Uploaded[k] = v
 	}
-	for b := range s.blobs {
-		st.Blobs = append(st.Blobs, b)
-	}
 	s.mu.Unlock()
-	sort.Strings(st.Blobs)
 	raw, err := json.Marshal(st)
 	if err != nil {
 		return
 	}
 	_ = os.WriteFile(s.statePath(), raw, 0o600)
+}
+
+// Flush mirrors what is left and reports whether the holder's Drive now
+// holds every conversation this worker wrote: only then may a scratch be
+// wiped (workers.go). A holder folder needs no such proof.
+func (s *Syncer) Flush() bool {
+	if ds, _ := s.store(); ds == nil {
+		return false
+	}
+	for i := 0; i < 2; i++ {
+		if err := s.SyncOnce(); err != nil {
+			return false
+		}
+	}
+	if s.AccessWithdrawn() {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.passRefused && s.lastErr == ""
 }

@@ -78,16 +78,22 @@ raised in the conversation, never on a screen per tool) and to the browser by
 
 ### 2. What the assistant does is a folder of Markdown
 
-The holder's Drive folder for the harness (`AppData/<label>/`) is the source
-of truth for behaviour, mirrored every pass by the proxy
-(`proxy/internal/capability/`):
+Drive holds the memory; the holder folder holds the agent. The holder's
+folder (their working files, see Tenancy below) is where the assistant's
+behaviour lives, as files dsh's right sidebar shows and the chat writes:
+
+| In the holder folder | Meaning |
+|---|---|
+| `skills/` | The holder's skills, one folder per skill with a `SKILL.md`. Seeded once from the deployment's reference set (`SKILLS_PIN`, cloned from [Privasys/agent-skills](https://github.com/Privasys/agent-skills) at build) and theirs to edit from then on; edits in Drive change the next session, with no deploy. |
+| `workspace/<name>/` | One agent: a workspace by that name in the harness, read-only from the agent's side. `agent.md` is its persona, `agent.yaml` its definition (below), `.agents/skills/` its own skills; `state/` and `runs/` are what a run writes, pushed back to Drive. The chat writes the two definition files through the harness's own `agents` server (`write_agent`, `list_agents`; proxy `agents.go`), since Drive's assistant tools are read-only; the holder edits or deletes the folder in Drive. |
+| `sessions/` | dsh's session logs; an agent's runs stay here. |
+
+The holder's Drive folder for the harness (`AppData/<label>/`) holds one
+thing, written by the proxy as it happens (`proxy/internal/capability/`):
 
 | Drive folder | Meaning |
 |---|---|
-| `skills/` | The holder's skills, one folder per skill with a `SKILL.md`. Seeded once from the deployment's reference set (`SKILLS_PIN`, cloned from [Privasys/agent-skills](https://github.com/Privasys/agent-skills) at build) and theirs to edit from then on; edits in Drive change the next session, with no deploy. |
-| `agents/<name>/` | One agent: a workspace by that name in the harness, read-only from the agent's side. `agent.md` is its persona, `agent.yaml` its definition (below), `.agents/skills/` its own skills; `state/` and `runs/` are what a run writes, pushed back to Drive. The chat writes the two definition files through the harness's own `agents` server (`write_agent`, `list_agents`; proxy `agents.go`), since Drive's assistant tools are read-only; the holder edits or deletes the folder in Drive. |
 | `sessions/` | Session logs, one file per file, under their workspace's title (`Archived/` apart). |
-| `workspace/` | Content-addressed snapshots of the working tree. |
 
 `agent.yaml`:
 
@@ -149,10 +155,11 @@ choices (mutualised or dedicated). Per-user isolation rails inside one
 deployment (per-user keys, proxy-bound capabilities, per-session workers) are
 in design; until they land, share a deployment only within one trust domain.
 
-The harness stores no holder data of its own. A holder's files that they
-author and read (skills, agents, outputs, conversations) live in their Drive.
-A holder's working files (their workspace and dsh home) live in their holder
-folder: one directory of the app's volume, encrypted by the kernel with the
+The harness stores no holder data of its own. A holder's conversations are
+written to their Drive as they happen, which makes them a memory other
+sessions and agents can draw on. Everything the agent works with (its
+definitions, skills, outputs and runs, the working trees, the dsh home)
+lives in their holder folder: one directory of the app's volume, encrypted by the kernel with the
 holder's own key, that the enclave OS opens for their worker under a consent
 the holder gave once on their wallet and locks when the worker stops. This
 proxy never sees that key and never names the path; it asks the runtime to

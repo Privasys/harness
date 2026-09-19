@@ -372,6 +372,11 @@ func (s *Syncer) remoteRel(reg registry, localPath string) string {
 	prefix := sessionsFolder + "/"
 	display := parts[0]
 	if ok {
+		// An agent run stays with the agent in the holder folder; only
+		// conversations are the memory Drive keeps (plan §5.9).
+		if s.isAgentCwd(meta.Cwd) {
+			return ""
+		}
 		if reg.archived[meta.ID] {
 			prefix += archivedFolder + "/"
 		}

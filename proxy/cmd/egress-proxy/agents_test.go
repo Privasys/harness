@@ -98,9 +98,9 @@ func TestWriteAgentRefusesABadDefinitionBeforeWriting(t *testing.T) {
 	}
 }
 
-func TestAgentsToolsNeedTheHoldersDrive(t *testing.T) {
+func TestAgentsToolsNeedTheHoldersWorker(t *testing.T) {
 	out, isErr := toolText(t, callAgentsRPC(t, nil, "tools/call", map[string]any{"name": "list_agents", "arguments": map[string]any{}}))
-	if !isErr || !strings.Contains(out["error"].(string), "not connected") {
+	if !isErr || !strings.Contains(out["error"].(string), "not running") {
 		t.Fatalf("without a mirror the tool must say what is missing: %v", out)
 	}
 	st := &fakeAgentStore{fail: errors.New("drive answered 403")}
