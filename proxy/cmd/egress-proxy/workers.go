@@ -493,12 +493,13 @@ func (m *WorkerManager) prepare(w *Worker) error {
 	// a worker can neither list the other users' keys nor open their trees
 	// (each of those is 0700 and theirs). MkdirAll would create them 0700
 	// like the leaf, which is exactly the EACCES a first boot showed.
-	roots := []string{filepath.Dir(filepath.Dir(w.Sessions))}
+	var roots []string
 	if !w.holder {
-		// A holder folder's parent (/data/holders) is the runtime's: laid out
-		// execute-only by it and immutable, so a chmod there is refused and
-		// would end the start (2026-09-18).
-		roots = append(roots, filepath.Dir(w.Dir))
+		// On a holder folder every root is inside it: its parent
+		// (/data/holders) is the runtime's, laid out execute-only by it and
+		// immutable, so a chmod there is refused and would end the start
+		// (2026-09-18, and again with the sessions inside the folder).
+		roots = append(roots, filepath.Dir(w.Dir), filepath.Dir(filepath.Dir(w.Sessions)))
 	}
 	for _, root := range roots {
 		if err := os.MkdirAll(root, 0o711); err != nil {
