@@ -1703,6 +1703,16 @@ edit('packages/client/ui-workspace/src/client/locales.ts', [
       `  'delete.session.desc': 'This deletes “{name}” for good: its record here and the copy in your Drive are removed and cannot be recovered.',\n` +
       `  'delete.session.pending': 'Deleting session…',`,
   ],
+  [
+    'locale: delete workspace deletes (en)',
+    `  'delete.desc': 'This removes “{name}” from the workspace list. The folder and session logs will be kept. Its sessions will appear under Ungrouped.',`,
+    `  'delete.desc': 'This deletes “{name}”: its folder in your working files and its session logs are removed and cannot be recovered. An agent is removed by asking the assistant instead.',`,
+  ],
+  [
+    'locale: delete workspace deletes (zh)',
+    `  'delete.desc': '将把“{name}”从工作区列表中移除。文件夹与会话记录会保留，其会话将显示在“未分组”下。',`,
+    `  'delete.desc': '将删除“{name}”：其在您工作文件中的文件夹和会话记录都会被移除，无法恢复。要移除一个代理，请改为向助手提出。',`,
+  ],
 ])
 
 // --- 2j. Drive knowledge, per workspace ----------------------------------------

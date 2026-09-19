@@ -337,3 +337,6 @@ func firstSegment(root, path string) string {
 	}
 	return strings.SplitN(filepath.ToSlash(rel), "/", 2)[0]
 }
+
+// IsAgentDir is isAgentDir for callers outside the package.
+func (s *Syncer) IsAgentDir(name string) bool { return s.isAgentDir(name) }

@@ -94,3 +94,72 @@ func sessionCwdByID(sessionsRoot, sessionID string) string {
 	}
 	return ""
 }
+
+// WorkspacePathByID returns the directory dsh's registry records for a
+// workspace id, or "".
+func WorkspacePathByID(registryFile, workspaceID string) string {
+	raw, err := os.ReadFile(registryFile)
+	if err != nil {
+		return ""
+	}
+	var doc struct {
+		Tables struct {
+			Workspaces map[string]struct {
+				Path string `json:"path"`
+			} `json:"workspaces"`
+		} `json:"tables"`
+	}
+	if json.Unmarshal(raw, &doc) != nil {
+		return ""
+	}
+	if w, ok := doc.Tables.Workspaces[workspaceID]; ok && w.Path != "" {
+		return filepath.Clean(w.Path)
+	}
+	return ""
+}
+
+// SessionDirsFor lists the session directories under sessionsRoot whose
+// header names cwd as their working directory: the session logs of one
+// workspace.
+func SessionDirsFor(sessionsRoot, cwd string) []string {
+	if sessionsRoot == "" || cwd == "" {
+		return nil
+	}
+	cwd = filepath.Clean(cwd)
+	var out []string
+	projects, err := os.ReadDir(sessionsRoot)
+	if err != nil {
+		return nil
+	}
+	for _, p := range projects {
+		if !p.IsDir() {
+			continue
+		}
+		sessions, err := os.ReadDir(filepath.Join(sessionsRoot, p.Name()))
+		if err != nil {
+			continue
+		}
+		for _, sdir := range sessions {
+			if !sdir.IsDir() {
+				continue
+			}
+			dir := filepath.Join(sessionsRoot, p.Name(), sdir.Name())
+			logs, err := os.ReadDir(dir)
+			if err != nil {
+				continue
+			}
+			for _, l := range logs {
+				if l.IsDir() || !isSessionLog(l.Name()) {
+					continue
+				}
+				if m, ok := readSessionMeta(filepath.Join(dir, l.Name())); ok {
+					if filepath.Clean(m.Cwd) == cwd {
+						out = append(out, dir)
+					}
+					break
+				}
+			}
+		}
+	}
+	return out
+}

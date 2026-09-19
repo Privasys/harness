@@ -733,6 +733,12 @@ func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp 
 			u, _ := neturl.Parse(worker.Upstream())
 			ctx := context.WithValue(r.Context(), upstreamKey{}, u)
 			ctx = context.WithValue(ctx, ingressTokenKey{}, worker.Ingress)
+			if sub != "" && r.Method == http.MethodPost && r.URL.Path == workspaceDeletePath {
+				// A deleted workspace is deleted (workspace_delete.go), not
+				// merely forgotten by dsh.
+				serveWorkspaceDelete(w, r.WithContext(ctx), rp, worker)
+				return
+			}
 			rp.ServeHTTP(w, r.WithContext(ctx))
 		})
 		log.Printf("[ingress] listening on %s -> per-user dsh workers", listen)
