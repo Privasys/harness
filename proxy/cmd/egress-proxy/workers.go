@@ -387,12 +387,15 @@ func (m *WorkerManager) start(w *Worker) {
 				// dsh reads its workspaces: the agent folders (by their
 				// marker) and the registry entries pointing at them.
 				sy.DropDriveCopies()
-				if g := sy.PruneRegistry(); g > 0 {
-					log.Printf("[workers] %s: %d workspace(s) whose folder is gone left the registry", w.Key, g)
-				}
 			}
 		} else if n > 0 {
 			log.Printf("[workers] %s: restored %d file(s) from the holder's Drive", w.Key, n)
+		}
+		// Whatever the restore left: a registry naming folders that are gone
+		// (an earlier scratch, a withdrawn Drive's agents) keeps dsh's
+		// workspace domain from activating at all.
+		if g := sy.PruneRegistry(); g > 0 {
+			log.Printf("[workers] %s: %d registry entr(y/ies) naming a folder that is gone were removed", w.Key, g)
 		}
 		sy.SetReady()
 		// Published only now: the routine engine reads it from another

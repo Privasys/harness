@@ -794,6 +794,24 @@ func (s *Syncer) PruneRegistry() int {
 			gone++
 		}
 	}
+	// dsh keeps the display order in global.workspaceIds and refuses to
+	// activate its workspace domain when that order names a workspace the
+	// table lacks (which took its session controller and directory picker
+	// down with it, 2026-09-19): the order is kept to what the table has.
+	global, _ := doc["global"].(map[string]any)
+	if ids, ok := global["workspaceIds"].([]any); ok {
+		kept := make([]any, 0, len(ids))
+		for _, id := range ids {
+			if s, ok := id.(string); ok {
+				if _, present := workspaces[s]; present {
+					kept = append(kept, id)
+					continue
+				}
+				gone++
+			}
+		}
+		global["workspaceIds"] = kept
+	}
 	if gone == 0 {
 		return 0
 	}
