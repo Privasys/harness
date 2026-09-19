@@ -91,6 +91,48 @@ func resourceLegsFor(decls []resourceDecl, storageName string) (storage *capabil
 	return storage, legs
 }
 
+// peerAppIDOf is the app id a verified dial found behind a tool's host
+// (attested.RATLSTransport.PeerAppID); set by main, nil off the platform.
+var peerAppIDOf func(host string) string
+
+// resourceForTool names the declared resource a mounted tool serves for the
+// holder, or "" when none can be named.
+//
+// Nothing in the declaration ties a tool to a resource, and nothing should:
+// a tool is a name and a host, a resource is a kind the runtime brokers, and
+// which app serves a kind on THIS fleet is the control plane's decision, not
+// the image's. The two meet through attestation: the tool's host has been
+// proved to be some app (the transport keeps that finding), and the runtime
+// reports, per resource, the app that serves it here (`resource_app`). A
+// resource whose service is the app answering for the tool is the tool's.
+// When no dial has proved the host yet, or the runtime names no match, the
+// declared kind's first segment is read as the tool's name (`<tool>.<what>`,
+// the same shape an event source has), which is the convention a
+// deployment follows when it adds a connector as one tool, one host and one
+// resource.
+func resourceForTool(sub, tool, host string) string {
+	legs := currentAccessLegs()
+	if sub == "" || len(legs) == 0 {
+		return ""
+	}
+	if peerAppIDOf != nil && host != "" {
+		if appID := peerAppIDOf(host); appID != "" {
+			for _, l := range legs {
+				st, err := l.broker.Status(sub)
+				if err == nil && st != nil && st.ResourceApp != "" && strings.EqualFold(st.ResourceApp, appID) {
+					return l.name
+				}
+			}
+		}
+	}
+	for _, l := range legs {
+		if prefix, _, ok := strings.Cut(l.kind, "."); ok && prefix == tool {
+			return l.name
+		}
+	}
+	return ""
+}
+
 // resourceNames lists the declared names for logs.
 func resourceNames(legs []resourceLeg) string {
 	names := make([]string, 0, len(legs))

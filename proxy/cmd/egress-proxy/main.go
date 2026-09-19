@@ -435,6 +435,23 @@ func main() {
 		// mounted tool serves it; a run is a session dispatched into the
 		// worker through its routines door.
 		routines := newRoutineEngine(mgr, client, cfg.toolHosts)
+		routineEng = routines
+		// A feed that needs the holder is put to their device once, for the
+		// resource the tool's attested app serves (resources.go), and held
+		// until the runtime's stream reports their answer.
+		peerAppIDOf = transport.PeerAppID
+		routines.resourceFor = func(sub, tool string) string {
+			return resourceForTool(sub, tool, cfg.toolHosts[tool])
+		}
+		routines.askHolder = func(sub, resource string) error {
+			for _, l := range legs {
+				if l.name == resource {
+					_, err := l.broker.Request(sub, true)
+					return err
+				}
+			}
+			return fmt.Errorf("no declared resource %q", resource)
+		}
 		routines.Start(context.Background())
 		// The runtime's record of approved holders re-arms their routines at
 		// boot, and its event stream keeps every status current (events.go).
@@ -659,7 +676,7 @@ func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp 
 	if mgr != nil {
 		mgr.OnChange = notify.Notify
 	}
-	go followRuntimeEvents(context.Background(), broker, legs, broker.Resource(), mgr, notify)
+	go followRuntimeEvents(context.Background(), broker, legs, broker.Resource(), mgr, notify, routineEng)
 	var holdersBroker *capability.Broker
 	if mgr != nil {
 		holdersBroker = mgr.holders

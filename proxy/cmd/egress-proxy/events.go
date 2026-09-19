@@ -23,7 +23,9 @@ import (
 //   - an approval of the storage resource starts the holder's worker, so
 //     their agents load and their routines arm without a visit;
 //   - a revoke of the holder folder stops the holder's worker, so the
-//     runtime's close has nothing left to kill.
+//     runtime's close has nothing left to kill;
+//   - an approval (or a denial) reaches the routine engine, which holds a
+//     change feed that asked for the holder until they answer (routines.go).
 //
 // A runtime without the stream ends the loop; the browser then falls back
 // to its slow refresh and routines still arm on the holder's next visit.
@@ -70,7 +72,7 @@ func (n *subjectNotifier) Notify(sub string) {
 }
 
 // followRuntimeEvents runs the loop for the life of the process.
-func followRuntimeEvents(ctx context.Context, stream *capability.Broker, legs []resourceLeg, storageName string, mgr *WorkerManager, notify *subjectNotifier) {
+func followRuntimeEvents(ctx context.Context, stream *capability.Broker, legs []resourceLeg, storageName string, mgr *WorkerManager, notify *subjectNotifier, routines *routineEngine) {
 	if stream == nil || !stream.Enabled() {
 		return
 	}
@@ -80,6 +82,9 @@ func followRuntimeEvents(ctx context.Context, stream *capability.Broker, legs []
 			l.broker.Forget(ev.Subject)
 		}
 		notify.Notify(ev.Subject)
+		if routines != nil {
+			routines.Event(ev)
+		}
 		if mgr == nil || ev.Subject == "" {
 			return
 		}

@@ -119,7 +119,14 @@ reply                {"changes": [...], "cursor": "<opaque>"}
 ```
 
 The proxy holds one such call per holder and agent, as the holder, over the
-attested tool leg; the tool parks it until something changes. A run is a new
+attested tool leg; the tool parks it until something changes. A tool that
+has nothing for the holder until they act on their device answers HTTP 403
+with `"needs_holder": true`: the proxy then asks the holder's wallet once,
+for the resource the tool's attested app serves (the runtime says which app
+serves each declared resource, and the attested dial says which app answers
+for the tool), and holds the feed until the runtime's event stream reports
+the approval. A denial is logged once and keeps the hold; the holder reopens
+the request from the chat. Every other failure backs off and retries. A run is a new
 session in the agent's workspace, opened through a route on the worker's own
 server (`app/privasys-routines.mjs`) that only the proxy can reach. Grants
 live on the manager; the proxy holds a holder's agents, cursors and last runs

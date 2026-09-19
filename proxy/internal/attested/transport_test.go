@@ -91,3 +91,19 @@ func TestOtherForbiddenPassesThrough(t *testing.T) {
 		t.Fatalf("a policy refusal must pass through untouched: status=%d evictions=%d calls=%d", resp.StatusCode, evictions, len(rt.bodies))
 	}
 }
+
+func TestPeerAppIDIsWhatAVerifiedDialFound(t *testing.T) {
+	tr := &RATLSTransport{}
+	if got := tr.PeerAppID("tool.example"); got != "" {
+		t.Fatalf("before any dial the host is unknown, got %q", got)
+	}
+	tr.recordPeer("Tool.Example", "7958ba28")
+	tr.recordPeer("", "ignored")
+	tr.recordPeer("other.example", "")
+	if got := tr.PeerAppID("tool.example"); got != "7958ba28" {
+		t.Fatalf("the finding is kept by lowercase host, got %q", got)
+	}
+	if got := tr.PeerAppID("other.example"); got != "" {
+		t.Fatalf("an empty app id proves nothing and is not kept, got %q", got)
+	}
+}

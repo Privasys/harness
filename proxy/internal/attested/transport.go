@@ -108,6 +108,36 @@ type RATLSTransport struct {
 	// dialVerified is the only way a connection enters it).
 	pool     *http.Transport
 	poolOnce sync.Once
+
+	// peers records, per lowercase host, the app id (OID 3.6) of the
+	// attested workload that last answered there. It is what a verified
+	// dial PROVED about the host, so a caller that knows a host by name can
+	// learn which app it is without trusting any catalogue: the routine
+	// engine uses it to match a tool to the declared resource the runtime
+	// says that app serves (resources.go).
+	peersMu sync.RWMutex
+	peers   map[string]string
+}
+
+// recordPeer remembers the app id a verified dial found behind host.
+func (t *RATLSTransport) recordPeer(host, appID string) {
+	if host == "" || appID == "" {
+		return
+	}
+	t.peersMu.Lock()
+	if t.peers == nil {
+		t.peers = map[string]string{}
+	}
+	t.peers[strings.ToLower(host)] = appID
+	t.peersMu.Unlock()
+}
+
+// PeerAppID is the app id of the attested workload a verified dial last
+// found behind host, or "" when no dial to it has succeeded yet.
+func (t *RATLSTransport) PeerAppID(host string) string {
+	t.peersMu.RLock()
+	defer t.peersMu.RUnlock()
+	return t.peers[strings.ToLower(host)]
 }
 
 // CloseIdleConnections evicts pooled verified connections. Wired to the
@@ -311,6 +341,9 @@ func (t *RATLSTransport) dialVerified(_ context.Context, _ string, addr string) 
 		}
 	}
 
+	// The host is now a proven app: keep the finding for whoever needs to
+	// know which app answers there (PeerAppID).
+	t.recordPeer(host, rc.AppIDFromCert(info))
 	return cli.Conn(), nil
 }
 

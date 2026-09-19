@@ -44,11 +44,22 @@ package main
 // they are away. A source that keeps failing (a withdrawn grant, a tool that
 // is down) backs off to a quarter of an hour and says so once, not once a
 // minute.
+//
+// One refusal is not a failure to retry: a tool that answers 403 with
+// `"needs_holder": true` has nothing for this holder until they act on their
+// device (an approval, a setup the service asks of them). Polling a service
+// that says so is asking a locked door every minute. Instead the engine puts
+// the question to the holder ONCE, through the runtime, for the resource the
+// tool serves (the same ask the access server's request_access makes with
+// ask_again), and then holds the feed until the runtime's event stream says
+// the holder approved, or the agent is gone. A denial is logged once and
+// keeps the hold: the holder said no, and they reopen it from the chat.
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -116,13 +127,45 @@ type routineEngine struct {
 	toolHosts map[string]string
 	now       func() time.Time
 
+	// resourceFor names the declared resource a tool serves for a holder
+	// (resources.go); askHolder puts that resource to the holder's device,
+	// reopening a declined ask (the broker's request with retry). Nil off
+	// the platform, where there is nobody to ask.
+	resourceFor func(sub, tool string) string
+	askHolder   func(sub, resource string) error
+	// feed makes one held change-feed call (changes); tests replace it.
+	feed func(ctx context.Context, sub, tool, call, cursor string) (int, string, error)
+
 	mu       sync.Mutex
 	subjects map[string]*routineState
+	// holds are the change feeds waiting for the holder, per subject
+	// (holderHold); the runtime's events release them (Event).
+	holds map[string][]*holderHold
 }
 
 func newRoutineEngine(mgr *WorkerManager, client *http.Client, toolHosts map[string]string) *routineEngine {
-	return &routineEngine{mgr: mgr, client: client, toolHosts: toolHosts,
-		now: time.Now, subjects: map[string]*routineState{}}
+	e := &routineEngine{mgr: mgr, client: client, toolHosts: toolHosts,
+		now: time.Now, subjects: map[string]*routineState{}, holds: map[string][]*holderHold{}}
+	e.feed = e.changes
+	return e
+}
+
+// routineEng is the process's engine, set by main when workers are on: what
+// the runtime's event stream (events.go) reaches. Nil in the single-user
+// layout, where there are no routines.
+var routineEng *routineEngine
+
+// errNeedsHolder is a change-feed refusal that says the tool has nothing for
+// this holder until they act on their device: not a failure to back off from.
+var errNeedsHolder = errors.New("the tool needs the holder")
+
+// holderHold is one change feed waiting for the holder's approval.
+type holderHold struct {
+	agent    string
+	resource string // "" when no declared resource serves the tool
+	released chan struct{}
+	done     bool // released once; a channel closes once
+	denied   bool // the denial was logged; the hold stays
 }
 
 func (e *routineEngine) fresh(st *routineState) *routineState {
@@ -276,7 +319,16 @@ func (e *routineEngine) poll(ctx context.Context, st *routineState, a capability
 		e.mu.Lock()
 		cursor := st.Cursors[a.Name]
 		e.mu.Unlock()
-		changes, next, err := e.changes(ctx, st.Subject, tool, call, cursor)
+		changes, next, err := e.feed(ctx, st.Subject, tool, call, cursor)
+		if errors.Is(err, errNeedsHolder) {
+			// Not a failure: the tool is waiting for the holder, so this
+			// engine waits with it, without a second call until they act.
+			if !e.holdForHolder(ctx, st, a, tool) {
+				return
+			}
+			failures = 0
+			continue
+		}
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -319,6 +371,9 @@ func (e *routineEngine) changes(ctx context.Context, sub, tool, call, cursor str
 	if err != nil {
 		return 0, "", err
 	}
+	if holderNeeded(status, raw) {
+		return 0, "", fmt.Errorf("%w: %s", errNeedsHolder, truncate(raw, 200))
+	}
 	if status/100 != 2 {
 		return 0, "", fmt.Errorf("status %d: %s", status, truncate(raw, 200))
 	}
@@ -330,6 +385,110 @@ func (e *routineEngine) changes(ctx context.Context, sub, tool, call, cursor str
 		return 0, "", fmt.Errorf("parse changes: %w", err)
 	}
 	return len(out.Changes), out.Cursor, nil
+}
+
+// holderNeeded reads a tool's refusal for the one thing it may say beyond
+// "no": that the holder has to act on their device before the feed has
+// anything for them (HTTP 403 with `"needs_holder": true`). Any tool may
+// say it; what the holder has to do is the tool's business.
+func holderNeeded(status int, raw []byte) bool {
+	if status != http.StatusForbidden {
+		return false
+	}
+	var body struct {
+		NeedsHolder bool `json:"needs_holder"`
+	}
+	return json.Unmarshal(raw, &body) == nil && body.NeedsHolder
+}
+
+// holdForHolder asks the holder's device once for the resource the tool
+// serves, then holds the feed until the runtime reports an approval for it
+// (Event) or ctx ends. It reports whether the feed may go on.
+func (e *routineEngine) holdForHolder(ctx context.Context, st *routineState, a capability.AgentSpec, tool string) bool {
+	resource := ""
+	if e.resourceFor != nil {
+		resource = e.resourceFor(st.Subject, tool)
+	}
+	h := &holderHold{agent: a.Name, resource: resource, released: make(chan struct{})}
+	e.mu.Lock()
+	e.holds[st.Subject] = append(e.holds[st.Subject], h)
+	e.mu.Unlock()
+	defer e.dropHold(st.Subject, h)
+
+	switch {
+	case resource == "":
+		log.Printf("[routines] %.8s…/%s: the %s change feed needs the holder, and no declared resource serves %s, so there is nothing to ask for; waiting for any approval of theirs",
+			st.Subject, a.Name, a.Trigger.On, tool)
+	case e.askHolder == nil:
+		log.Printf("[routines] %.8s…/%s: the %s change feed needs the holder for %s; nothing here can ask their device, waiting for the approval",
+			st.Subject, a.Name, a.Trigger.On, resource)
+	default:
+		if err := e.askHolder(st.Subject, resource); err != nil {
+			log.Printf("[routines] %.8s…/%s: asking the holder's device for %s failed (%v); waiting for the approval", st.Subject, a.Name, resource, err)
+		} else {
+			log.Printf("[routines] %.8s…/%s: asked the holder's device for %s; waiting for the approval", st.Subject, a.Name, resource)
+		}
+	}
+	select {
+	case <-h.released:
+		log.Printf("[routines] %.8s…/%s: the holder approved; the %s change feed resumes", st.Subject, a.Name, a.Trigger.On)
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// dropHold forgets a hold whose poll ended, however it ended.
+func (e *routineEngine) dropHold(sub string, h *holderHold) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	kept := e.holds[sub][:0]
+	for _, x := range e.holds[sub] {
+		if x != h {
+			kept = append(kept, x)
+		}
+	}
+	if len(kept) == 0 {
+		delete(e.holds, sub)
+	} else {
+		e.holds[sub] = kept
+	}
+}
+
+// Event is what the runtime's stream means for the feeds waiting on the
+// holder: an approval of the resource a hold names (or any approval, for a
+// hold that could name none) releases it; a denial is said once and keeps
+// it, since the holder reopens a declined ask from the chat. Every other
+// event is nobody's business here.
+func (e *routineEngine) Event(ev capability.Event) {
+	if ev.Subject == "" {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, h := range e.holds[ev.Subject] {
+		matches := h.resource == "" || h.resource == ev.Resource
+		switch {
+		case ev.Type == "capability.approved" && matches && !h.done:
+			h.done = true
+			close(h.released)
+		case ev.Type == "capability.denied" && h.resource == ev.Resource && !h.denied:
+			h.denied = true
+			log.Printf("[routines] %.8s…/%s: the holder declined %s; the change feed keeps waiting (they can reopen it from the chat)", ev.Subject, h.agent, ev.Resource)
+		}
+	}
+}
+
+// waiting reports whether the agent's feed is held for the holder (tests).
+func (e *routineEngine) waiting(sub, agent string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, h := range e.holds[sub] {
+		if h.agent == agent && !h.done {
+			return true
+		}
+	}
+	return false
 }
 
 // dispatch starts the holder's worker if needed and opens a run of the agent
