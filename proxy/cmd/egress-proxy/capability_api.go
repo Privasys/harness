@@ -37,7 +37,7 @@ type withdrawnFor func(sub string) bool
 // is unavailable" until a manual refresh (2026-09-19).
 type workerGeneration func(sub string) string
 
-func registerCapabilityAPI(mux *http.ServeMux, broker *capability.Broker, withdrawn withdrawnFor, notify *subjectNotifier, generation workerGeneration) {
+func registerCapabilityAPI(mux *http.ServeMux, broker, holders *capability.Broker, withdrawn withdrawnFor, notify *subjectNotifier, generation workerGeneration) {
 	// Begin an ask. Called by the harness UI over the sealed session, so the
 	// relay-asserted subject names the holder this capability will belong to.
 	mux.HandleFunc("POST /privasys/capability/request", func(w http.ResponseWriter, r *http.Request) {
@@ -49,6 +49,24 @@ func registerCapabilityAPI(mux *http.ServeMux, broker *capability.Broker, withdr
 			return
 		}
 		recordSubject(sub)
+		// ?kind=app_storage asks for the holder folder instead: the same
+		// runtime route on the other broker. With retry, a standing grant is
+		// asked afresh, which is how a holder whose wallet lost the record
+		// (an approval the wallet could not report, 2026-09-18) gets one.
+		if r.URL.Query().Get("kind") == holderResourceKind {
+			if holders == nil || !holders.Enabled() {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "this deployment declares no working-files folder"})
+				return
+			}
+			out, err := holders.Request(sub, r.URL.Query().Get("retry") == "1")
+			if err != nil {
+				log.Printf("[capability] holder folder request: %v", err)
+				writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, out)
+			return
+		}
 		if !broker.Enabled() {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
 				"error": "this harness is not running on the platform, so there is no Drive to connect",

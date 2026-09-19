@@ -67,6 +67,7 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
   const [ask, setAsk] = useState<PendingAsk | undefined>(undefined)
   const [busy, setBusy] = useState(false)
   const [open, setOpen] = useState(false)
+  const [folderAsk, setFolderAsk] = useState<string | undefined>(undefined)
   // Set while an ask is on its way to the device: the row says so and the
   // button stays down (one tap sends one push; a second click sent a second
   // notification, 2026-09-16). The answer arrives through the held request
@@ -204,6 +205,20 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
       }, () => { setBusy(false) })
   }
 
+  // The working-files folder: approved once on the device, standing until
+  // revoked there. Asking again re-sends that approval, for a wallet that
+  // lost the record (an approval it could not report), or a new phone.
+  const askFolderAgain = (): void => {
+    if (busy) return
+    setBusy(true)
+    void pvFetch('/privasys/capability/request?kind=app_storage&retry=1', { method: 'POST' })
+      .then(async r => (r.ok ? await r.json() : undefined))
+      .then(d => {
+        setBusy(false)
+        setFolderAsk(d?.nonce ? 'sent' : d?.status === 'already_granted' ? 'granted' : 'failed')
+      }, () => { setBusy(false); setFolderAsk('failed') })
+  }
+
   if (state === undefined) return null
 
   // A grant the runtime recorded but Drive now refuses (withdrawn there, or
@@ -321,6 +336,17 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
           {ask?.status === 'declined'
             ? <p className={css.muted}>Still declined.</p>
             : null}
+          <p className={css.muted}>
+            Your working files (agents, skills, working trees) are in your own folder
+            here, under the approval you gave on your device. If your wallet no longer
+            lists it, ask your device again: the folder stays as it is.
+          </p>
+          <div className={css.actions}>
+            <Button variant="outline" size="sm" disabled={busy} onClick={askFolderAgain}>
+              {folderAsk === 'sent' ? 'Sent to your device…' : 'Ask my device again for the working files'}
+            </Button>
+          </div>
+          {folderAsk === 'failed' ? <p className={css.muted}>That could not be sent; try again in a moment.</p> : null}
         </div>
       </Modal>
     </>

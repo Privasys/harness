@@ -660,7 +660,11 @@ func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp 
 		mgr.OnChange = notify.Notify
 	}
 	go followRuntimeEvents(context.Background(), broker, legs, broker.Resource(), mgr, notify)
-	registerCapabilityAPI(mux, broker, withdrawnFor, notify, func(sub string) string {
+	var holdersBroker *capability.Broker
+	if mgr != nil {
+		holdersBroker = mgr.holders
+	}
+	registerCapabilityAPI(mux, broker, holdersBroker, withdrawnFor, notify, func(sub string) string {
 		if mgr == nil {
 			return ""
 		}
