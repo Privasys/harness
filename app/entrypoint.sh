@@ -67,6 +67,8 @@ case "${PRIVASYS_APP_ID:-}" in
     # dev connector, which keeps its credentials in the dev Drive.
     export HARNESS_TOOL_HOSTS="${HARNESS_TOOL_HOSTS/mail=mail-connector.apps.privasys.org/mail=mail-connector.apps.test.privasys.org}"
     export HARNESS_TOOL_HOSTS="${HARNESS_TOOL_HOSTS/calendar=calendar-connector.apps.privasys.org/calendar=calendar-connector.apps.test.privasys.org}"
+    export HARNESS_TOOL_HOSTS="${HARNESS_TOOL_HOSTS/files=files-connector.apps.privasys.org/files=files-connector.apps.test.privasys.org}"
+    export HARNESS_TOOL_HOSTS="${HARNESS_TOOL_HOSTS/meetings=meetings-connector.apps.privasys.org/meetings=meetings-connector.apps.test.privasys.org}"
     # Which Drive brokers the storage CONSENT is the runtime's decision
     # (its StorageResourceApp: the fleet's Drive, the dev id on the test
     # control plane), not this script's — the harness no longer names it.
