@@ -47,7 +47,7 @@ COPY web /build/web
 # for it. The rows are baked here because presets compose their own tree,
 # which no runtime patch reaches. The harness's own access server is always
 # mounted. A deployment with a connector adds its name here and its host below.
-ARG HARNESS_TOOLS="web_search web_reader drive mail"
+ARG HARNESS_TOOLS="web_search web_reader drive mail calendar"
 RUN HARNESS_TOOLS="${HARNESS_TOOLS}" node /build/web/apply-overlay.mjs /dsh
 # Build the frontend dist (dsh-web-app refuses to load without it) and
 # materialize the web profile so its plugin node_modules are baked into the
@@ -194,7 +194,7 @@ ENV HARNESS_EGRESS_MODE=open
 ENV DSH_TELEMETRY_DISABLED=1
 ENV HARNESS_MODEL_HOST=confidential-ai.apps.privasys.org
 # One host per tool named in HARNESS_TOOLS (name=host, comma-separated).
-ENV HARNESS_TOOL_HOSTS=web_search=web-search-brave.apps.privasys.org,web_reader=web-browser-lightpanda.apps.privasys.org,drive=privasys-drive.apps.privasys.org,mail=mail-connector.apps.privasys.org
+ENV HARNESS_TOOL_HOSTS=web_search=web-search-brave.apps.privasys.org,web_reader=web-browser-lightpanda.apps.privasys.org,drive=privasys-drive.apps.privasys.org,mail=mail-connector.apps.privasys.org,calendar=calendar-connector.apps.privasys.org
 # Public browser-UI shell: these prefixes are the forked dsh SPA + Privasys
 # auth/attestation shell (HTML/JS/CSS — public measured code, no user data).
 # The enclave session-relay serves them in the CLEAR on the gateway-terminated
@@ -216,11 +216,13 @@ LABEL org.privasys.static-unsealed-prefixes="/,/assets/,/privasys/,/plugins/,/fa
 # hosted product offers it to everyone by default, and a fleet that has no
 # connector simply has no resource service for the kind, so the runtime
 # refuses the ask rather than showing the holder a screen it cannot honour.
+# The calendar connector is declared the same way, as the third connector
+# kind: one tool name, one host, one resource line, nothing else.
 #
 # A fork adds or removes entries here; the proxy reads the same text back
 # from HARNESS_RESOURCES and builds one broker per entry (proxy
 # resources.go), so the declaration is the only place a resource is named.
-ARG HARNESS_RESOURCES='[{"kind":"storage.folder","name":"storage","label":"Harness","permissions":["read","write","delete"]},{"kind":"app_storage","name":"holders","label":"Your working files","permissions":["read","write"],"options":{"unattended":true}},{"kind":"mail.mailbox","name":"mailbox","label":"Mail Connector","permissions":["read","write"]}]'
+ARG HARNESS_RESOURCES='[{"kind":"storage.folder","name":"storage","label":"Harness","permissions":["read","write","delete"]},{"kind":"app_storage","name":"holders","label":"Your working files","permissions":["read","write"],"options":{"unattended":true}},{"kind":"mail.mailbox","name":"mailbox","label":"Mail Connector","permissions":["read","write"]},{"kind":"calendar.events","name":"calendar","label":"Calendar Connector","permissions":["read","write"]}]'
 ENV HARNESS_RESOURCES=${HARNESS_RESOURCES}
 LABEL org.privasys.manifest="{\"tools\":[],\"resources\":${HARNESS_RESOURCES}}"
 # Link the GHCR package to this repo so its Actions inherit write access

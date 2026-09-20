@@ -69,7 +69,7 @@ code reads them back:
 | `HARNESS_RESOURCES` | The user-owned resources the enclave runtime brokers for the harness, as the manifest JSON. The measured `LABEL org.privasys.manifest` is built from it and the proxy builds one capability broker per entry (`proxy/cmd/egress-proxy/resources.go`). The entry named by `HARNESS_STORAGE_RESOURCE` (default `storage`) is the holder's folder, where sessions, policy and skills live. |
 
 The hosted Privasys Harness declares web search, a web reader, the holder's
-Drive and the platform's mail connector; a fork removes or adds lines. A new
+Drive and the platform's mail and calendar connectors; a fork removes or adds lines. A new
 connector is its tool name, its host and its resource, and nothing else in
 the image changes. Every declared resource is offered to the agent by the
 access server (`list_access`, `request_access`, so a missing approval is
