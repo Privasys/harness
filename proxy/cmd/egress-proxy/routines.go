@@ -123,6 +123,14 @@ type routineState struct {
 	pending     map[string]time.Time          // agent -> first event of the current burst
 	pollers     map[string]context.CancelFunc // agent -> the held poll
 	dispatching map[string]bool               // agent -> a dispatch in flight
+	runs        map[string]dayRuns            // agent -> today's dispatch count
+	capSaid     map[string]string             // agent -> the UTC day the cap refusal was logged
+}
+
+// dayRuns counts one agent's dispatches on one UTC day.
+type dayRuns struct {
+	day string
+	n   uint64
 }
 
 type routineEngine struct {
@@ -142,6 +150,16 @@ type routineEngine struct {
 	askHolder   func(sub, resource string) error
 	// feed makes one held change-feed call (changes); tests replace it.
 	feed func(ctx context.Context, sub, tool, call, cursor string) (int, string, error)
+	// runsPerDay is the holder's cap on unattended runs per agent and UTC
+	// day (policy `spend.routines.runs_per_day`); nil or 0 is unlimited.
+	runsPerDay func(sub string) uint64
+	// sessionCwd names the working directory of one of the holder's dsh
+	// sessions, from its log, so a model-leg refusal can be laid at a run's
+	// door: a run's session works in its agent's directory.
+	sessionCwd func(sub, session string) string
+	// pauser gives the holder's agent writer (capability.Syncer.PauseAgent);
+	// nil when their worker is gone.
+	pauser func(sub string) func(name, why string, at time.Time) error
 
 	mu       sync.Mutex
 	subjects map[string]*routineState
@@ -185,6 +203,8 @@ func (e *routineEngine) fresh(st *routineState) *routineState {
 	st.pending = map[string]time.Time{}
 	st.pollers = map[string]context.CancelFunc{}
 	st.dispatching = map[string]bool{}
+	st.runs = map[string]dayRuns{}
+	st.capSaid = map[string]string{}
 	return st
 }
 
@@ -285,6 +305,9 @@ func (e *routineEngine) reconcile(ctx context.Context, st *routineState) {
 			}
 		}
 		if !st.dispatching[name] && runDue(a, now, st.LastRun[name], st.pending[name], e.started) {
+			if e.pastDailyCap(st, name, now) {
+				continue
+			}
 			due = append(due, a)
 			st.dispatching[name] = true
 		}
@@ -293,6 +316,120 @@ func (e *routineEngine) reconcile(ctx context.Context, st *routineState) {
 	sort.Slice(due, func(i, j int) bool { return due[i].Name < due[j].Name })
 	for _, a := range due {
 		go e.dispatch(ctx, st, a)
+	}
+}
+
+// runLiveWindow is how long after a dispatch a model-leg refusal that names
+// no agent's session is still laid at that run's door: the door never
+// reports completion, and a run's first model call comes within this.
+const runLiveWindow = 10 * time.Minute
+
+// pastDailyCap counts a dispatch against the holder's runs-per-day cap and
+// reports whether the cap refuses it, saying so once per agent and UTC day.
+// The caller holds e.mu.
+func (e *routineEngine) pastDailyCap(st *routineState, name string, now time.Time) bool {
+	day := now.UTC().Format("2006-01-02")
+	r := st.runs[name]
+	if r.day != day {
+		r = dayRuns{day: day}
+	}
+	var limit uint64
+	if e.runsPerDay != nil {
+		limit = e.runsPerDay(st.Subject)
+	}
+	if limit > 0 && r.n >= limit {
+		if st.capSaid[name] != day {
+			st.capSaid[name] = day
+			log.Printf("[routines] %.8s…/%s: %d run(s) today is the holder's cap (spend.routines.runs_per_day); no more until tomorrow, UTC", st.Subject, name, r.n)
+		}
+		return true
+	}
+	r.n++
+	st.runs[name] = r
+	return false
+}
+
+// modelPaymentRefused is told of a 402 on the model leg (main.go forward),
+// with the acting subject and the dsh session the call was for; set by main
+// to the engine's paymentRefused when workers are on.
+var modelPaymentRefused func(sub, session string)
+
+// paymentRefused pauses every agent of the holder when the model service
+// refuses one of their runs for payment: an unattended agent must not go
+// on spending against an account that says no, and nobody is watching to
+// stop it. The run is known by its session's working directory (an agent's
+// own); a session whose log names none yet is taken for a run when one was
+// dispatched within runLiveWindow. A holder's own conversation refused with
+// no run about pauses nothing: they are there to read the answer.
+func (e *routineEngine) paymentRefused(sub, session string) {
+	e.mu.Lock()
+	st := e.subjects[sub]
+	if st == nil {
+		e.mu.Unlock()
+		return
+	}
+	agents := append([]capability.AgentSpec(nil), st.Agents...)
+	lastRun := make(map[string]time.Time, len(st.LastRun))
+	for k, v := range st.LastRun {
+		lastRun[k] = v
+	}
+	e.mu.Unlock()
+
+	cwd := ""
+	if e.sessionCwd != nil && session != "" {
+		cwd = e.sessionCwd(sub, session)
+	}
+	culprit := ""
+	for _, a := range agents {
+		if cwd != "" && a.Path != "" && (cwd == a.Path || strings.HasPrefix(cwd, a.Path+"/") || strings.HasPrefix(cwd, a.Path+"\\")) {
+			culprit = a.Name
+		}
+	}
+	if culprit == "" {
+		now := e.now()
+		for name, t := range lastRun {
+			if now.Sub(t) <= runLiveWindow {
+				culprit = name
+			}
+		}
+	}
+	if culprit == "" {
+		return
+	}
+	e.pauseAll(st, fmt.Sprintf("the model service refused a run of %q for payment (HTTP 402)", culprit))
+}
+
+// pauseAll pauses every agent of the holder that is not paused yet, in
+// memory at once (a second refusal in flight must not write twice) and in
+// their definitions.
+func (e *routineEngine) pauseAll(st *routineState, why string) {
+	now := e.now()
+	e.mu.Lock()
+	var names []string
+	for i := range st.Agents {
+		if !st.Agents[i].Paused {
+			st.Agents[i].Paused = true
+			names = append(names, st.Agents[i].Name)
+		}
+	}
+	e.mu.Unlock()
+	if len(names) == 0 {
+		return
+	}
+	sort.Strings(names)
+	log.Printf("[routines] %.8s…: %s; pausing every agent of the holder (%s)", st.Subject, why, strings.Join(names, ", "))
+	var pause func(name, why string, at time.Time) error
+	if e.pauser != nil {
+		pause = e.pauser(st.Subject)
+	}
+	for _, name := range names {
+		if pause == nil {
+			log.Printf("[routines] %.8s…/%s: paused in memory only; the holder's worker is gone, so the definition could not be written", st.Subject, name)
+			continue
+		}
+		if err := pause(name, why+"; ask the chat to unpause this agent once the account is funded", now); err != nil {
+			log.Printf("[routines] %.8s…/%s: pausing: %v", st.Subject, name, err)
+		}
 	}
 }
 

@@ -200,6 +200,27 @@ type Spend struct {
 	// Tools overrides the per-call figure for one attested tool app, by the
 	// name the harness mounts it under (web_search, web_reader, drive, …).
 	Tools map[string]uint64 `json:"tools,omitempty"`
+	// Routines bounds what the holder's agents may do unattended.
+	Routines *RoutineSpend `json:"routines,omitempty"`
+}
+
+// RoutineSpend caps unattended runs. The figure is a COUNT, not credits:
+// the model service meters a turn to the holder's account on its own side
+// and its answer to this proxy carries token counts at most, never the
+// price, which is the control plane's per-model tariff. What this proxy can
+// attribute to a run is therefore that the run happened, and how many did
+// today, so the cap that means something here is runs per UTC day, per
+// agent. Zero means "not set": unlimited.
+type RoutineSpend struct {
+	RunsPerDay uint64 `json:"runs_per_day,omitempty"`
+}
+
+// RunsPerDay is the routines cap, 0 when none is set.
+func (s *Spend) RunsPerDay() uint64 {
+	if s == nil || s.Routines == nil {
+		return 0
+	}
+	return s.Routines.RunsPerDay
 }
 
 // PerCall returns the per-call figure that applies to one tool.

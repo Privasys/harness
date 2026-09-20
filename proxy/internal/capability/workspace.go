@@ -189,3 +189,10 @@ func WorkspacePathsByID(registryFile string) map[string]string {
 	}
 	return out
 }
+
+// SessionCwd is the working directory a session's log names, or "" when the
+// session is unknown or its log names none yet. Exported for the routine
+// engine, which lays a model-leg refusal at a run's door by it.
+func SessionCwd(sessionsRoot, sessionID string) string {
+	return sessionCwdByID(sessionsRoot, sessionID)
+}

@@ -122,6 +122,24 @@ func (e Effective) SpendCapsFor(tool string) SpendCaps {
 	return caps
 }
 
+// RoutineRunsPerDay is how many unattended runs one agent may make in a UTC
+// day for this subject: the holder's own figure narrowed by the ceiling's,
+// where either sets one. Zero is unlimited, the default when neither says;
+// unlike a priced call, a run needs no standing consent, the holder wrote
+// the agent.
+func (e Effective) RoutineRunsPerDay() uint64 {
+	var n uint64
+	if e.Tenant != nil {
+		n = e.Tenant.Spend.RunsPerDay()
+	}
+	if e.Ceiling != nil {
+		if c := e.Ceiling.Spend.RunsPerDay(); c > 0 && (n == 0 || c < n) {
+			n = c
+		}
+	}
+	return n
+}
+
 // AdmitsSpend decides one priced call: credits is the price the attested
 // runtime quoted, spent is the subject's running total this session. The
 // reason is written for the agent to relay to the user, so it names the
@@ -215,11 +233,11 @@ type Summary struct {
 // TierSummary describes one tier without disclosing anything a policy should
 // not carry — credentials are vault references, never values.
 type TierSummary struct {
-	Digest   string   `json:"digest"`
-	Scope    Scope    `json:"scope"`
-	Subject  string   `json:"subject,omitempty"`
-	IssuedAt string   `json:"issued_at,omitempty"`
-	Mode     Mode     `json:"mode"`
+	Digest    string   `json:"digest"`
+	Scope     Scope    `json:"scope"`
+	Subject   string   `json:"subject,omitempty"`
+	IssuedAt  string   `json:"issued_at,omitempty"`
+	Mode      Mode     `json:"mode"`
 	Allowlist []string `json:"allowlist,omitempty"`
 }
 

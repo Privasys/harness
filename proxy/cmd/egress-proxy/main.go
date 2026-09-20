@@ -179,6 +179,12 @@ func forward(w http.ResponseWriter, r *http.Request, client *http.Client, host, 
 		log.Printf("[egress-proxy] model leg: %s %s -> %d %s: %s", r.Method, path, resp.StatusCode,
 			resp.Header.Get("Content-Type"), truncate(peek, 300))
 		peek, rewritten = normaliseModelError(resp.StatusCode, peek)
+		if resp.StatusCode == http.StatusPaymentRequired && modelPaymentRefused != nil {
+			// An unattended run must not go on against an account that
+			// says no: the routine engine pauses the holder's agents when
+			// the refused session is a run's (routines.go).
+			modelPaymentRefused(subjectOfEgress(r), strings.TrimSpace(r.Header.Get(sessionHeader)))
+		}
 		if resp.StatusCode == http.StatusPaymentRequired && spendConsentMissing(subjectOfEgress(r)) {
 			// The leg went out unnamed because the holder never allowed
 			// this harness to spend: say that, and what to do, instead of
@@ -452,6 +458,26 @@ func main() {
 			}
 			return fmt.Errorf("no declared resource %q", resource)
 		}
+		// What unattended runs may cost the holder: a count per agent and
+		// UTC day from their policy, and a full stop when the model service
+		// refuses a run for payment.
+		routines.runsPerDay = func(sub string) uint64 { return store.Effective(sub).RoutineRunsPerDay() }
+		routines.sessionCwd = func(sub, session string) string {
+			w := mgr.Get(sub)
+			if w == nil {
+				return ""
+			}
+			return capability.SessionCwd(w.Sessions, session)
+		}
+		routines.pauser = func(sub string) func(name, why string, at time.Time) error {
+			if w := mgr.Get(sub); w != nil {
+				if s := w.Syncer(); s != nil {
+					return s.PauseAgent
+				}
+			}
+			return nil
+		}
+		modelPaymentRefused = routines.paymentRefused
 		routines.Start(context.Background())
 		// The runtime's record of approved holders re-arms their routines at
 		// boot, and its event stream keeps every status current (events.go).

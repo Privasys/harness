@@ -96,3 +96,43 @@ func TestSaveTenantRefusesSpendAboveCeiling(t *testing.T) {
 		t.Fatalf("narrowing must be accepted: %v", err)
 	}
 }
+
+func TestRoutineRunsPerDayIsUnlimitedUntilSetAndNarrowedByTheCeiling(t *testing.T) {
+	ceiling := Bootstrap(ModeOpen, nil, "app")
+	if got := (Effective{Ceiling: ceiling}).RoutineRunsPerDay(); got != 0 {
+		t.Fatalf("no document sets a cap: unlimited, got %d", got)
+	}
+	tenant := parseSpendDoc(t, `{"policy":"privasys.harness/v1","scope":"tenant","subject":"s","egress":{"mode":"open"},
+		"spend":{"routines":{"runs_per_day":12}}}`, ScopeTenant)
+	if got := (Effective{Ceiling: ceiling, Tenant: tenant}).RoutineRunsPerDay(); got != 12 {
+		t.Fatalf("the holder's figure applies, got %d", got)
+	}
+	capped := parseSpendDoc(t, `{"policy":"privasys.harness/v1","scope":"ceiling","egress":{"mode":"open"},
+		"spend":{"routines":{"runs_per_day":8}}}`, ScopeCeiling)
+	if got := (Effective{Ceiling: capped, Tenant: tenant}).RoutineRunsPerDay(); got != 8 {
+		t.Fatalf("the ceiling narrows, got %d", got)
+	}
+	if got := (Effective{Ceiling: capped}).RoutineRunsPerDay(); got != 8 {
+		t.Fatalf("the ceiling alone caps, got %d", got)
+	}
+}
+
+func TestSaveTenantRefusesRunsPerDayAboveCeiling(t *testing.T) {
+	s := NewStore(t.TempDir())
+	if _, err := s.LoadCeiling("", ModeOpen, nil, "app"); err != nil {
+		t.Fatalf("ceiling: %v", err)
+	}
+	s.setCeiling(parseSpendDoc(t, `{"policy":"privasys.harness/v1","scope":"ceiling","egress":{"mode":"open"},
+		"spend":{"routines":{"runs_per_day":8}}}`, ScopeCeiling))
+	for _, raw := range []string{
+		`{"policy":"privasys.harness/v1","scope":"tenant","subject":"s","egress":{"mode":"open"},"spend":{"routines":{"runs_per_day":20}}}`,
+		`{"policy":"privasys.harness/v1","scope":"tenant","subject":"s","egress":{"mode":"open"},"spend":{"per_call_max_credits":1}}`,
+	} {
+		if _, _, err := s.SaveTenant("s", []byte(raw)); err == nil || !strings.Contains(err.Error(), "runs per day") {
+			t.Fatalf("a document above (or silent under) the ceiling's runs cap must be refused, got %v", err)
+		}
+	}
+	if _, _, err := s.SaveTenant("s", []byte(`{"policy":"privasys.harness/v1","scope":"tenant","subject":"s","egress":{"mode":"open"},"spend":{"routines":{"runs_per_day":5}}}`)); err != nil {
+		t.Fatalf("narrowing must be accepted: %v", err)
+	}
+}

@@ -281,3 +281,102 @@ func TestScheduleRunsAtItsNextTimeAfterTheStartOrTheLastRun(t *testing.T) {
 		t.Fatalf("the prompt names the schedule: %q", prompt)
 	}
 }
+
+func TestDailyCapRefusesTheNextRunAndSaysSoOnce(t *testing.T) {
+	e := newRoutineEngine(nil, nil, nil)
+	e.runsPerDay = func(sub string) uint64 { return 2 }
+	st := e.fresh(&routineState{Subject: "sub-1"})
+	day := time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for i := 0; i < 2; i++ {
+		if e.pastDailyCap(st, "Weekly digest", day.Add(time.Duration(i)*time.Hour)) {
+			t.Fatalf("run %d is within the cap", i+1)
+		}
+	}
+	if !e.pastDailyCap(st, "Weekly digest", day.Add(3*time.Hour)) || !e.pastDailyCap(st, "Weekly digest", day.Add(4*time.Hour)) {
+		t.Fatal("the third run of the day is refused")
+	}
+	if st.capSaid["Weekly digest"] != "2026-09-20" {
+		t.Fatal("the refusal is logged once, for the day")
+	}
+	if e.pastDailyCap(st, "Other", day.Add(5*time.Hour)) {
+		t.Fatal("the count is per agent")
+	}
+	if e.pastDailyCap(st, "Weekly digest", day.Add(24*time.Hour)) {
+		t.Fatal("tomorrow, UTC, the count starts again")
+	}
+	e.runsPerDay = nil
+	for i := 0; i < 5; i++ {
+		if e.pastDailyCap(st, "Weekly digest", day.Add(48*time.Hour)) {
+			t.Fatal("no cap, no refusal")
+		}
+	}
+}
+
+func TestAModelPaymentRefusalDuringARunPausesEveryAgent(t *testing.T) {
+	e := newRoutineEngine(nil, nil, nil)
+	now := time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC)
+	e.now = func() time.Time { return now }
+	triage := feedAgent()
+	var digest capability.AgentSpec
+	digest.Name, digest.Path = "Weekly digest", "/data/users/k/workspace/Weekly digest"
+	digest.Trigger.Every = "24h"
+	st := e.fresh(&routineState{Subject: "sub-1", Agents: []capability.AgentSpec{triage, digest}})
+	e.mu.Lock()
+	e.subjects["sub-1"] = st
+	e.mu.Unlock()
+	sessions := map[string]string{"webhook-1": "/data/users/k/workspace/Inbox triage/runs", "chat-1": "/data/users/k/workspace/Notes"}
+	e.sessionCwd = func(sub, session string) string { return sessions[session] }
+	var paused []string
+	e.pauser = func(sub string) func(name, why string, at time.Time) error {
+		return func(name, why string, at time.Time) error {
+			if !strings.Contains(why, "HTTP 402") || !strings.Contains(why, "unpause") || at != now {
+				t.Errorf("the note says why and what to do: %q at %s", why, at)
+			}
+			paused = append(paused, name)
+			return nil
+		}
+	}
+
+	// A refusal of the holder's own conversation, with no run about, pauses nothing.
+	e.paymentRefused("sub-1", "chat-1")
+	e.paymentRefused("sub-2", "webhook-1")
+	if len(paused) != 0 {
+		t.Fatalf("nothing to pause, got %v", paused)
+	}
+	// A refusal of a run's session pauses every agent of the holder, once.
+	e.paymentRefused("sub-1", "webhook-1")
+	e.paymentRefused("sub-1", "webhook-1")
+	if strings.Join(paused, ",") != "Inbox triage,Weekly digest" {
+		t.Fatalf("paused %v", paused)
+	}
+	for _, a := range st.Agents {
+		if !a.Paused || a.Scheduled() {
+			t.Fatalf("paused in memory at once: %+v", a)
+		}
+	}
+
+	// A session whose log names no directory yet, within minutes of a
+	// dispatch, is that run's.
+	paused = nil
+	st = e.fresh(&routineState{Subject: "sub-3", Agents: []capability.AgentSpec{triage}})
+	st.LastRun["Inbox triage"] = now.Add(-3 * time.Minute)
+	e.mu.Lock()
+	e.subjects["sub-3"] = st
+	e.mu.Unlock()
+	e.paymentRefused("sub-3", "webhook-new")
+	if strings.Join(paused, ",") != "Inbox triage" {
+		t.Fatalf("paused %v", paused)
+	}
+	paused = nil
+	st = e.fresh(&routineState{Subject: "sub-4", Agents: []capability.AgentSpec{triage}})
+	st.LastRun["Inbox triage"] = now.Add(-runLiveWindow - time.Minute)
+	e.mu.Lock()
+	e.subjects["sub-4"] = st
+	e.mu.Unlock()
+	e.paymentRefused("sub-4", "webhook-old")
+	if len(paused) != 0 {
+		t.Fatalf("a refusal long after the last dispatch is not a run's, got %v", paused)
+	}
+}

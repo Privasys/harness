@@ -270,6 +270,9 @@ func (s *Store) SaveTenant(sub string, raw []byte) (d *Document, persisted bool,
 				return nil, false, fmt.Errorf("policy: per-call spending for %q of %d credits exceeds this harness's cap of %d", tool, v, c)
 			}
 		}
+		if c := ceiling.Spend.RunsPerDay(); c > 0 && (d.Spend.RunsPerDay() == 0 || d.Spend.RunsPerDay() > c) {
+			return nil, false, fmt.Errorf("policy: unattended runs per day must stay within this harness's cap of %d", c)
+		}
 	}
 	s.mu.RLock()
 	backend := s.backend

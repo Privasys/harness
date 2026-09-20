@@ -146,3 +146,52 @@ func TestAgentSpecHasExactlyOneTrigger(t *testing.T) {
 		t.Fatalf("no trigger is a valid agent that runs when asked: %v %+v", err, none)
 	}
 }
+
+func TestPauseAgentKeepsTheDefinitionAndSaysWhy(t *testing.T) {
+	root := t.TempDir()
+	s := &Syncer{}
+	s.SetAgentsRoot(root, 0)
+	spec := "# What the agent does.\nprompt: triage   # asked each run\ntrigger:\n  every: 2h\nmin_interval: 10m\n"
+	if _, err := s.WriteAgent("Inbox triage", map[string][]byte{agentPersonaFile: []byte("# Inbox triage\n"), agentSpecFile: []byte(spec)}); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 9, 20, 10, 30, 0, 0, time.UTC)
+	if err := s.PauseAgent("Inbox triage", "the model service refused a run for payment (HTTP 402)", at); err != nil {
+		t.Fatal(err)
+	}
+	agents := s.Agents()
+	if len(agents) != 1 || !agents[0].Paused || agents[0].Scheduled() || agents[0].Trigger.Every != "2h" || agents[0].Prompt != "triage" {
+		t.Fatalf("paused with the rest kept: %+v", agents)
+	}
+	raw, _ := os.ReadFile(filepath.Join(root, "Inbox triage", agentSpecFile))
+	if !strings.Contains(string(raw), "# What the agent does.") || !strings.Contains(string(raw), "# asked each run") || !strings.Contains(string(raw), "paused: true") {
+		t.Fatalf("comments survive and paused is set:\n%s", raw)
+	}
+	log, err := os.ReadFile(filepath.Join(root, "Inbox triage", "runs", "paused.md"))
+	if err != nil || !strings.Contains(string(log), "- 2026-09-20T10:30:00Z: the model service refused a run for payment (HTTP 402)") || !strings.HasPrefix(string(log), "# Paused") {
+		t.Fatalf("runs/paused.md says when and why: %v\n%s", err, log)
+	}
+	// Pausing again flips nothing else and appends one more line.
+	if err := s.PauseAgent("Inbox triage", "again", at.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = os.ReadFile(filepath.Join(root, "Inbox triage", agentSpecFile))
+	if strings.Count(string(raw), "paused:") != 1 {
+		t.Fatalf("one paused key:\n%s", raw)
+	}
+	log, _ = os.ReadFile(filepath.Join(root, "Inbox triage", "runs", "paused.md"))
+	if strings.Count(string(log), "\n- ") != 2 {
+		t.Fatalf("two lines:\n%s", log)
+	}
+	// An agent whose definition is empty gets the one line.
+	if _, err := s.WriteAgent("Notes", map[string][]byte{agentPersonaFile: []byte("# Notes\n")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PauseAgent("Notes", "why", at); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = os.ReadFile(filepath.Join(root, "Notes", agentSpecFile))
+	if string(raw) != "paused: true\n" {
+		t.Fatalf("got %q", raw)
+	}
+}

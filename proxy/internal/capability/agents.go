@@ -260,6 +260,84 @@ func (s *Syncer) WriteAgent(name string, files map[string][]byte) (string, error
 	return name, nil
 }
 
+// agentPausedLog is the file under an agent's runs/ that says when and why
+// the harness paused it; the holder reads it beside the runs.
+const agentPausedLog = "paused.md"
+
+// PauseAgent sets `paused: true` in an agent's definition and writes why
+// into its runs/paused.md, as the proxy does when the model service refuses
+// a run for payment: the holder's agents must not go on spending against an
+// account that says no. The definition is rewritten through the same
+// root-owned path the chat writes it by (WriteAgent); its other fields and
+// comments are kept, as far as the yaml library keeps them. The holder
+// unpauses by asking the chat, which rewrites the whole file.
+func (s *Syncer) PauseAgent(name, why string, at time.Time) error {
+	if !validAgentName(name) {
+		return fmt.Errorf("%q is not a valid agent name", name)
+	}
+	s.mu.Lock()
+	root, uid := s.agentsRoot, s.agentUID
+	s.mu.Unlock()
+	if root == "" {
+		return errors.New("this worker has no workspace root")
+	}
+	local := filepath.Join(root, name)
+	raw, err := os.ReadFile(filepath.Join(local, agentSpecFile))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	out, err := setPaused(raw)
+	if err != nil {
+		return fmt.Errorf("%s/%s: %w", name, agentSpecFile, err)
+	}
+	if _, err := s.WriteAgent(name, map[string][]byte{agentSpecFile: out}); err != nil {
+		return err
+	}
+	runs := filepath.Join(local, "runs")
+	if err := os.MkdirAll(runs, 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(filepath.Join(runs, agentPausedLog), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	if st, err := f.Stat(); err == nil && st.Size() == 0 {
+		fmt.Fprintf(f, "# Paused\n\nThe harness paused this agent. To resume it, ask the chat to unpause it.\n\n")
+	}
+	fmt.Fprintf(f, "- %s: %s\n", at.UTC().Format(time.RFC3339), why)
+	if err := f.Close(); err != nil {
+		return err
+	}
+	chownAll(runs, uid)
+	return nil
+}
+
+// setPaused returns the definition with `paused: true`, keeping the rest of
+// the document as the yaml library round-trips it (comments and order
+// included). An empty definition becomes the one line.
+func setPaused(raw []byte) ([]byte, error) {
+	if len(strings.TrimSpace(string(raw))) == 0 {
+		return []byte("paused: true\n"), nil
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		return nil, err
+	}
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) != 1 || doc.Content[0].Kind != yaml.MappingNode {
+		return nil, errors.New("the definition is not a mapping")
+	}
+	m := doc.Content[0]
+	value := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "true"}
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == "paused" {
+			m.Content[i+1] = value
+			return yaml.Marshal(&doc)
+		}
+	}
+	m.Content = append(m.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "paused"}, value)
+	return yaml.Marshal(&doc)
+}
+
 // Agents lists the holder's agents as the workspace root holds them: every
 // marked directory, its `agent.yaml` parsed (an unparsable one runs only
 // when asked, and says so once per listing).

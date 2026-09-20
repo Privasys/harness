@@ -155,6 +155,9 @@ func registerSpendAPI(mux *http.ServeMux, store *policy.Store, meter *spendMeter
 		}
 		out := meter.snapshot(sub)
 		out["caps"] = caps
+		// Unattended runs per agent and UTC day (0 = unlimited); a count,
+		// since the model leg never tells this proxy a turn's price.
+		out["routines_runs_per_day"] = eff.RoutineRunsPerDay()
 		out["consented"] = eff.Tenant != nil && eff.Tenant.Spend != nil
 		if eff.Tenant != nil && eff.Tenant.Spend != nil {
 			out["spend"] = eff.Tenant.Spend

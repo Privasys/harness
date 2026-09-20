@@ -142,6 +142,18 @@ stores no holder data: a holder who is away keeps their runs for the life of
 the container, and after a restart they resume when the holder next opens the
 harness.
 
+What runs may cost is bounded in the holder's policy document, under
+`spend`: `routines: {runs_per_day: N}` caps how many times one agent runs in
+a UTC day (unlimited when absent; the service ceiling may cap it lower). The
+figure is a count rather than credits because the model service meters a
+turn to the holder's account on its own side and tells this proxy no price,
+only tokens at most. A dispatch past the cap is refused and logged once a
+day per agent. When the model service refuses a run for payment (HTTP 402),
+every agent of the holder is paused: the proxy writes `paused: true` into
+each `agent.yaml` and a line saying when and why into the agent's
+`runs/paused.md`. The holder unpauses by asking the chat, which rewrites the
+definition.
+
 ### 4. A tool asks the person, not the model
 
 When a tool needs the holder's own input (a credential, a one-time setup) it
