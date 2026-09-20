@@ -15,7 +15,12 @@
 // the only caller there can be. No second listener, no second token.
 //
 // The proxy owns the clock and the events; this file owns nothing but the
-// door.
+// door. What a run may use is two presets the proxy names in the body (the
+// `routine` composition: the attested tools, file reading and skills, no
+// shell; the `routine` permissions: writes inside the workspace, no approval
+// asked), with the plugin's config as the fallback: the choice is made in
+// the measured Go layer and only read here. dsh refuses a name it has no
+// preset for at dispatch, which the door reports.
 
 import { randomUUID } from 'node:crypto'
 import { isAbsolute } from 'node:path'
@@ -26,25 +31,27 @@ export const inject = ['webServer', 'webhookRuntime']
 
 const KIND = 'privasys-routine'
 const MAX_BODY = 64 * 1024
+const PRESET_NAME = /^[a-z][a-z0-9-]*$/
 
 export function apply(ctx, config) {
   const path = String(config?.path ?? '/privasys/internal/run')
-  const agentPreset = String(config?.agentPreset ?? 'standard')
-  const permissionPreset = String(config?.permissionPreset ?? 'workspace-write')
+  const defaultAgentPreset = String(config?.agentPreset ?? 'routine')
+  const defaultPermissionPreset = String(config?.permissionPreset ?? 'routine')
   const source = WebhookSourceId(String(config?.source ?? 'privasys-proxy'))
 
-  // The rule: a delivery names the agent's workspace and what to do there.
+  // The rule: a delivery names the agent's workspace, what to do there and
+  // under which presets.
   ctx.effect(() => ctx.webhookRuntime.register({
     id: WebhookRuleId('privasys-routine-run'),
     kind: KIND,
     run(delivery) {
       if (delivery.source !== source) return null
-      const { workspacePath, title, prompt } = delivery.event
+      const { workspacePath, title, prompt, agentPreset, permissionPreset } = delivery.event
       return { workspacePath, title, prompt, agentPreset, permissionPreset }
     },
   }), 'privasys-routines: rule')
 
-  // The door: POST {workspacePath, title, prompt}.
+  // The door: POST {workspacePath, title, prompt, agentPreset?, permissionPreset?}.
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact',
     path,
@@ -68,13 +75,19 @@ export function apply(ctx, config) {
       if (typeof title !== 'string' || !title.trim() || typeof prompt !== 'string' || !prompt.trim()) {
         return respond(res, 400, 'title and prompt are required')
       }
+      const agentPreset = payload.agentPreset ?? defaultAgentPreset
+      const permissionPreset = payload.permissionPreset ?? defaultPermissionPreset
+      if (typeof agentPreset !== 'string' || !PRESET_NAME.test(agentPreset)
+        || typeof permissionPreset !== 'string' || !PRESET_NAME.test(permissionPreset)) {
+        return respond(res, 400, 'agentPreset and permissionPreset must be preset names')
+      }
       const deliveryId = WebhookDeliveryId(randomUUID())
       try {
         ctx.webhookRuntime.dispatch({
           kind: KIND,
           source,
           deliveryId,
-          event: { workspacePath, title: title.trim(), prompt },
+          event: { workspacePath, title: title.trim(), prompt, agentPreset, permissionPreset },
           receivedAt: Date.now(),
         })
       } catch (err) {

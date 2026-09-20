@@ -531,11 +531,14 @@ func (m *WorkerManager) prepare(w *Worker) error {
 		"- id: session-persistence-jsonl\n  name: \"@deepseek-ai/dsh-session-persistence-jsonl\"\n  config:\n    root: %s\n", w.Port, w.Sessions)
 	// The routines door: dsh's webhook runtime plus the one plugin that turns
 	// a POST from this proxy into a new session in an agent's workspace, as a
-	// route on the worker's own server (app/privasys-routines.mjs).
+	// route on the worker's own server (app/privasys-routines.mjs). The
+	// presets a run gets ride the dispatch body (routines.go); the config
+	// names the same ones as the door's fallback.
 	patch += fmt.Sprintf("- insert:\n"+
 		"    - id: webhook-runtime\n      name: \"@deepseek-ai/dsh-webhook\"\n"+
-		"    - id: privasys-routines\n      name: %q\n      config: { path: %q, agentPreset: standard, permissionPreset: workspace-write }\n",
-		envOr("HARNESS_ROUTINES_PLUGIN", "/dsh/apps/cli/config/privasys/privasys-routines.mjs"), routineDoorPath)
+		"    - id: privasys-routines\n      name: %q\n      config: { path: %q, agentPreset: %s, permissionPreset: %s }\n",
+		envOr("HARNESS_ROUTINES_PLUGIN", "/dsh/apps/cli/config/privasys/privasys-routines.mjs"), routineDoorPath,
+		routineAgentPreset, routinePermissionPreset)
 	if err := os.WriteFile(filepath.Join(w.Dir, "worker.cordis.yml"), []byte(patch), 0o600); err != nil {
 		return err
 	}

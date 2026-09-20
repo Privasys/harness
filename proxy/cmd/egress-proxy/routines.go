@@ -77,6 +77,14 @@ import (
 )
 
 const (
+	// routineAgentPreset is the composition a run gets: the attested tools,
+	// file reading and search, the skills, and no shell (the overlay writes
+	// it, web/apply-overlay.mjs 2g); routinePermissionPreset its permissions:
+	// writes inside the workspace only, no approval ever asked (the bundle's
+	// permission table). Both named in the dispatch body.
+	routineAgentPreset      = "routine"
+	routinePermissionPreset = "routine"
+
 	routineTick     = 30 * time.Second
 	routinePollWait = 60 // seconds a tool may hold one change-feed call
 	// routineStartWait bounds how long a dispatch waits for a cold worker.
@@ -679,7 +687,8 @@ func (e *routineEngine) dispatch(ctx context.Context, st *routineState, a capabi
 		w = e.mgr.Ensure(st.Subject)
 	}
 	title, prompt := runTitleAndPrompt(a, now)
-	body, _ := json.Marshal(map[string]string{"workspacePath": a.Path, "title": title, "prompt": prompt})
+	body, _ := json.Marshal(map[string]string{"workspacePath": a.Path, "title": title, "prompt": prompt,
+		"agentPreset": routineAgentPreset, "permissionPreset": routinePermissionPreset})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, w.RoutineDoor(), bytes.NewReader(body))
 	if err != nil {
 		return

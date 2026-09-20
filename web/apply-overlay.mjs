@@ -35,7 +35,7 @@
 // No package.json is touched, so the frozen lockfile still holds.
 //
 // Usage: node apply-overlay.mjs <dsh-root>
-import { readFileSync, writeFileSync, copyFileSync, mkdirSync, readdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, copyFileSync, mkdirSync, readdirSync, existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
@@ -63,6 +63,17 @@ function put(rel, from) {
   const dest = join(dsh, rel)
   mkdirSync(dirname(dest), { recursive: true })
   copyFileSync(join(here, from), dest)
+  console.log(`[overlay] wrote ${rel}`)
+}
+
+// write puts a file this script composed (from the deployment's tool list,
+// say) where put copies one authored beside it. A file that already exists
+// at the pin is not written over: that would be an unanchored edit.
+function write(rel, content) {
+  const dest = join(dsh, rel)
+  if (existsSync(dest)) throw new Error(`overlay: ${rel} exists at the pin; a composed file must be new`)
+  mkdirSync(dirname(dest), { recursive: true })
+  writeFileSync(dest, content)
   console.log(`[overlay] wrote ${rel}`)
 }
 
@@ -831,6 +842,81 @@ edit('packages/preset/agent-presets/presets/cordis/agent.cordis.yml', [
       `    watch: false`,
   ],
 ])
+
+// --- 2g. the `routine` agent preset: what an unattended run may use ---------
+// A run the proxy dispatches (routines.go, app/privasys-routines.mjs) is a
+// session nobody reads as it happens, in the agent's own workspace. Its
+// composition is the standard preset minus everything that needs a person or
+// reaches past the workspace: no shell (the sandbox confines files, not the
+// network, and an unattended shell is a fetch nobody vetted), no background
+// jobs, no subagents or workflows, no question to a user who is not there,
+// no todo, present or plan surfaces. What stays: the attested fleet (every
+// HARNESS_TOOLS row, the access and agents servers), file reading and search,
+// the skills, and compaction so a long run does not run out of context.
+// Writes are the `routine` PERMISSION preset's business (bundle
+// cordis.patch.yml): inside the workspace only, and no approval is ever
+// asked. A preset is a directory in the roster's shipped root, so this one
+// is a written file, not a patched one; the roster discovers it by name and
+// the proxy names it in the dispatch body. The persona says what kind of
+// session this is, since nothing else in the composition does.
+const ROUTINE_PRESET =
+  `# The \`routine\` agent preset: an unattended run of one of the holder's\n` +
+  `# agents (Privasys, web/apply-overlay.mjs). The standard preset without the\n` +
+  `# shell, background jobs, delegation, questions to the user and the\n` +
+  `# plan/todo/present surfaces: the attested tools, file reading and search,\n` +
+  `# skills and compaction. Rows that provide a service sit in an entry-local\n` +
+  `# realm, as in every preset.\n` +
+  `\n` +
+  `- id: persona\n` +
+  `  name: '@deepseek-ai/dsh-persona'\n` +
+  `  config:\n` +
+  `    suffix: Your working directory is {{cwd}}, the agent's own folder; what a run keeps goes under its state/ and runs/.\n` +
+  `    prefix: >-\n` +
+  `      You are an agent of the Privasys Harness, powered by the {{model}} model running in a hardware-attested confidential enclave,\n` +
+  `      running one of the holder's agents unattended: nobody is reading as you work, so follow the agent's definition in this\n` +
+  `      workspace, leave what the run produced where the definition says, and never wait for an answer.\n` +
+  `\n` +
+  `- id: agent-instructions\n` +
+  `  name: '@deepseek-ai/dsh-agent-instructions'\n` +
+  `  config:\n` +
+  `    maxBytes: 65536\n` +
+  `\n` +
+  `- id: tool-fs\n` +
+  `  name: '@deepseek-ai/dsh-tool-fs'\n` +
+  `\n` +
+  `- id: tool-fs-search\n` +
+  `  name: '@deepseek-ai/dsh-tool-fs-search'\n` +
+  `  config:\n` +
+  `    sampleOverCapGlobResults: false\n` +
+  `\n` +
+  SKILL_ROW_PRIVASYS + `\n` +
+  `  name: '@deepseek-ai/dsh-tool-skill'\n` +
+  `\n` +
+  `- id: compaction\n` +
+  `  name: cordis:group\n` +
+  `  group: true\n` +
+  `  isolate:\n` +
+  `    compaction: true\n` +
+  `  config:\n` +
+  `    - id: compaction-basic\n` +
+  `      name: '@deepseek-ai/dsh-compaction-basic'\n` +
+  `\n` +
+  `    - id: command-compact\n` +
+  `      name: '@deepseek-ai/dsh-command-compact'\n` +
+  `\n` +
+  MCP_FLEET_ROWS
+write('packages/preset/agent-presets/presets/routine/agent.cordis.yml', ROUTINE_PRESET)
+write('packages/preset/agent-presets/presets/routine/preset.yml',
+  `name: Unattended run\n` +
+  `description: How the harness runs one of your agents on its own. The attested tools, file reading and skills; no shell and no questions.\n` +
+  `order: 5\n`)
+// The proxy dispatches every run under this name (routines.go): a preset
+// that stopped existing would fail every run at the door, so its presence
+// is asserted here, at build, as the Dockerfile's dump-config step asserts
+// the permission preset.
+if (!existsSync(join(dsh, 'packages/preset/agent-presets/presets/routine/agent.cordis.yml'))) {
+  throw new Error('overlay: the routine agent preset was not written')
+}
 
 // --- 2h. reproducibility per reply + sampling pins ---------------------------
 // Confidential AI ends every stream with a `data: {"reproducibility":…}`

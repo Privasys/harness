@@ -83,6 +83,26 @@ for (const b of kept) {
       '    # every profile composed over this bundle (deployment, smoke, headless)',
       '    # starts on it even before app/profile.cordis.yml restates it.')
   }
+  if (b.id === 'permission') {
+    // Privasys: the preset an unattended run is dispatched under (proxy
+    // routines.go, app/privasys-routines.mjs). Writes stay inside the run's
+    // workspace, the agent's own folder; nobody is there to answer an
+    // approval, so every escalation is refused rather than left hanging.
+    // Which tools the run has is the `routine` AGENT preset's business
+    // (web/apply-overlay.mjs); this row only sets the two knobs a
+    // permission preset carries.
+    const anchor = b.lines.findIndex(l => /^\s+danger-full-access:$/.test(l))
+    if (anchor < 0) throw new Error('permission row has no danger-full-access preset; merge the routine preset by hand')
+    b.lines.splice(anchor, 0,
+      '          # Privasys: an unattended run of one of the holder\x27s agents. It',
+      '          # writes only inside its workspace and nobody answers an approval,',
+      '          # so every escalation is refused at once instead of waiting.',
+      '          routine:',
+      '            sandbox: workspace-write',
+      '            approval: never',
+      '            name: Unattended run',
+      '            description: For an agent\x27s unattended runs. Writes stay inside the workspace and no approval is ever asked, so a wider retry is refused at once.')
+  }
   if (b.id === 'llm-deepseek') {
     if (b.lines.some(l => /^\s+config:/.test(l))) throw new Error('llm-deepseek row now carries config upstream; merge by hand')
     const name = b.lines.findIndex(l => /^      name: /.test(l))

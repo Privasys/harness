@@ -135,7 +135,13 @@ for the tool), and holds the feed until the runtime's event stream reports
 the approval. A denial is logged once and keeps the hold; the holder reopens
 the request from the chat. Every other failure backs off and retries. A run is a new
 session in the agent's workspace, opened through a route on the worker's own
-server (`app/privasys-routines.mjs`) that only the proxy can reach. Grants
+server (`app/privasys-routines.mjs`) that only the proxy can reach, under
+the `routine` presets: a composition of the attested tools, file reading and
+search, the skills and compaction, with no shell, no delegation and no
+question to a user who is not there (written by the overlay into dsh's
+preset roster), and permissions that keep writes inside the agent's
+workspace and refuse every escalation at once, since nobody is there to
+approve one (the bundle's permission table). Grants
 live on the manager; the proxy holds a holder's agents, cursors and last runs
 in memory only, read from their folder while their worker runs. The harness
 stores no holder data: a holder who is away keeps their runs for the life of

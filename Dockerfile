@@ -89,7 +89,10 @@ RUN mkdir -p /dsh-home/profiles/node_modules/@privasys /dsh-home/profiles/web /d
 # Build the frontend, then dump-config both profiles: this now doubles as the
 # BUILD-TIME ALLOW-LIST ASSERTION — the composed tree must carry the agent
 # core and must NOT carry any row the bundle excludes (a re-pin that slips a
-# dropped row back in fails the build here, not in production).
+# dropped row back in fails the build here, not in production). It also
+# asserts the two `routine` presets an unattended run is dispatched under
+# (proxy routines.go): the permission preset in the composed tree, the agent
+# preset as the directory the overlay wrote in the roster's shipped root.
 RUN pnpm run build \
  && pnpm dsh --profile web --dump-config > /tmp/web-dump.yml 2>/dev/null \
  && pnpm dsh --profile headless --dump-config > /tmp/headless-dump.yml 2>/dev/null \
@@ -98,6 +101,8 @@ RUN pnpm run build \
  && ! grep -qE "web-search-deepseek|web-fetch-http|session-log-deepseek|plugin-package-inventory-deepseek|session-telemetry-otel|tool-result-pruner|dsh-llm-pi-ai" /tmp/web-dump.yml \
  && ! grep -qE "web-search-deepseek|web-fetch-http|session-log-deepseek|plugin-package-inventory-deepseek|session-telemetry-otel|tool-result-pruner|dsh-llm-pi-ai" /tmp/headless-dump.yml \
  && test -e /dsh-home/profiles/node_modules/@privasys/harness-bundle/cordis.patch.yml \
+ && grep -qE "^ *routine:$" /tmp/web-dump.yml \
+ && test -e /dsh/packages/preset/agent-presets/presets/routine/agent.cordis.yml \
  && rm -f /tmp/web-dump.yml /tmp/headless-dump.yml && rm -rf /dsh/.git /tmp/harness-bundle \
  && find /dsh \( -name 'AGENTS.md' -o -name 'CLAUDE.md' -o -name 'AGENTS.local.md' -o -name 'CLAUDE.local.md' \) \( -type f -o -type l \) -delete \
  && rm -rf /dsh/docs /dsh/website /dsh/snapshots /dsh/.agents \

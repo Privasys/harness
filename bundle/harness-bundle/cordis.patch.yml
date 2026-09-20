@@ -225,6 +225,14 @@
           workspace-write:
             sandbox: workspace-write
             approval: ask
+          # Privasys: an unattended run of one of the holder's agents. It
+          # writes only inside its workspace and nobody answers an approval,
+          # so every escalation is refused at once instead of waiting.
+          routine:
+            sandbox: workspace-write
+            approval: never
+            name: Unattended run
+            description: For an agent's unattended runs. Writes stay inside the workspace and no approval is ever asked, so a wider retry is refused at once.
           danger-full-access:
             sandbox: danger-full-access
             approval: never
