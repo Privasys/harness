@@ -26,7 +26,9 @@
       { "name": "web_reader", "app_id": "09965ab93f2e480ea0417cce438f0696" },
       { "name": "drive",      "app_id": "cf7a0d585468416884c341ebe0ce4025" },
       { "name": "mail",       "app_id": "7958ba28a8d440f1873a925c15b87aa8" },
-      { "name": "calendar",   "app_id": "07a002a2a1364746b5a5b540b604d6ee" }
+      { "name": "calendar",   "app_id": "07a002a2a1364746b5a5b540b604d6ee" },
+      { "name": "files",      "app_id": "91abe6f12fc9452784ac4987aa0ac65c" },
+      { "name": "meetings",   "app_id": "20a788c026914879b5661ab109ab2323" }
     ]
   },
 
