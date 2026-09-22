@@ -100,6 +100,8 @@ RUN pnpm run build \
       || { echo '--- the web profile did not compose:'; cat /tmp/web-dump.err; false; }; } \
  && { pnpm dsh --profile headless --dump-config > /tmp/headless-dump.yml 2>/tmp/headless-dump.err \
       || { echo '--- the headless profile did not compose:'; cat /tmp/headless-dump.err; false; }; } \
+ && { ! grep -q "skipping profile bundle" /tmp/web-dump.err /tmp/headless-dump.err \
+      || { echo "--- a profile bundle did not load:"; grep -h "skipping profile bundle" /tmp/web-dump.err /tmp/headless-dump.err; false; }; } \
  && grep -q "agent-loop" /tmp/web-dump.yml \
  && grep -q "agent-loop" /tmp/headless-dump.yml \
  && ! grep -qE "web-search-deepseek|web-fetch-http|session-log-deepseek|plugin-package-inventory-deepseek|session-telemetry-otel|tool-result-pruner|dsh-llm-pi-ai" /tmp/web-dump.yml \

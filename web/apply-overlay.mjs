@@ -803,13 +803,13 @@ edit('packages/bundle/web-app/presets/cordis.patch.yml', [
       `            config:\n` +
       `              customSkillDirs:\n` +
       `                - !!js process.getBuiltinModule('node:path').join(process.getBuiltinModule('node:path').dirname(process.getBuiltinModule('node:module').createRequire(baseUrl).resolve('@deepseek-ai/dsh-agent-preset/package.json')), 'skills')`,
-    `- id: skill-filesystem\n` +
-      `  name: '@deepseek-ai/dsh-skill-filesystem'\n` +
-      `  config:\n` +
-      `    includeDefaultRoots: false\n` +
-      `    customSkillDirs:\n` +
-      `      - /run/privasys-skills\n` +
-      `    watch: false`,
+    `          - id: skill-filesystem\n` +
+      `            name: '@deepseek-ai/dsh-skill-filesystem'\n` +
+      `            config:\n` +
+      `              includeDefaultRoots: false\n` +
+      `              customSkillDirs:\n` +
+      `                - /run/privasys-skills\n` +
+      `              watch: false`,
   ],
 ])
 
