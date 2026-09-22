@@ -333,9 +333,31 @@ const MCP_FLEET_ROWS =
   // folder into the holder's Drive through it, and reads which agents exist.
   mcpFleetRow('agents', 'agents')
 console.log(`[overlay] attested tools: ${HARNESS_TOOLS.join(', ')} (+ access, agents)`)
+// Mid-transcript rewriting of tool results is a prefix-cache killer for the
+// confidential backend: a rewritten result changes the prefix every later
+// turn shares, so the engine re-reads the whole conversation. The bundle
+// drops the host-plane row (web/gen-bundle.mjs), but since dsh 0.1.7 every
+// preset mounts its own copy inside its compaction group, where a dropped
+// bundle row does not reach it. Disabled rather than removed, so the
+// composed preset still says what this deployment decided and why.
+const PRUNER_ROW =
+  `              - id: tool-result-pruner\n` +
+  `                name: '@deepseek-ai/dsh-compaction-tool-result-pruner'\n` +
+  `                config:\n` +
+  `                  thresholdChars: 8192`
+const PRUNER_ROW_DISABLED =
+  `              # Privasys: rewriting a tool result mid-transcript would\n` +
+  `              # invalidate the prefix every later turn of this session\n` +
+  `              # shares on the confidential backend.\n` +
+  `              - id: tool-result-pruner\n` +
+  `                name: '@deepseek-ai/dsh-compaction-tool-result-pruner'\n` +
+  `                disabled: true\n` +
+  `                config:\n` +
+  `                  thresholdChars: 8192`
 for (const preset of ['standard', 'ptc', 'cordis']) {
   edit(`packages/bundle/web-app/presets/${preset}.patch.yml`, [
     [`preset ${preset} attested-fleet swap`, TOOL_WEB_BLOCK, indent(MCP_FLEET_ROWS)],
+    [`preset ${preset} pruner off`, PRUNER_ROW, PRUNER_ROW_DISABLED],
   ])
 }
 
