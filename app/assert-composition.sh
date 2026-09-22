@@ -43,14 +43,28 @@ for row in web-search-deepseek web-fetch-http session-log-deepseek \
            plugin-package-inventory-deepseek session-telemetry-otel \
            tool-result-pruner dsh-llm-pi-ai; do
 	for dump in "$WEB_DUMP" "$HEADLESS_DUMP"; do
-		# Print the row's declaration and the line after it; a declaration
-		# whose next line disables it is not a mount.
-		hits=$(grep -A1 -E "(^|[^-a-z])${row}:?( |$)" "$dump" 2>/dev/null || true)
-		[ -z "$hits" ] && continue
-		if ! printf '%s\n' "$hits" | grep -q "disabled: true"; then
-			echo "$hits" >&2
-			fail "excluded row '${row}' is composed and enabled in $(basename "$dump")"
-		fi
+		# Read each declaration of the row as a BLOCK: from its `- id:` line
+		# to the next line indented no deeper. `disabled: true` sits among
+		# the row's own keys, which may be several lines down (after `name:`,
+		# before `config:`), so looking at the next line alone is not enough.
+		enabled=$(awk -v row="$row" '
+			function indent(s) { match(s, /^ */); return RLENGTH }
+			$0 ~ "^ *- id: " row "$" { inblock = 1; depth = indent($0); block = $0; off = 0; next }
+			inblock {
+				if (indent($0) <= depth) {
+					if (!off) print block
+					inblock = 0
+				} else {
+					block = block "\n" $0
+					if ($0 ~ /^ *disabled: true$/) off = 1
+					next
+				}
+			}
+			END { if (inblock && !off) print block }
+		' "$dump")
+		[ -z "$enabled" ] && continue
+		echo "$enabled" >&2
+		fail "excluded row '${row}' is composed and enabled in $(basename "$dump")"
 	done
 done
 
