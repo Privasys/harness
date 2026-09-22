@@ -19,7 +19,7 @@
  * trigger.
  */
 import { useRef, useState } from 'react'
-import { IconUserOutline16, Menu } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconUserOutlineRegular, Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SidebarFooterActionOwnerProps } from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import { PrivasysAttestationRow } from './PrivasysAttestation.tsx'
 import { PrivasysStorageRow } from './PrivasysStorage.tsx'
@@ -61,7 +61,7 @@ export function PrivasysUserRow({ wide }: SidebarFooterActionOwnerProps) {
         anchor={(
           <FootRow
             wide={wide}
-            icon={<IconUserOutline16 size={wide ? 16 : 18} />}
+            icon={<IconUserOutlineRegular size={wide ? 16 : 18} />}
             label={name}
             title={name}
             haspopup="menu"

@@ -15,7 +15,7 @@
  */
 import { useMemo, useState, type KeyboardEvent } from 'react'
 import clsx from 'clsx'
-import { Button, IconCheckOutline14, IconCloseOutline16, MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, IconCheckOutlineRegular, IconCloseOutlineRegular, MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PendingQuestion, QuestionComposerProps } from './contract/slots.ts'
 import { parseRecommendedLabel } from './QuestionComposer.tsx'
 import css from './QuestionComposer.module.css'
@@ -120,7 +120,7 @@ export function PrivasysFormPanel({ pending, t }: PrivasysFormPanelProps) {
               type="button" className={css.iconButton} aria-label={t('nav.cancel')} title={t('nav.cancel')}
               disabled={busy !== null} onClick={cancel}
             >
-              <IconCloseOutline16 />
+              <IconCloseOutlineRegular />
             </button>
           </div>
         </header>
@@ -158,7 +158,7 @@ export function PrivasysFormPanel({ pending, t }: PrivasysFormPanelProps) {
                               {q.multiSelect === true
                                 ? (
                                   <span className={clsx(css.checkbox, selected && css.checkboxChecked)} aria-hidden="true">
-                                    {selected && <IconCheckOutline14 size={12} />}
+                                    {selected && <IconCheckOutlineRegular size={12} />}
                                   </span>
                                 )
                                 : <span className={css.number}>{optionIndex + 1}</span>}

@@ -1661,14 +1661,8 @@ edit('packages/client/ui-workspace/src/client/navigation.ts', [
       `  }`,
   ],
 ])
-edit('packages/client/ui-workspace/src/client/rows/Rows.tsx', [
-  [
-    'rows: bus import',
-    `import css from './Rows.module.css'`,
-    `import css from './Rows.module.css'\n` +
-      `import { requestSessionDelete } from './PrivasysSessionDelete.ts'`,
-  ],
-])
+// The delete entry is its own component now (session-actions/), and it
+// imports the bus itself, so Rows needs nothing.
 edit('packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx', [
   [
     'browser: bus import',
@@ -1807,9 +1801,16 @@ put('packages/client/ui-workspace/src/client/rows/PrivasysDriveKnowledge.tsx', '
 edit('packages/client/ui-workspace/src/client/rows/Rows.tsx', [
   [
     'rows: knowledge bus import',
-    `import { requestSessionDelete } from './PrivasysSessionDelete.ts'`,
-    `import { requestSessionDelete } from './PrivasysSessionDelete.ts'\n` +
+    `import css from './Rows.module.css'`,
+    `import css from './Rows.module.css'\n` +
       `import { requestDriveKnowledge } from './PrivasysDriveKnowledge.tsx'`,
+  ],
+  [
+    // The workspace menu's Drive row needs a folder icon Rows does not import.
+    'rows: knowledge icon import',
+    `  IconTriangleRightFillRegular, IconUnarchiveOutlineRegular, Menu, relativeTime, StateDot, Tooltip,`,
+    `  IconFolderOpenOutlineRegular,\n` +
+      `  IconTriangleRightFillRegular, IconUnarchiveOutlineRegular, Menu, relativeTime, StateDot, Tooltip,`,
   ],
   [
     'rows: workspace menu item',

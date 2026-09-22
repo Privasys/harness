@@ -25,7 +25,7 @@
  * state as a dot and a word; the explainer is dsh's Modal.
  */
 import { useEffect, useRef, useState } from 'react'
-import { Button, IconFolderOpenOutline16, Modal, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, IconFolderOpenOutlineRegular, Modal, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SidebarFooterActionOwnerProps } from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import { FootRow } from './PrivasysFootRow.tsx'
 import css from './PrivasysFoot.module.css'
@@ -241,7 +241,7 @@ export function PrivasysStorageRow({ wide }: SidebarFooterActionOwnerProps) {
     <>
       <FootRow
         wide={wide}
-        icon={<IconFolderOpenOutline16 size={wide ? 16 : 18} />}
+        icon={<IconFolderOpenOutlineRegular size={wide ? 16 : 18} />}
         label="Memory"
         status={<><StateDot state={dot} size={10} /><span>{word}</span></>}
         title={persistent
