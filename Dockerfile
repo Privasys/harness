@@ -43,6 +43,7 @@ RUN pnpm install --frozen-lockfile
 # anchor and FAILS the build if upstream moved one — the signal to rebase, never
 # a silent skip. No package.json is touched, so the frozen lockfile still holds.
 COPY web /build/web
+COPY app/assert-composition.sh /app/assert-composition.sh
 # The attested tools this deployment mounts (space-separated names). Each is
 # one MCP row in every agent preset (overlay 2c) pointing at the proxy's
 # /tool/<name>/mcp; HARNESS_TOOL_HOSTS below says which attested app answers
@@ -88,27 +89,18 @@ RUN mkdir -p /dsh-home/profiles/node_modules/@privasys /dsh-home/profiles/web /d
       '  "dependencies": {},' \
       '  "dsh": { "profile": { "bundles": ["@privasys/harness-bundle", "@deepseek-ai/dsh-headless"], "patchReload": "startup" } }' \
       '}' > /dsh-home/profiles/headless/package.json
-# Build the frontend, then dump-config both profiles: this now doubles as the
-# BUILD-TIME ALLOW-LIST ASSERTION — the composed tree must carry the agent
-# core and must NOT carry any row the bundle excludes (a re-pin that slips a
-# dropped row back in fails the build here, not in production). It also
-# asserts the two `routine` presets an unattended run is dispatched under
-# (proxy routines.go): the permission preset in the composed tree, and the
-# agent preset as the declaration the overlay wrote into the web-app bundle.
+# Build the frontend, then dump-config both profiles and assert what they
+# composed (app/assert-composition.sh): the agent core is present, no row the
+# bundle excludes is enabled, every bundle actually loaded, and the two
+# `routine` presets an unattended run is dispatched under exist. A
+# composition mistake fails the build here rather than in production, and
+# each check names itself when it fails.
 RUN pnpm run build \
  && { pnpm dsh --profile web --dump-config > /tmp/web-dump.yml 2>/tmp/web-dump.err \
       || { echo '--- the web profile did not compose:'; cat /tmp/web-dump.err; false; }; } \
  && { pnpm dsh --profile headless --dump-config > /tmp/headless-dump.yml 2>/tmp/headless-dump.err \
       || { echo '--- the headless profile did not compose:'; cat /tmp/headless-dump.err; false; }; } \
- && { ! grep -q "skipping profile bundle" /tmp/web-dump.err /tmp/headless-dump.err \
-      || { echo "--- a profile bundle did not load:"; grep -h "skipping profile bundle" /tmp/web-dump.err /tmp/headless-dump.err; false; }; } \
- && grep -q "agent-loop" /tmp/web-dump.yml \
- && grep -q "agent-loop" /tmp/headless-dump.yml \
- && ! grep -qE "web-search-deepseek|web-fetch-http|session-log-deepseek|plugin-package-inventory-deepseek|session-telemetry-otel|tool-result-pruner|dsh-llm-pi-ai" /tmp/web-dump.yml \
- && ! grep -qE "web-search-deepseek|web-fetch-http|session-log-deepseek|plugin-package-inventory-deepseek|session-telemetry-otel|tool-result-pruner|dsh-llm-pi-ai" /tmp/headless-dump.yml \
- && test -e /dsh-home/profiles/node_modules/@privasys/harness-bundle/cordis.patch.yml \
- && grep -qE "^ *routine:$" /tmp/web-dump.yml \
- && test -e /dsh/packages/bundle/web-app/presets/routine.patch.yml \
+ && sh /app/assert-composition.sh /tmp/web-dump.yml /tmp/web-dump.err /tmp/headless-dump.yml /tmp/headless-dump.err \
  && rm -f /tmp/web-dump.yml /tmp/headless-dump.yml /tmp/web-dump.err /tmp/headless-dump.err && rm -rf /dsh/.git /tmp/harness-bundle \
  && find /dsh \( -name 'AGENTS.md' -o -name 'CLAUDE.md' -o -name 'AGENTS.local.md' -o -name 'CLAUDE.local.md' \) \( -type f -o -type l \) -delete \
  && rm -rf /dsh/docs /dsh/website /dsh/snapshots /dsh/.agents \
