@@ -288,14 +288,18 @@ edit('packages/host/webserver/src/index.ts', [
 // presets can mount the same fleet without a namespace collision, and each
 // preset mounts ONCE per process — three shim connections per preset, local
 // and stateless.
-const TOOL_WEB_BLOCK =
-  `# The \`web\` service and its search provider stay in the host composition; only\n` +
-  `# the model-facing tool is per-session.\n` +
+// dsh 0.1.7: a preset is a '@deepseek-ai/dsh-agent-preset' declaration in the
+// web-app bundle, and its plugin rows are nested under config.plugins, so the
+// swap happens ten columns in. INDENT re-indents a block written at column 0.
+const PRESET_INDENT = ' '.repeat(10)
+const indent = (block) => block.split('\n').filter((line, i, all) => line !== '' || i < all.length - 1)
+  .map((line) => (line === '' ? '' : PRESET_INDENT + line)).join('\n') + '\n'
+const TOOL_WEB_BLOCK = indent(
   `- id: tool-web\n` +
   `  name: '@deepseek-ai/dsh-tool-web'\n` +
   `  config:\n` +
   `    fetch: true\n` +
-  `    searchTimeoutMs: 60000\n`
+  `    searchTimeoutMs: 60000\n`)
 const mcpFleetRow = (id, server) =>
   `- id: ${id}\n` +
   `  name: '@deepseek-ai/dsh-mcp-client'\n` +
@@ -330,8 +334,8 @@ const MCP_FLEET_ROWS =
   mcpFleetRow('agents', 'agents')
 console.log(`[overlay] attested tools: ${HARNESS_TOOLS.join(', ')} (+ access, agents)`)
 for (const preset of ['standard', 'ptc', 'cordis']) {
-  edit(`packages/preset/agent-presets/presets/${preset}/agent.cordis.yml`, [
-    [`preset ${preset} attested-fleet swap`, TOOL_WEB_BLOCK, MCP_FLEET_ROWS],
+  edit(`packages/bundle/web-app/presets/${preset}.patch.yml`, [
+    [`preset ${preset} attested-fleet swap`, TOOL_WEB_BLOCK, indent(MCP_FLEET_ROWS)],
   ])
 }
 
@@ -341,11 +345,11 @@ for (const preset of ['standard', 'ptc', 'cordis']) {
 edit('packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx', [
   [
     'mcp-client card title by entry id',
-    `        <strong className={css.cardTitle} title={moduleName}>{moduleShortName(moduleName)}</strong>`,
-    `        <strong className={css.cardTitle} title={moduleName}>{\n` +
-      `          /* Privasys: mcp-client rows are distinguished by entry id (tool identity). */\n` +
-      `          moduleName === '@deepseek-ai/dsh-mcp-client' && entryId !== null ? entryId : moduleShortName(moduleName)\n` +
-      `        }</strong>`,
+    `          <strong className={css.cardTitle} title={moduleName}>{title}</strong>`,
+    `          <strong className={css.cardTitle} title={moduleName}>{\n` +
+      `            /* Privasys: mcp-client rows are distinguished by entry id (tool identity). */\n` +
+      `            moduleName === '@deepseek-ai/dsh-mcp-client' && entryId !== null ? entryId : title\n` +
+      `          }</strong>`,
   ],
 ])
 
@@ -395,23 +399,20 @@ edit('packages/llm/deepseek-llm-api-extensions/src/index.ts', [
 const PRIVASYS_PERSONA_PREFIX =
   `      You are a coding agent of the Privasys Harness, powered by the {{model}} model running in a hardware-attested confidential enclave.`
 for (const preset of ['standard', 'ptc']) {
-  edit(`packages/preset/agent-presets/presets/${preset}/agent.cordis.yml`, [
+  edit(`packages/bundle/web-app/presets/${preset}.patch.yml`, [
     [
       `preset ${preset} persona rebrand`,
-      `    prefix: >-\n` +
-        `      You are a coding agent powered by the {{model}} model.`,
-      `    prefix: >-\n` +
-        PRIVASYS_PERSONA_PREFIX,
+      `              prefix: You are a coding agent powered by the {{model}} model.`,
+      `              prefix: >-\n` + indent(PRIVASYS_PERSONA_PREFIX).replace(/\n$/, ''),
     ],
   ])
 }
-edit('packages/preset/agent-presets/presets/cordis/agent.cordis.yml', [
+edit('packages/bundle/web-app/presets/cordis.patch.yml', [
   [
     'preset cordis persona rebrand',
-    `    prefix: |-\n` +
-      `      You are a coding agent powered by the {{model}} model, running on the DeepSeek Harness.`,
-    `    prefix: >-\n` +
-      PRIVASYS_PERSONA_PREFIX,
+    `              prefix: >-\n` +
+      `                You are a coding agent powered by the {{model}} model.`,
+    `              prefix: >-\n` + indent(PRIVASYS_PERSONA_PREFIX).replace(/\n$/, ''),
   ],
 ])
 
@@ -478,30 +479,6 @@ edit('packages/ptc-runtime/ptc-runtime-node/src/json-wire.ts', [
       `      && constructor.prototype === prototype\n` +
       `      && String(intrinsicReflectApply(intrinsicFunctionToString, constructor, [])).replace(/\\s+/g, ' ')\n` +
       `        === \`function \${name}() { [native code] }\``,
-  ],
-])
-
-// --- 2e2. reasoning field compatibility (vLLM >= 0.28.0) ---------------------
-// vLLM removed `reasoning_content` from chat output at 0.28.0 (#50624,
-// after the rename in #33402): the engine now emits only `reasoning`, and
-// input still accepts both. The failure is SILENT — a client reading
-// delta.reasoning_content simply sees nothing and loses the entire chain of
-// thought with no error. dsh's adapter reads only the old field, so accept
-// either, which is exactly what our own chat front-end and Confidential
-// AI's agent loop already do. Harmless against a DeepSeek-cloud endpoint,
-// which keeps emitting reasoning_content.
-edit('packages/llm/llm-deepseek/src/protocols/chat-completions/translate.ts', [
-  [
-    'reasoning delta field fallback',
-    `      const reasoning = delta?.reasoning_content`,
-    `      const reasoning = delta?.reasoning_content ?? delta?.reasoning`,
-  ],
-])
-edit('packages/llm/llm-deepseek/src/protocols/chat-completions/types.ts', [
-  [
-    'WireDelta reasoning field',
-    `  reasoning_content?: string | null\n  tool_calls?: WireToolCallDelta[]`,
-    `  reasoning_content?: string | null\n  /** vLLM >= 0.28.0 emits the reasoning channel under this name. */\n  reasoning?: string | null\n  tool_calls?: WireToolCallDelta[]`,
   ],
 ])
 
@@ -729,6 +706,7 @@ edit('packages/client/ui-settings-models/src/client/index.ts', [
       `  ctx.slots.inject('settings.onboarding', () => ctx.slots.register({\n` +
       `    name: 'settings.onboarding',\n` +
       `    id: 'deepseek-official',\n` +
+      `    children: { 'settings.models.sign-in': { kind: 'single', scope: 'root' } },\n` +
       `    order: 0,\n` +
       `    inject: deepSeekOnboardingInjected,\n` +
       `  }, DeepSeekOnboardingDialog))`,
@@ -771,13 +749,7 @@ edit('packages/sandbox/sandbox-policy/src/index.ts', [
 // (d) The runtime-context provenance label rendered in the chat UI: a bare
 // string literal, self-consistent (isOwned compares the same const), no other
 // production matcher — rename to the neutral sibling style.
-edit('packages/core/agent-loop/src/runtime-context.ts', [
-  [
-    'runtime-context source label',
-    `const SOURCE = '@deepseek-ai/dsh-system-prompt'`,
-    `const SOURCE = 'runtime-context'`,
-  ],
-])
+// dsh 0.1.7 renamed the label itself; the edit that used to do it is gone.
 
 // (f) The Settings "Models" provider card: the route stays `deepseek-official`
 // (a wire identifier the presets and default-model rows reference), but the
@@ -786,9 +758,9 @@ edit('packages/core/agent-loop/src/runtime-context.ts', [
 edit('packages/llm/llm-deepseek/src/index.ts', [
   [
     'provider card rebrand',
-    `    { provider: PROVIDER, displayName: 'DeepSeek', settingsNs: NS, settingsPath: [] },`,
+    `    { provider: PROVIDER, displayName: 'DeepSeek', settingsNs: ctx.fiber.entry?.options.id ?? NS, settingsPath: [] },`,
     `    // Privasys: the settings card names the attested model behind this route.\n` +
-      `    { provider: PROVIDER, displayName: 'Privasys Qwen 3.6', settingsNs: NS, settingsPath: [] },`,
+      `    { provider: PROVIDER, displayName: 'Privasys Qwen 3.6', settingsNs: ctx.fiber.entry?.options.id ?? NS, settingsPath: [] },`,
   ],
 ])
 
@@ -799,8 +771,7 @@ edit('packages/llm/llm-deepseek/src/index.ts', [
 const SKILL_ROW_STOCK =
   `- id: skill-filesystem\n` +
   `  name: '@deepseek-ai/dsh-skill-filesystem'\n` +
-  `\n` +
-  `- id: tool-skill`
+  `- id: tool-skill\n`
 const SKILL_ROW_PRIVASYS =
   `- id: skill-filesystem\n` +
   `  name: '@deepseek-ai/dsh-skill-filesystem'\n` +
@@ -818,21 +789,20 @@ const SKILL_ROW_PRIVASYS =
   `    includeDefaultRoots: true\n` +
   `    customSkillDirs: !!js "(process.env.PRIVASYS_SKILL_DIRS || '/run/privasys-skills').split(':').filter(Boolean)"\n` +
   `    watch: false\n` +
-  `\n` +
-  `- id: tool-skill`
+  `- id: tool-skill\n`
 for (const preset of ['standard', 'ptc']) {
-  edit(`packages/preset/agent-presets/presets/${preset}/agent.cordis.yml`, [
-    [`preset ${preset} skill scoping`, SKILL_ROW_STOCK, SKILL_ROW_PRIVASYS],
+  edit(`packages/bundle/web-app/presets/${preset}.patch.yml`, [
+    [`preset ${preset} skill scoping`, indent(SKILL_ROW_STOCK), indent(SKILL_ROW_PRIVASYS)],
   ])
 }
-edit('packages/preset/agent-presets/presets/cordis/agent.cordis.yml', [
+edit('packages/bundle/web-app/presets/cordis.patch.yml', [
   [
     'preset cordis skill scoping',
-    `- id: skill-filesystem\n` +
-      `  name: '@deepseek-ai/dsh-skill-filesystem'\n` +
-      `  config:\n` +
-      `    customSkillDirs:\n` +
-      `      - !!js "process.getBuiltinModule('node:url').fileURLToPath(new URL('skills/', baseUrl))"`,
+    `          - id: skill-filesystem\n` +
+      `            name: '@deepseek-ai/dsh-skill-filesystem'\n` +
+      `            config:\n` +
+      `              customSkillDirs:\n` +
+      `                - !!js process.getBuiltinModule('node:path').join(process.getBuiltinModule('node:path').dirname(process.getBuiltinModule('node:module').createRequire(baseUrl).resolve('@deepseek-ai/dsh-agent-preset/package.json')), 'skills')`,
     `- id: skill-filesystem\n` +
       `  name: '@deepseek-ai/dsh-skill-filesystem'\n` +
       `  config:\n` +
@@ -855,10 +825,11 @@ edit('packages/preset/agent-presets/presets/cordis/agent.cordis.yml', [
 // the skills, and compaction so a long run does not run out of context.
 // Writes are the `routine` PERMISSION preset's business (bundle
 // cordis.patch.yml): inside the workspace only, and no approval is ever
-// asked. A preset is a directory in the roster's shipped root, so this one
-// is a written file, not a patched one; the roster discovers it by name and
-// the proxy names it in the dispatch body. The persona says what kind of
-// session this is, since nothing else in the composition does.
+// asked. Since dsh 0.1.7 a preset is one '@deepseek-ai/dsh-agent-preset'
+// declaration in the web-app bundle, listed in that bundle's package.json,
+// so this one is written there and added to the list; the registry
+// discovers it by id and the proxy names it in the dispatch body. The
+// persona says what kind of session this is, since nothing else does.
 const ROUTINE_PRESET =
   `# The \`routine\` agent preset: an unattended run of one of the holder's\n` +
   `# agents (Privasys, web/apply-overlay.mjs). The standard preset without the\n` +
@@ -905,16 +876,38 @@ const ROUTINE_PRESET =
   `      name: '@deepseek-ai/dsh-command-compact'\n` +
   `\n` +
   MCP_FLEET_ROWS
-write('packages/preset/agent-presets/presets/routine/agent.cordis.yml', ROUTINE_PRESET)
-write('packages/preset/agent-presets/presets/routine/preset.yml',
-  `name: Unattended run\n` +
-  `description: How the harness runs one of your agents on its own. The attested tools, file reading and skills; no shell and no questions.\n` +
-  `order: 5\n`)
+const ROUTINE_PRESET_PATCH =
+  `# Agent preset routine: one '@deepseek-ai/dsh-agent-preset' declaration, like\n` +
+  `# every shipped preset. Written by the Privasys overlay, not by upstream.\n` +
+  `- insert:\n` +
+  `    - id: preset-routine\n` +
+  `      name: '@deepseek-ai/dsh-agent-preset'\n` +
+  `      config:\n` +
+  `        id: routine\n` +
+  `        name: Unattended run\n` +
+  `        description: How the harness runs one of your agents on its own. The attested tools, file reading and skills; no shell and no question to a person.\n` +
+  `        order: 5\n` +
+  `        plugins:\n` +
+  indent(ROUTINE_PRESET)
+write('packages/bundle/web-app/presets/routine.patch.yml', ROUTINE_PRESET_PATCH)
+// A bundle serves the patch files its package.json lists, in order, so a
+// written preset that is not listed is a file nobody reads.
+{
+  const rel = 'packages/bundle/web-app/package.json'
+  const pkg = JSON.parse(readFileSync(join(dsh, rel), 'utf8'))
+  const list = pkg.dsh?.bundle?.patch
+  if (!Array.isArray(list)) throw new Error(`overlay: ${rel} lists no bundle patches; the preset layout moved again`)
+  if (!list.includes('./presets/routine.patch.yml')) {
+    list.push('./presets/routine.patch.yml')
+    writeFileSync(join(dsh, rel), JSON.stringify(pkg, null, 2) + '\n')
+    console.log(`[overlay] patched ${rel} (routine preset listed)`)
+  }
+}
 // The proxy dispatches every run under this name (routines.go): a preset
 // that stopped existing would fail every run at the door, so its presence
 // is asserted here, at build, as the Dockerfile's dump-config step asserts
 // the permission preset.
-if (!existsSync(join(dsh, 'packages/preset/agent-presets/presets/routine/agent.cordis.yml'))) {
+if (!existsSync(join(dsh, 'packages/bundle/web-app/presets/routine.patch.yml'))) {
   throw new Error('overlay: the routine agent preset was not written')
 }
 
@@ -930,33 +923,34 @@ if (!existsSync(join(dsh, 'packages/preset/agent-presets/presets/routine/agent.c
 // request/header and tool/result shapes (core/session surface.ts), and the
 // Turn-usage fold reads named fields, so an extra key is inert everywhere
 // but here.
-edit('packages/llm/llm-deepseek/src/protocols/chat-completions/translate.ts', [
+edit('packages/llm/llm-deepseek/src/translate.ts', [
   [
     'repro: pending slot',
-    `  let pendingUsage: TokenUsage | undefined\n`,
-    `  let pendingUsage: TokenUsage | undefined\n` +
+    `  const usage: TokenUsage = { inputTokens: 0, outputTokens: 0 }\n`,
+    `  const usage: TokenUsage = { inputTokens: 0, outputTokens: 0 }\n` +
       `  // Privasys: Confidential AI's reproducibility trailer, kept beside usage.\n` +
       `  let pendingReproducibility: unknown\n`,
   ],
   [
-    'repro: fold into usage at DONE',
-    `      if (pendingUsage) yield { type: 'usage', usage: pendingUsage }`,
-    `      if (pendingUsage) {\n` +
-      `        yield {\n` +
-      `          type: 'usage',\n` +
-      `          usage: (pendingReproducibility === undefined\n` +
-      `            ? pendingUsage\n` +
-      `            : { ...pendingUsage, reproducibility: pendingReproducibility }) as TokenUsage,\n` +
-      `        }\n` +
-      `      }`,
+    'repro: capture the trailer',
+    `      // Anthropic permits additional event types; content-bearing events remain validated below.\n` +
+      `      continue`,
+    `      // Anthropic permits additional event types; content-bearing events remain validated below.\n` +
+      `      // Privasys: the attested model sends its reproducibility block as one\n` +
+      `      // such event, just before message_stop (Confidential AI handler\n` +
+      `      // messages.go). Keep it; it is folded into usage below.\n` +
+      `      if (event.reproducibility !== undefined) pendingReproducibility = event.reproducibility\n` +
+      `      continue`,
   ],
   [
-    'repro: capture the trailer',
-    `    if (chunk.usage) pendingUsage = mapUsage(chunk.usage)`,
-    `    if (chunk.usage) pendingUsage = mapUsage(chunk.usage)\n` +
-      `    // Privasys: the trailer carries no choices and no usage; keep it.\n` +
-      `    const reproducibility = (chunk as unknown as { reproducibility?: unknown }).reproducibility\n` +
-      `    if (reproducibility !== undefined) pendingReproducibility = reproducibility`,
+    'repro: fold into usage at message_stop',
+    `      yield { type: 'usage', usage }`,
+    `      yield {\n` +
+      `        type: 'usage',\n` +
+      `        usage: (pendingReproducibility === undefined\n` +
+      `          ? usage\n` +
+      `          : { ...usage, reproducibility: pendingReproducibility }) as TokenUsage,\n` +
+      `      }`,
   ],
 ])
 
@@ -979,8 +973,8 @@ edit('packages/client/ui-chat/src/client/apply.ts', [
     // Workspace, and without this line the read throws "cannot get property
     // workspaces without inject" (seen on prod v21, replay dead).
     'ui-chat: privasys inject workspaces',
-    `  'settingsScope', 'remote', 'remote.session', 'sidebarRight',\n]`,
-    `  'settingsScope', 'remote', 'remote.session', 'sidebarRight',\n  'workspaces',\n]`,
+    `  'configForms', 'remote', 'remote.session', 'sidebarRight',\n]`,
+    `  'configForms', 'remote', 'remote.session', 'sidebarRight',\n  'workspaces',\n]`,
   ],
   [
     'ui-chat: privasys imports',
@@ -1166,11 +1160,8 @@ for (const rel of modelPluginFiles(MODEL_PLUGIN_SRC)) {
     console.log(`[overlay] patched ${rel} (wording)`)
   }
 }
-editAll('packages/llm/llm-deepseek/src/protocols/chat-completions/adapter.ts', [
+editAll('packages/llm/llm-deepseek/src/adapter.ts', [
   ['provider heading', `return { id: provider, name: 'DeepSeek' }`, `return { id: provider, name: 'Privasys' }`, 1],
-])
-editAll('packages/llm/llm-deepseek/src/protocols/messages/adapter.ts', [
-  ['provider heading (messages)', `return { id: provider, name: 'DeepSeek' }`, `return { id: provider, name: 'Privasys' }`, 1],
 ])
 // Guard for the next re-pin: no prose "DeepSeek" may remain in a sentence the
 // plugin can throw or show (a string literal starting with the word).
@@ -1185,15 +1176,9 @@ for (const rel of modelPluginFiles(MODEL_PLUGIN_SRC)) {
 }
 editAll('packages/client/ui-settings-models/src/client/locales.ts', [
   [
-    'base-url placeholder (chat completions)',
-    `  deepSeekChatBaseUrl: 'https://api.deepseek.com',`,
-    `  deepSeekChatBaseUrl: 'http://127.0.0.1:9411/model/v1',`,
-    2,
-  ],
-  [
-    'base-url placeholder (messages)',
-    `  deepSeekMessagesBaseUrl: 'https://api.deepseek.com/anthropic',`,
-    `  deepSeekMessagesBaseUrl: 'http://127.0.0.1:9411/model/v1',`,
+    'base-url placeholder',
+    `  deepSeekBaseUrl: 'https://api.deepseek.com/anthropic',`,
+    `  deepSeekBaseUrl: 'http://127.0.0.1:9411/model/v1',`,
     2,
   ],
 ])
@@ -1209,18 +1194,8 @@ edit('packages/client/ui-settings-models/src/client/locales.ts', [
     `  onboardingDescription: '配置已认证的模型提供方，即可开始使用。',`,
   ],
 ])
-edit('packages/client/ui-settings-plugins/src/client/locales.ts', [
-  [
-    'web search description (en)',
-    `  webSearchDescription: 'The DeepSeek search provider.',`,
-    `  webSearchDescription: 'The web search provider.',`,
-  ],
-  [
-    'web search description (zh)',
-    `  webSearchDescription: 'DeepSeek 搜索提供方。',`,
-    `  webSearchDescription: '网页搜索提供方。',`,
-  ],
-])
+// dsh 0.1.7 dropped the settings row that named the search provider, so the
+// string this rebranded no longer exists.
 // The Files API paths (image attachments) are unreachable behind our text-only
 // catalogue, but their messages are thrown from the same adapter: reword them
 // so the guard below holds and no path can ever print the old name.
@@ -1509,12 +1484,10 @@ edit('packages/session/session-persistence-jsonl/src/index.ts', [
 edit('packages/workspace/workspace/src/index.ts', [
   [
     'registry forgetSession',
-    `      const state = this.requireState()\n` +
-      `      await this.setState({ ...state, archivedSessionIds: [...state.archivedSessionIds, sessionId] })\n` +
+    `      if (options.stopActivity === true) await this.stopSessionActivity(sessionId)\n` +
       `    })\n` +
       `  }`,
-    `      const state = this.requireState()\n` +
-      `      await this.setState({ ...state, archivedSessionIds: [...state.archivedSessionIds, sessionId] })\n` +
+    `      if (options.stopActivity === true) await this.stopSessionActivity(sessionId)\n` +
       `    })\n` +
       `  }\n` +
       `\n` +
@@ -1604,6 +1577,28 @@ edit('packages/api/session-controller/src/client/contract/sessions.ts', [
 
 // (f) workspace browser: the row action, the dialog, the wiring.
 put('packages/client/ui-workspace/src/client/rows/PrivasysSessionDelete.ts', 'overlay/workspace/PrivasysSessionDelete.ts')
+// dsh 0.1.7: the row menu is the 'sidebar.workspaces.session.menu.item' slot
+// and its entries are components, so Delete joins the shipped ones by
+// registration rather than by a patched menu array and switch.
+put('packages/client/ui-workspace/src/client/session-actions/PrivasysDeleteSession.tsx', 'overlay/workspace/PrivasysDeleteSession.tsx')
+edit('packages/client/ui-workspace/src/client/index.ts', [
+  [
+    'delete menu entry import',
+    `import { ForkSessionMenuItem } from './session-actions/ForkSession.tsx'\n`,
+    `import { ForkSessionMenuItem } from './session-actions/ForkSession.tsx'\n` +
+      `import { PrivasysDeleteSessionMenuItem } from './session-actions/PrivasysDeleteSession.tsx'\n`,
+  ],
+  [
+    'delete menu entry registration',
+    `  })\n` +
+      `  ctx.slots.inject('sidebar.workspaces.session.row.action', function* () {`,
+    `    // Privasys: deleting a session removes it here and from the holder's\n` +
+      `    // Drive, so it sits after archive and confirms at the browser root.\n` +
+      `    yield ctx.slots.register({ name: 'sidebar.workspaces.session.menu.item', id: 'privasys-delete', order: 500, locale: NS }, PrivasysDeleteSessionMenuItem)\n` +
+      `  })\n` +
+      `  ctx.slots.inject('sidebar.workspaces.session.row.action', function* () {`,
+  ],
+])
 // The client-runtime fake of the session Remote namespace must implement
 // every generated method, tests included (the image build type-checks them).
 edit('packages/api/session-controller/tests/remote/session.client.ts', [
@@ -1618,8 +1613,8 @@ edit('packages/api/session-controller/tests/remote/session.client.ts', [
 edit('packages/client/ui-workspace/src/client/contract/slots.ts', [
   [
     'slot deleteSession',
-    `  archiveSession: (sessionId: SessionId) => Promise<void>`,
-    `  archiveSession: (sessionId: SessionId) => Promise<void>\n` +
+    `  unarchiveSession: (sessionId: SessionId) => Promise<void>`,
+    `  unarchiveSession: (sessionId: SessionId) => Promise<void>\n` +
       `  /**\n` +
       `   * Privasys: delete a Session for good. Deleting the current session\n` +
       `   * clears the selection into the New Session view state.\n` +
@@ -1630,8 +1625,8 @@ edit('packages/client/ui-workspace/src/client/contract/slots.ts', [
 edit('packages/client/ui-workspace/src/client/index.ts', [
   [
     'wire deleteSession',
-    `    archiveSession: async (sessionId) => { await uiWorkspace.archiveSession(sessionId) },`,
-    `    archiveSession: async (sessionId) => { await uiWorkspace.archiveSession(sessionId) },\n` +
+    `    unarchiveSession: async (sessionId) => { await uiWorkspace.unarchiveSession(sessionId) },`,
+    `    unarchiveSession: async (sessionId) => { await uiWorkspace.unarchiveSession(sessionId) },\n` +
       `    deleteSession: async (sessionId) => { await uiWorkspace.deleteSession(sessionId) },`,
   ],
 ])
@@ -1640,7 +1635,7 @@ edit('packages/client/ui-workspace/src/client/navigation.ts', [
     'navigation deleteSession (interface)',
     `  unarchiveSession(sessionId: SessionId): Promise<void>\n` +
       `  /**\n` +
-      `   * Open the Host-native directory picker.`,
+      `   * Pin a Session on the Host, then lead it in its accounts' saved orders`,
     `  unarchiveSession(sessionId: SessionId): Promise<void>\n` +
       `  /**\n` +
       `   * Privasys: delete a Session for good and clear it when it is the current selection.\n` +
@@ -1648,17 +1643,15 @@ edit('packages/client/ui-workspace/src/client/navigation.ts', [
       `   */\n` +
       `  deleteSession(sessionId: SessionId): Promise<void>\n` +
       `  /**\n` +
-      `   * Open the Host-native directory picker.`,
+      `   * Pin a Session on the Host, then lead it in its accounts' saved orders`,
   ],
   [
     'navigation deleteSession (impl)',
-    `  async archiveSession(sessionId: SessionId): Promise<void> {\n` +
-      `    await this.workspaces.archiveSession(sessionId)\n` +
-      `    if (this.mainReference?.sessionId === sessionId) this.clearMain()\n` +
+    `  async unarchiveSession(sessionId: SessionId): Promise<void> {\n` +
+      `    await this.workspaces.unarchiveSession(sessionId)\n` +
       `  }`,
-    `  async archiveSession(sessionId: SessionId): Promise<void> {\n` +
-      `    await this.workspaces.archiveSession(sessionId)\n` +
-      `    if (this.mainReference?.sessionId === sessionId) this.clearMain()\n` +
+    `  async unarchiveSession(sessionId: SessionId): Promise<void> {\n` +
+      `    await this.workspaces.unarchiveSession(sessionId)\n` +
       `  }\n` +
       `\n` +
       `  async deleteSession(sessionId: SessionId): Promise<void> {\n` +
@@ -1675,21 +1668,6 @@ edit('packages/client/ui-workspace/src/client/rows/Rows.tsx', [
     `import css from './Rows.module.css'\n` +
       `import { requestSessionDelete } from './PrivasysSessionDelete.ts'`,
   ],
-  [
-    'rows: delete menu item',
-    `    { id: 'archive', label: t('menu.archiveSession'), icon: <IconArchiveOutline20 size={16} /> },\n` +
-      `  ]`,
-    `    { id: 'archive', label: t('menu.archiveSession'), icon: <IconArchiveOutline20 size={16} /> },\n` +
-      `    // Privasys: deletion is destructive, so it confirms in the browser root.\n` +
-      `    { id: 'delete', label: t('menu.deleteSession'), icon: <IconTrashOutline16 /> },\n` +
-      `  ]`,
-  ],
-  [
-    'rows: delete dispatch',
-    `              if (id === 'archive') onArchive(node.id)`,
-    `              if (id === 'archive') onArchive(node.id)\n` +
-      `              if (id === 'delete') requestSessionDelete(node.id, row.title)`,
-  ],
 ])
 edit('packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx', [
   [
@@ -1700,8 +1678,8 @@ edit('packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx', [
   ],
   [
     'browser: deleteSession prop',
-    `  archiveSession,\n  createWorkspace,\n  searchSessions,`,
-    `  archiveSession,\n  deleteSession,\n  createWorkspace,\n  searchSessions,`,
+    `  unarchiveSession,\n  createWorkspace,\n  searchSessions,`,
+    `  unarchiveSession,\n  deleteSession,\n  createWorkspace,\n  searchSessions,`,
   ],
   [
     'browser: session delete state',
@@ -1836,11 +1814,11 @@ edit('packages/client/ui-workspace/src/client/rows/Rows.tsx', [
   [
     'rows: workspace menu item',
     `  const workspaceMenuItems = [\n` +
-      `    { id: 'rename', label: t('rename'), icon: <IconEditOutline16 /> },`,
+      `    { id: 'rename', label: t('rename'), icon: <IconEditOutlineRegular /> },`,
     `  const workspaceMenuItems = [\n` +
-      `    { id: 'rename', label: t('rename'), icon: <IconEditOutline16 /> },\n` +
+      `    { id: 'rename', label: t('rename'), icon: <IconEditOutlineRegular /> },\n` +
       `    // Privasys: what this workspace's sessions may read from the user's Drive.\n` +
-      `    { id: 'drive-knowledge', label: t('menu.driveKnowledge'), icon: <IconFolderOpen16 /> },`,
+      `    { id: 'drive-knowledge', label: t('menu.driveKnowledge'), icon: <IconFolderOpenOutlineRegular /> },`,
   ],
   [
     'rows: workspace menu dispatch',

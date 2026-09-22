@@ -16,10 +16,12 @@
     # egress proxy, which fails closed when its attested peer is refused.
     # entrypoint.sh still exports the same value for headless/dev runs.
     baseURL: http://127.0.0.1:9411/model/v1
-    # dsh 0.1.6 defaults the wire protocol to "messages" (Anthropic-style
-    # /v1/messages). Confidential AI serves OpenAI chat completions: pin it,
-    # or every turn fails against the proxy's /model route.
-    protocol: chat-completions
+    # dsh 0.1.7 speaks ONLY the Anthropic Messages wire and REFUSES a
+    # `protocol` key ("protocol is not configurable; remove it and use a
+    # Messages-compatible baseURL"). Confidential AI serves /v1/messages
+    # beside its chat completions (v0.8.7, handler messages.go), so the
+    # baseURL above is Messages-compatible and the plugin reaches it at
+    # /model/v1/messages through the proxy's verbatim path forward.
     thinking: enabled
     reasoningEffort: low
     models:

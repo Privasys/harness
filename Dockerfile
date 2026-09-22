@@ -19,16 +19,18 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
 
 # ---- dsh at the pin -------------------------------------------------------
 FROM node:22-bookworm AS dsh-builder
-# dsh-v0.1.6-alpha.2 (2026-09-17). Release audit: 887 commits past alpha.1.
-# Two anchors moved (the workspace navigation clears its main view through
-# clearMain, and the plan-review intent gained a callId); the base bundle
-# gained a runtime plugin manager and its tool, which this deployment drops
-# (the composition is the measured identity) along with the page that drives
-# them. Still true from alpha.1: the model plugin defaults to the Messages
-# wire (profile.cordis.yml pins chat-completions) and the MCP client is the
-# official @modelcontextprotocol/client 2.0, with no elicitation of its own.
-# Overlay applied clean at this pin.
-ARG DSH_PIN=ddefc45fbc7f8e46dd73185e68295696d1297887
+# dsh-v0.1.7-alpha.1 (2026-09-22). Release audit: 1299 commits past
+# 0.1.6-alpha.2, and two restructures under the overlay. (1) The agent
+# presets left the preset package for the web-app bundle, where each is one
+# 'dsh-agent-preset' declaration whose rows nest under config.plugins and
+# which that bundle's package.json must list — the routine preset is written
+# and listed there now. (2) The model plugin un-split (protocols/ gone) and
+# speaks ONLY the Anthropic Messages wire: 'protocol' is no longer
+# configurable, so profile.cordis.yml points at the proxy's /model/v1 and
+# Confidential AI serves /v1/messages beside chat completions (CAI v0.8.7,
+# handler messages.go). The reproducibility trailer moved with it, and the
+# row menu became a slot, so Delete session is a registered entry.
+ARG DSH_PIN=c36a83ff6bb95e3f82cf79f9be7c724270a8aa61
 RUN corepack enable \
  && git clone https://github.com/deepseek-ai/deepseek-harness /dsh \
  && git -C /dsh checkout "${DSH_PIN}"
