@@ -14,6 +14,9 @@ on:
       - 'proxy/**'
       - 'web/**'
       - 'app/**'
+      # The allow-list bundle is COPYed into the image, so it is part of the
+      # measured tree: an edit here alone must still produce a new image.
+      - 'bundle/**'
       - 'Dockerfile'
       - '.github/workflows/**'
   workflow_dispatch:

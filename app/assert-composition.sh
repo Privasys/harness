@@ -75,6 +75,14 @@ grep -qE "^ *routine:$" "$WEB_DUMP" || fail "the routine permission preset is no
 test -e /dsh/packages/bundle/web-app/presets/routine.patch.yml \
 	|| fail "the routine agent preset was not written into the web-app bundle"
 
+# Tool-result spill must have a budget. `dsh-spill-policy` declares the budget
+# OPTIONAL and installs no listeners when it is missing, so a renamed key (as
+# in 0.1.7-alpha.2, `maxInlineBytes` -> `maxInlineTokens`) neither fails the
+# build nor the boot: the whole of a large tool result simply reaches the
+# model, and the first sign is the bill.
+grep -q "maxInlineTokens:" "$WEB_DUMP" || fail "spill-policy has no budget in the web profile"
+grep -q "maxInlineTokens:" "$HEADLESS_DUMP" || fail "spill-policy has no budget in the headless profile"
+
 # The allow-list bundle itself must be where the profiles point.
 test -e /dsh-home/profiles/node_modules/@privasys/harness-bundle/cordis.patch.yml \
 	|| fail "the harness bundle is not installed in the profile root"
