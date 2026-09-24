@@ -719,7 +719,7 @@ put('apps/web/public/privasys/privasys-attestation.css', 'vendor/privasys-attest
 edit('packages/client/ui-settings-models/src/client/index.ts', [
   [
     'onboarding dialogs removal',
-    `  ctx.slots.inject('settings.onboarding', () => ctx.slots.register({\n` +
+    `  if (!('dshDesktop' in globalThis)) ctx.slots.inject('settings.onboarding', () => ctx.slots.register({\n` +
       `    name: 'settings.onboarding',\n` +
       `    id: 'welcome-notice',\n` +
       `    order: -100,\n` +
@@ -777,12 +777,23 @@ edit('packages/sandbox/sandbox-policy/src/index.ts', [
 // (a wire identifier the presets and default-model rows reference), but the
 // user-facing card names OUR attested provider, not DeepSeek. No config seam
 // exists — displayName is a literal at the registration site.
-edit('packages/llm/llm-deepseek/src/index.ts', [
+// dsh 0.1.7-rc.2 moved provider registration out of the llm-deepseek barrel
+// into the two adapter faces, and gave the adapter a first-class
+// 'providerName' option. Both names are set at this one call site now, so
+// the old editAll on adapter.ts (which rewrote the library's hardcoded
+// fallback) is gone: we pass the supported option instead of patching a
+// default that upstream no longer treats as the seam.
+edit('packages/llm/llm-deepseek-api-key/src/index.ts', [
   [
     'provider card rebrand',
-    `    { provider: PROVIDER, displayName: 'DeepSeek', settingsNs: ctx.fiber.entry?.options.id ?? NS, settingsPath: [] },`,
+    `    { provider: PROVIDER, displayName: 'DeepSeek', settingsNs: ctx.fiber.entry?.options.id ?? name, settingsPath: [] },`,
     `    // Privasys: the settings card names the attested model behind this route.\n` +
-      `    { provider: PROVIDER, displayName: 'Privasys Qwen 3.6', settingsNs: ctx.fiber.entry?.options.id ?? NS, settingsPath: [] },`,
+      `    { provider: PROVIDER, displayName: 'Privasys Qwen 3.6', settingsNs: ctx.fiber.entry?.options.id ?? name, settingsPath: [] },`,
+  ],
+  [
+    'provider heading',
+    `    options, providerName: 'DeepSeek',`,
+    `    options, providerName: 'Privasys',`,
   ],
 ])
 
@@ -1182,9 +1193,6 @@ for (const rel of modelPluginFiles(MODEL_PLUGIN_SRC)) {
     console.log(`[overlay] patched ${rel} (wording)`)
   }
 }
-editAll('packages/llm/llm-deepseek/src/adapter.ts', [
-  ['provider heading', `return { id: provider, name: 'DeepSeek' }`, `return { id: provider, name: 'Privasys' }`, 1],
-])
 // Guard for the next re-pin: no prose "DeepSeek" may remain in a sentence the
 // plugin can throw or show (a string literal starting with the word).
 for (const rel of modelPluginFiles(MODEL_PLUGIN_SRC)) {

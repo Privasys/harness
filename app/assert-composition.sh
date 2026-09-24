@@ -41,7 +41,8 @@ grep -q "agent-loop" "$HEADLESS_DUMP" || fail "the headless profile carries no a
 # and is fine: what is forbidden is one that would run.
 for row in web-search-deepseek web-fetch-http session-log-deepseek \
            plugin-package-inventory-deepseek session-telemetry-otel \
-           tool-result-pruner dsh-llm-pi-ai; do
+           tool-result-pruner dsh-llm-pi-ai \
+           llm-deepseek-account schedule; do
 	for dump in "$WEB_DUMP" "$HEADLESS_DUMP"; do
 		# Read each declaration of the row as a BLOCK: from its `- id:` line
 		# to the next line indented no deeper. `disabled: true` sits among
@@ -82,6 +83,25 @@ test -e /dsh/packages/bundle/web-app/presets/routine.patch.yml \
 # model, and the first sign is the bill.
 grep -q "maxInlineTokens:" "$WEB_DUMP" || fail "spill-policy has no budget in the web profile"
 grep -q "maxInlineTokens:" "$HEADLESS_DUMP" || fail "spill-policy has no budget in the headless profile"
+
+# Exactly one time-context row may be ENABLED. dsh 0.1.7-rc.2 added a
+# time-context row to the web-app bundle (shipped disabled, like its new
+# Schedule sibling) while the headless bundle has none, so this deployment
+# mounts its own clock under a distinct id. Two enabled clocks would inject
+# the timestamp twice; none would take the date away from the model and from
+# the replay's pinned time without failing anything at all.
+for dump in "$WEB_DUMP" "$HEADLESS_DUMP"; do
+	clocks=$(awk '
+		function indent(s) { match(s, /^ */); return RLENGTH }
+		$0 ~ "^ *- id: .*time-context$" { inblock = 1; depth = indent($0); off = 0; next }
+		inblock {
+			if (indent($0) <= depth) { if (!off) n++; inblock = 0 }
+			else { if ($0 ~ /^ *disabled: true$/) off = 1; next }
+		}
+		END { if (inblock && !off) n++; print n + 0 }
+	' "$dump")
+	[ "$clocks" = "1" ] || fail "expected exactly 1 enabled time-context row in $(basename "$dump"), found $clocks"
+done
 
 # The allow-list bundle itself must be where the profiles point.
 test -e /dsh-home/profiles/node_modules/@privasys/harness-bundle/cordis.patch.yml \

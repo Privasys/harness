@@ -3,7 +3,7 @@
 
 # Model leg -> the attested egress proxy's /model route (CAI qwen36 on m4).
 - id: llm-deepseek
-  name: "@deepseek-ai/dsh-llm-deepseek"
+  name: "@deepseek-ai/dsh-llm-deepseek-api-key"
   config:
     thinking: enabled
     reasoningEffort: low

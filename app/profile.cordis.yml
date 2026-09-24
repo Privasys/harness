@@ -3,7 +3,15 @@
 
 # Model leg -> the attested egress proxy's /model route (CAI qwen36 on m4).
 - id: llm-deepseek
-  name: "@deepseek-ai/dsh-llm-deepseek"
+  # dsh 0.1.7-rc.2 split the adapter in two: '@deepseek-ai/dsh-llm-deepseek' is
+  # now a library with no plugin entry, and the two mountable faces are this
+  # api-key one and an account one that bills a DeepSeek account (dropped in
+  # web/gen-bundle.mjs). Keep the row ID: the settings namespace is
+  # `ctx.fiber.entry?.options.id ?? name`, so renaming it would strand every
+  # saved model setting. The api-key face spreads the same shared config
+  # fields, and its apiKeyEnv defaults to DEEPSEEK_API_KEY, which
+  # app/entrypoint.sh already exports as the proxy bearer.
+  name: "@deepseek-ai/dsh-llm-deepseek-api-key"
   config:
     # PIN THE ENDPOINT IN THE MEASURED CONFIG. The adapter resolves
     #   config.baseURL ?? env DEEPSEEK_BASE_URL ?? PUBLIC_BASE_URL
@@ -111,8 +119,15 @@
 # (prepend:true listener) and throttles refreshes — the cache-safe injection
 # shape our Confidential AI context work standardised (never mutate the
 # prefix; volatile context rides the tail).
+# dsh 0.1.7-rc.2 added a `time-context` row to the WEB-APP bundle, shipped
+# `disabled: true` (upstream turns the clock and its Schedule sibling off by
+# default). The headless bundle has no such row. Inserting our own row under
+# the same ID would collide in one face and not the other, and a patch that
+# merges into a disabled row inherits `disabled`, which loses the clock in
+# silence. A distinct ID composes the same way in both faces; the upstream row
+# stays off. assert-composition.sh checks exactly one clock is enabled.
 - insert:
-    - id: time-context
+    - id: privasys-time-context
       name: "@deepseek-ai/dsh-time-context"
       config:
         refreshIntervalMs: 60000

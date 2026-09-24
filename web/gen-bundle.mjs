@@ -11,6 +11,11 @@ const DROP = new Set([
   // one provider (Confidential AI); external models are a future enterprise
   // composition decision, not a default.
   'llm-pi-ai',
+  // The DeepSeek-cloud ACCOUNT route (dsh 0.1.7-rc.2 split the adapter into an
+  // api-key face and an account face). It bills a DeepSeek account and sends
+  // the prompt to DeepSeek's servers, which is exactly the egress this
+  // deployment does not have.
+  'llm-deepseek-account',
   // DeepSeek-cloud reporting surfaces: session-log upload, plugin-inventory
   // metadata in requests, OTEL telemetry.
   'session-log-deepseek', 'plugin-package-inventory-deepseek', 'session-telemetry-otel',
@@ -126,6 +131,8 @@ const header = `# @privasys/harness-bundle — the Privasys Privasys Harness cor
 #   web, web-search-deepseek, web-fetch-http, tool-web  — the agent's only
 #     egress is the attested tool fleet via the egress proxy (fail closed)
 #   llm-pi-ai                — no external model providers by default
+#   llm-deepseek-account     — the DeepSeek-cloud account route; this
+#     deployment's only model leg is the attested one
 #   session-log-deepseek     — no session-log upload to DeepSeek
 #   plugin-package-inventory-deepseek — no plugin metadata in model requests
 #   session-telemetry-otel   — no telemetry

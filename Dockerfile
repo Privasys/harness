@@ -38,7 +38,22 @@ FROM node:22-bookworm AS dsh-builder
 # The plugin declares the budget optional and installs no listeners without
 # one, so the old key would have disabled tool-result spill in silence rather
 # than failing this build; assert-composition.sh now checks for the budget.
-ARG DSH_PIN=00102833dfaee1da9f48a3a8eae9d34005a75218
+#
+# dsh-v0.1.7-rc.2 (2026-09-24), 502 commits on. Three things reach us.
+# (1) The model adapter SPLIT: '@deepseek-ai/dsh-llm-deepseek' is now a
+# library with no plugin entry, and the mountable faces are an api-key one
+# (what we use, same shared config fields, apiKeyEnv defaulting to the
+# DEEPSEEK_API_KEY entrypoint.sh already exports) and an account one that
+# bills a DeepSeek account, dropped in web/gen-bundle.mjs. Provider naming
+# moved with it to a real 'providerName' option, so the overlay sets it
+# instead of rewriting the library's hardcoded fallback. (2) A time-context
+# row arrived in the WEB-APP bundle, disabled, colliding with the id this
+# deployment inserts its own clock under, in one face but not the other;
+# ours is 'privasys-time-context' now and the build counts enabled clocks.
+# (3) Scheduled tasks are new and ship disabled; the excluded-row check
+# keeps them that way, since a timer that wakes the agent is an unattended
+# run and those go through the proxy's routines, not a plugin.
+ARG DSH_PIN=477b4f420553e8a52c2fbccc464d7561b239c443
 RUN corepack enable \
  && git clone https://github.com/deepseek-ai/deepseek-harness /dsh \
  && git -C /dsh checkout "${DSH_PIN}"

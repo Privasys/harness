@@ -9,6 +9,8 @@
 #   web, web-search-deepseek, web-fetch-http, tool-web  — the agent's only
 #     egress is the attested tool fleet via the egress proxy (fail closed)
 #   llm-pi-ai                — no external model providers by default
+#   llm-deepseek-account     — the DeepSeek-cloud account route; this
+#     deployment's only model leg is the attested one
 #   session-log-deepseek     — no session-log upload to DeepSeek
 #   plugin-package-inventory-deepseek — no plugin metadata in model requests
 #   session-telemetry-otel   — no telemetry
@@ -516,7 +518,7 @@
     # key coming from the credential store below. Thinking defaults are a deployment
     # choice.
     - id: llm-deepseek
-      name: '@deepseek-ai/dsh-llm-deepseek'
+      name: '@deepseek-ai/dsh-llm-deepseek-api-key'
       # Privasys: the route is pinned to the attested egress proxy and the
       # catalogue is our model alone, at the bundle level too, so no profile
       # can fall back to the adapter's DeepSeek catalogue or public endpoint.
