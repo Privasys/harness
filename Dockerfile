@@ -67,6 +67,11 @@ RUN pnpm install --frozen-lockfile
 # a silent skip. No package.json is touched, so the frozen lockfile still holds.
 COPY web /build/web
 COPY app/assert-composition.sh /app/assert-composition.sh
+# The deployment patch layer, so the build can dump the composition that
+# actually RUNS (entrypoint.sh boots dsh with this same --patch). Without it
+# the dumps below show the bundle and the overlay only, and the layer that
+# carries the model route, the clock and the persona goes unchecked.
+COPY app/profile.cordis.yml /app/profile.cordis.yml
 # The attested tools this deployment mounts (space-separated names). Each is
 # one MCP row in every agent preset (overlay 2c) pointing at the proxy's
 # /tool/<name>/mcp; HARNESS_TOOL_HOSTS below says which attested app answers
@@ -112,19 +117,25 @@ RUN mkdir -p /dsh-home/profiles/node_modules/@privasys /dsh-home/profiles/web /d
       '  "dependencies": {},' \
       '  "dsh": { "profile": { "bundles": ["@privasys/harness-bundle", "@deepseek-ai/dsh-headless"], "patchReload": "startup" } }' \
       '}' > /dsh-home/profiles/headless/package.json
-# Build the frontend, then dump-config both profiles and assert what they
-# composed (app/assert-composition.sh): the agent core is present, no row the
-# bundle excludes is enabled, every bundle actually loaded, and the two
-# `routine` presets an unattended run is dispatched under exist. A
-# composition mistake fails the build here rather than in production, and
-# each check names itself when it fails.
+# Build the frontend, then dump-config the two shipped profiles AND the
+# deployment patch layer on top of the web one, and assert what they composed
+# (app/assert-composition.sh): the agent core is present, no row the bundle
+# excludes is enabled, every bundle actually loaded, the two `routine` presets
+# an unattended run is dispatched under exist, and the composition that really
+# boots carries exactly one clock on the model route this deployment owns. A
+# composition mistake fails the build here rather than in production, and each
+# check names itself when it fails.
 RUN pnpm run build \
  && { pnpm dsh --profile web --dump-config > /tmp/web-dump.yml 2>/tmp/web-dump.err \
       || { echo '--- the web profile did not compose:'; cat /tmp/web-dump.err; false; }; } \
  && { pnpm dsh --profile headless --dump-config > /tmp/headless-dump.yml 2>/tmp/headless-dump.err \
       || { echo '--- the headless profile did not compose:'; cat /tmp/headless-dump.err; false; }; } \
+ && { pnpm dsh --profile web --patch /app/profile.cordis.yml --dump-config > /tmp/deploy-dump.yml 2>/tmp/deploy-dump.err \
+      || { echo '--- the deployment patch did not compose:'; cat /tmp/deploy-dump.err; false; }; } \
  && sh /app/assert-composition.sh /tmp/web-dump.yml /tmp/web-dump.err /tmp/headless-dump.yml /tmp/headless-dump.err \
- && rm -f /tmp/web-dump.yml /tmp/headless-dump.yml /tmp/web-dump.err /tmp/headless-dump.err && rm -rf /dsh/.git /tmp/harness-bundle \
+      /tmp/deploy-dump.yml /tmp/deploy-dump.err \
+ && rm -f /tmp/web-dump.yml /tmp/headless-dump.yml /tmp/web-dump.err /tmp/headless-dump.err \
+      /tmp/deploy-dump.yml /tmp/deploy-dump.err && rm -rf /dsh/.git /tmp/harness-bundle \
  && find /dsh \( -name 'AGENTS.md' -o -name 'CLAUDE.md' -o -name 'AGENTS.local.md' -o -name 'CLAUDE.local.md' \) \( -type f -o -type l \) -delete \
  && rm -rf /dsh/docs /dsh/website /dsh/snapshots /dsh/.agents \
       /dsh/README.md /dsh/README.zh.md /dsh/BRAND_GUIDELINES.md /dsh/BRAND_GUIDELINES.zh.md \

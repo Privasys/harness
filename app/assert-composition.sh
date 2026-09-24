@@ -9,13 +9,21 @@
 # whoever reads the build log nothing at all (2026-09-22: two builds were
 # spent guessing which link had broken).
 #
+# The first two profiles are what dsh ships plus our bundle and overlay. The
+# third is the composition that actually BOOTS: the same web profile with the
+# deployment patch (app/profile.cordis.yml) on top, the way entrypoint.sh
+# starts it. A check about what this deployment decided belongs on that one.
+#
 # Usage: assert-composition.sh <web-dump> <web-err> <headless-dump> <headless-err>
+#                              <deploy-dump> <deploy-err>
 set -eu
 
 WEB_DUMP=$1
 WEB_ERR=$2
 HEADLESS_DUMP=$3
 HEADLESS_ERR=$4
+DEPLOY_DUMP=$5
+DEPLOY_ERR=$6
 
 fail() {
 	echo "composition assertion FAILED: $1" >&2
@@ -28,8 +36,8 @@ fail() {
 # the profile still dumps, and the harness still starts, missing whatever that
 # bundle carried. That is how a preset file with one bad indent reached
 # production with a healthy /healthz and a passing boot smoke.
-if grep -q "skipping profile bundle" "$WEB_ERR" "$HEADLESS_ERR"; then
-	fail "a profile bundle did not load" "$WEB_ERR" "$HEADLESS_ERR"
+if grep -q "skipping profile bundle" "$WEB_ERR" "$HEADLESS_ERR" "$DEPLOY_ERR"; then
+	fail "a profile bundle did not load" "$WEB_ERR" "$HEADLESS_ERR" "$DEPLOY_ERR"
 fi
 
 # The agent core must be in both faces.
@@ -84,13 +92,16 @@ test -e /dsh/packages/bundle/web-app/presets/routine.patch.yml \
 grep -q "maxInlineTokens:" "$WEB_DUMP" || fail "spill-policy has no budget in the web profile"
 grep -q "maxInlineTokens:" "$HEADLESS_DUMP" || fail "spill-policy has no budget in the headless profile"
 
-# Exactly one time-context row may be ENABLED. dsh 0.1.7-rc.2 added a
-# time-context row to the web-app bundle (shipped disabled, like its new
-# Schedule sibling) while the headless bundle has none, so this deployment
-# mounts its own clock under a distinct id. Two enabled clocks would inject
-# the timestamp twice; none would take the date away from the model and from
-# the replay's pinned time without failing anything at all.
-for dump in "$WEB_DUMP" "$HEADLESS_DUMP"; do
+# Exactly one time-context row may be ENABLED in the composition that boots.
+# dsh 0.1.7-rc.2 added a time-context row to the web-app bundle (shipped
+# disabled, like its new Schedule sibling) under the very id this deployment
+# had been inserting its own clock under, and in that one face only. A patch
+# merging into a disabled row inherits `disabled`, so the clock, and with it
+# the replay's pinned time, would have gone out in silence. Two enabled rows
+# would stamp every turn twice. This reads the DEPLOY dump because the clock
+# is a deployment decision: the bundle dumps carry upstream's disabled row
+# and nothing else.
+for dump in "$DEPLOY_DUMP"; do
 	clocks=$(awk '
 		function indent(s) { match(s, /^ */); return RLENGTH }
 		$0 ~ "^ *- id: .*time-context$" { inblock = 1; depth = indent($0); off = 0; next }
@@ -102,6 +113,13 @@ for dump in "$WEB_DUMP" "$HEADLESS_DUMP"; do
 	' "$dump")
 	[ "$clocks" = "1" ] || fail "expected exactly 1 enabled time-context row in $(basename "$dump"), found $clocks"
 done
+
+# The model leg is the api-key adapter face, pointed at the in-TCB proxy. dsh
+# 0.1.7-rc.2 turned '@deepseek-ai/dsh-llm-deepseek' into a library with no
+# plugin entry, so the old name would mount nothing at all; and the account
+# face bills a DeepSeek account over an egress this deployment does not have.
+grep -q "dsh-llm-deepseek-api-key" "$DEPLOY_DUMP" || fail "the deployment mounts no api-key model adapter"
+grep -q "baseURL: http://127.0.0.1:9411/model/v1" "$DEPLOY_DUMP" || fail "the model route is not pinned to the egress proxy"
 
 # The allow-list bundle itself must be where the profiles point.
 test -e /dsh-home/profiles/node_modules/@privasys/harness-bundle/cordis.patch.yml \
