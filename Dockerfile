@@ -66,6 +66,11 @@ RUN pnpm install --frozen-lockfile
 # anchor and FAILS the build if upstream moved one — the signal to rebase, never
 # a silent skip. No package.json is touched, so the frozen lockfile still holds.
 COPY web /build/web
+# The brand this image carries (brands/<name>: product name, logo, favicon).
+# One main builds every brand; the argument picks one, and the default is
+# Privasys. The brand is in the measurement like everything else here.
+ARG HARNESS_BRAND=privasys
+COPY brands /build/brands
 COPY app/assert-composition.sh /app/assert-composition.sh
 # The deployment patch layer, so the build can dump the composition that
 # actually RUNS (entrypoint.sh boots dsh with this same --patch). Without it
@@ -79,17 +84,17 @@ COPY app/profile.cordis.yml /app/profile.cordis.yml
 # which no runtime patch reaches. The harness's own access server is always
 # mounted. A deployment with a connector adds its name here and its host below.
 ARG HARNESS_TOOLS="web_search web_reader drive mail calendar files meetings"
-RUN HARNESS_TOOLS="${HARNESS_TOOLS}" node /build/web/apply-overlay.mjs /dsh
+RUN HARNESS_TOOLS="${HARNESS_TOOLS}" HARNESS_BRAND="${HARNESS_BRAND}" node /build/web/apply-overlay.mjs /dsh  && node -e 'const fs = require("fs"), p = "/app/profile.cordis.yml";       const t = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).title;       const s = fs.readFileSync(p, "utf8");       if (!s.includes("the Privasys Harness")) throw new Error("profile persona anchor moved");       fs.writeFileSync(p, s.split("the Privasys Harness").join("the " + t))' "/build/brands/${HARNESS_BRAND}/brand.json"
 # Build the frontend dist (dsh-web-app refuses to load without it) and
 # materialize the web profile so its plugin node_modules are baked into the
 # image — an enclave has no egress for a boot-time install, and the profile
 # is deterministic from the pin, so it belongs in the measured identity.
 ENV DSH_HOME=/dsh-home
-# Rebrand the dsh client chrome: the document/app title (read at vite build
-# time) and the brand-slot occupants (Brand.tsx overlay) carry Privasys, not
-# DeepSeek. DSH_CLIENT_BUILD_PROFILE=official keeps the brand slots filled (now
-# with our overridden Privasys mark/name).
-ENV DSH_CLIENT_TITLE="Privasys Harness"
+# Rebrand the dsh client chrome: the document/app title (DSH_CLIENT_TITLE,
+# read at vite build time from the brand's title in the build step below) and
+# the brand-slot occupants (Brand.tsx overlay) carry the brand, not DeepSeek.
+# DSH_CLIENT_BUILD_PROFILE=official keeps the brand slots filled (now with the
+# brand's overridden mark/name).
 ENV DSH_CLIENT_BUILD_PROFILE=official
 # ALLOW-LIST COMPOSITION: the web + headless profiles are pre-written to use
 # @privasys/harness-bundle (bundle/harness-bundle — a reviewed allow-list
@@ -125,7 +130,7 @@ RUN mkdir -p /dsh-home/profiles/node_modules/@privasys /dsh-home/profiles/web /d
 # boots carries exactly one clock on the model route this deployment owns. A
 # composition mistake fails the build here rather than in production, and each
 # check names itself when it fails.
-RUN pnpm run build \
+RUN DSH_CLIENT_TITLE="$(node -p 'require(process.argv[1]).title' "/build/brands/${HARNESS_BRAND}/brand.json")" pnpm run build \
  && { pnpm dsh --profile web --dump-config > /tmp/web-dump.yml 2>/tmp/web-dump.err \
       || { echo '--- the web profile did not compose:'; cat /tmp/web-dump.err; false; }; } \
  && { pnpm dsh --profile headless --dump-config > /tmp/headless-dump.yml 2>/tmp/headless-dump.err \
@@ -180,7 +185,13 @@ RUN corepack enable && corepack prepare pnpm@11.7.0 --activate \
 COPY --from=dsh-builder /dsh /dsh
 COPY --from=dsh-builder /dsh-home /dsh-home
 COPY --from=proxy-builder /egress-proxy /usr/local/bin/egress-proxy
-COPY app/profile.cordis.yml /app/profile.cordis.yml
+# Branded in the build stage (the persona names the product).
+COPY --from=dsh-builder /app/profile.cordis.yml /app/profile.cordis.yml
+# Which platform a branded build serves (brands/<name>/brand.json "platform";
+# entrypoint.sh reads it). Absent for the Privasys brand, whose one image
+# serves both control planes and is told apart by app id.
+ARG HARNESS_BRAND=privasys
+COPY brands/${HARNESS_BRAND}/brand.json /app/brand.json
 # The routines door (a dsh plugin the proxy composes per worker) lives INSIDE
 # the CLI's tree so its bare imports of dsh packages resolve from there.
 COPY app/privasys-routines.mjs /dsh/apps/cli/config/privasys/privasys-routines.mjs

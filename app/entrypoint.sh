@@ -33,8 +33,24 @@ fi
 # ONE measured image serves both control planes. The launcher injects
 # PRIVASYS_APP_ID; this baked (measured) map selects the public host and the
 # control-plane bases for the browser shell — no per-deployment config input.
-case "${PRIVASYS_APP_ID:-}" in
-  be129fce-28d7-40bf-85d0-44a94a78ed43)  # harness (production)
+# A branded build (brands/<name>, Dockerfile HARNESS_BRAND) serves one
+# platform, named in its baked brand.json: its app id is the adopter's, not
+# one this map could know, so the brand says which control plane it is on.
+# The public host is the app's own PLATFORM hostname, whichever domain the
+# adopter's browsers use: an adopter hostname is a gateway alias that rewrites
+# Host to this name, and the wallet attests the sealed session against it.
+BRAND_PLATFORM="$(node -p 'require("/app/brand.json").platform || ""' 2>/dev/null || true)"
+case "${BRAND_PLATFORM}:${PRIVASYS_APP_ID:-}" in
+  production:*)                          # a branded production harness
+    if [[ ! "${PRIVASYS_CONTAINER_NAME:-}" =~ ^[a-z][a-z0-9-]{1,62}$ ]]; then
+      echo "[harness] ERROR: a branded build needs the container name to derive its host"
+      exit 1
+    fi
+    export HARNESS_PUBLIC_HOST="${PRIVASYS_CONTAINER_NAME}.apps.privasys.org"
+    PV_ATTEST_BASE="https://api.developer.privasys.org"
+    PV_API_BASE="https://api.privasys.org"
+    ;;
+  *:be129fce-28d7-40bf-85d0-44a94a78ed43)  # harness (production)
     export HARNESS_PUBLIC_HOST="harness.apps.privasys.org"
     PV_ATTEST_BASE="https://api.developer.privasys.org"
     PV_API_BASE="https://api.privasys.org"

@@ -77,6 +77,35 @@ function write(rel, content) {
   console.log(`[overlay] wrote ${rel}`)
 }
 
+// --- brand --------------------------------------------------------------------
+// One main, several brands: HARNESS_BRAND names a directory under brands/
+// whose brand.json carries the product name, and whose optional files replace
+// the Privasys defaults (FishLogo.tsx, BrandWordmark.tsx, favicon.svg, which
+// is also the gate's app icon, and lockup.svg, the gate's pitch logo). A
+// brand is an argument rather than a fork, so a dsh re-pin is done once.
+const BRAND = process.env.HARNESS_BRAND || 'privasys'
+if (!/^[a-z][a-z0-9-]{0,62}$/.test(BRAND)) throw new Error(`overlay: bad HARNESS_BRAND "${BRAND}"`)
+const brandDir = join(here, '..', 'brands', BRAND)
+const BRAND_TITLE = JSON.parse(readFileSync(join(brandDir, 'brand.json'), 'utf8')).title
+if (!BRAND_TITLE) throw new Error(`overlay: brands/${BRAND}/brand.json has no title`)
+console.log(`[overlay] brand ${BRAND} ("${BRAND_TITLE}")`)
+
+// brandPut copies the brand's own file when it has one, else the default.
+function brandPut(rel, from, brandFile) {
+  const own = join(brandDir, brandFile)
+  put(rel, existsSync(own) ? join('..', 'brands', BRAND, brandFile) : from)
+}
+
+// brandText puts the product name into a file the overlay wrote, at every
+// place the Privasys name stands. None found means the file moved: fail.
+function brandText(rel) {
+  const path = join(dsh, rel)
+  const src = readFileSync(path, 'utf8')
+  if (!src.includes('Privasys Harness')) throw new Error(`overlay: no product name in ${rel} to brand`)
+  writeFileSync(path, src.split('Privasys Harness').join(BRAND_TITLE))
+  console.log(`[overlay] branded ${rel}`)
+}
+
 // --- 1. new / replaced files ------------------------------------------------
 put('apps/web/src/main.ts', 'overlay/apps-web/main.ts')
 put('apps/web/index.html', 'overlay/apps-web/index.html')
@@ -84,8 +113,10 @@ put('apps/web/index.html', 'overlay/apps-web/index.html')
 put('apps/web/public/privasys/privasys-shell.js', 'privasys-shell.js')
 put('apps/web/public/privasys/privasys-shell.css', 'privasys-shell.css')
 put('apps/web/public/privasys/privasys-auth-client.iife.js', 'vendor/privasys-auth-client.iife.js')
-put('apps/web/public/privasys/privasys-logo.mini.svg', 'vendor/privasys-logo.mini.svg')
-put('apps/web/public/privasys/privasys-harness-logo.svg', 'vendor/privasys-harness-logo.svg')
+brandPut('apps/web/public/privasys/privasys-logo.mini.svg', 'vendor/privasys-logo.mini.svg', 'favicon.svg')
+brandPut('apps/web/public/privasys/privasys-harness-logo.svg', 'vendor/privasys-harness-logo.svg', 'lockup.svg')
+brandText('apps/web/index.html')
+brandText('apps/web/public/privasys/privasys-shell.js')
 // Rebrand at the SOURCE: FishLogo/BrandWordmark in ui-primitives carry every
 // brand surface (the sidebar mark, the wordmark, and the conversation hero's
 // animated fallback, which composes its own svg from FISH_LOGO_PATH) — so the
@@ -93,8 +124,8 @@ put('apps/web/public/privasys/privasys-harness-logo.svg', 'vendor/privasys-harne
 // index.ts IS overridden: it keeps upstream's brand registrations and adds the
 // two Privasys sidebar-foot rows (Attestation "Verified" + User/Sign out) into
 // the sidebar.footer.action list slot, next to Settings.
-put('packages/client/ui-primitives/src/FishLogo.tsx', 'overlay/brand/FishLogo.tsx')
-put('packages/client/ui-primitives/src/BrandWordmark.tsx', 'overlay/brand/BrandWordmark.tsx')
+brandPut('packages/client/ui-primitives/src/FishLogo.tsx', 'overlay/brand/FishLogo.tsx', 'FishLogo.tsx')
+brandPut('packages/client/ui-primitives/src/BrandWordmark.tsx', 'overlay/brand/BrandWordmark.tsx', 'BrandWordmark.tsx')
 put('packages/client/ui-brand-official/src/client/index.ts', 'overlay/brand/index.ts')
 put('packages/client/ui-brand-official/src/client/PrivasysRows.tsx', 'overlay/brand/PrivasysRows.tsx')
 // The foot rows are dsh's own foot control (Settings trigger / Cordis badge
@@ -104,7 +135,7 @@ put('packages/client/ui-brand-official/src/client/PrivasysRows.tsx', 'overlay/br
 put('packages/client/ui-brand-official/src/client/PrivasysFootRow.tsx', 'overlay/brand/PrivasysFootRow.tsx')
 put('packages/client/ui-brand-official/src/client/PrivasysFoot.module.css', 'overlay/brand/PrivasysFoot.module.css')
 put('packages/client/ui-brand-official/src/css-modules.d.ts', 'overlay/brand/css-modules.d.ts')
-put('apps/web/public/favicon.svg', 'vendor/privasys-logo.mini.svg')
+brandPut('apps/web/public/favicon.svg', 'vendor/privasys-logo.mini.svg', 'favicon.svg')
 
 // --- 2a. gateway mux server: accept binary frames ---------------------------
 edit('packages/api/gateway/src/stream-server.ts', [
@@ -419,7 +450,7 @@ edit('packages/llm/deepseek-llm-api-extensions/src/index.ts', [
 // guidance); the working-directory line lives in the suffix and is kept as
 // upstream wrote it — only the identity prefix is rebranded.
 const PRIVASYS_PERSONA_PREFIX =
-  `      You are a coding agent of the Privasys Harness, powered by the {{model}} model running in a hardware-attested confidential enclave.`
+  `      You are a coding agent of the ${BRAND_TITLE}, powered by the {{model}} model running in a hardware-attested confidential enclave.`
 for (const preset of ['standard', 'ptc']) {
   edit(`packages/bundle/web-app/presets/${preset}.patch.yml`, [
     [
@@ -876,7 +907,7 @@ const ROUTINE_PRESET =
   `  config:\n` +
   `    suffix: Your working directory is {{cwd}}, the agent's own folder; what a run keeps goes under its state/ and runs/.\n` +
   `    prefix: >-\n` +
-  `      You are an agent of the Privasys Harness, powered by the {{model}} model running in a hardware-attested confidential enclave,\n` +
+  `      You are an agent of the ${BRAND_TITLE}, powered by the {{model}} model running in a hardware-attested confidential enclave,\n` +
   `      running one of the holder's agents unattended: nobody is reading as you work, so follow the agent's definition in this\n` +
   `      workspace, leave what the run produced where the definition says, and never wait for an answer.\n` +
   `\n` +

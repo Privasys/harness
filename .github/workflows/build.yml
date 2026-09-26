@@ -17,9 +17,17 @@ on:
       # The allow-list bundle is COPYed into the image, so it is part of the
       # measured tree: an edit here alone must still produce a new image.
       - 'bundle/**'
+      - 'brands/**'
       - 'Dockerfile'
       - '.github/workflows/**'
+  # A push builds the Privasys brand. An adopter's brand (brands/<name>) is
+  # built on demand, once per harness roll that adopter takes, rather than on
+  # every push: a branded image nobody deploys is 25 runner-minutes wasted.
   workflow_dispatch:
+    inputs:
+      brand:
+        description: 'Brand to build (a directory under brands/)'
+        default: privasys
 
 permissions:
   contents: read
@@ -46,12 +54,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - id: repo
-        run: echo "name=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+        env:
+          BRAND: ${{ inputs.brand || 'privasys' }}
+        run: |
+          [[ "$BRAND" =~ ^[a-z][a-z0-9-]{0,62}$ && -f "brands/$BRAND/brand.json" ]] || { echo "unknown brand $BRAND"; exit 1; }
+          echo "name=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          echo "brand=$BRAND" >> "$GITHUB_OUTPUT"
+          # The Privasys brand keeps its plain tags; any other is prefixed.
+          if [[ "$BRAND" == privasys ]]; then echo "prefix=" >> "$GITHUB_OUTPUT"; else echo "prefix=$BRAND-" >> "$GITHUB_OUTPUT"; fi
       - uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile
           push: true
+          build-args: |
+            HARNESS_BRAND=${{ steps.repo.outputs.brand }}
           tags: |
-            ghcr.io/${{ steps.repo.outputs.name }}:latest
-            ghcr.io/${{ steps.repo.outputs.name }}:${{ github.sha }}
+            ghcr.io/${{ steps.repo.outputs.name }}:${{ steps.repo.outputs.prefix }}latest
+            ghcr.io/${{ steps.repo.outputs.name }}:${{ steps.repo.outputs.prefix }}${{ github.sha }}
