@@ -221,6 +221,17 @@ interface Located {
   prevTurnMaxSeq: number | undefined
 }
 
+const NO_NODES: readonly ConversationNode[] = []
+
+/** This reply's node, searched from the newest end, where live replies are. */
+function assistantNodeOf(nodes: readonly ConversationNode[], messageId: string): AssistantMessageNode | undefined {
+  for (let i = nodes.length - 1; i >= 0; i--) {
+    const n = nodes[i]
+    if (n !== undefined && n.kind === 'assistant' && n.messageId === messageId) return n
+  }
+  return undefined
+}
+
 function locate(nodes: readonly ConversationNode[], messageId: string): Located | undefined {
   const idx = nodes.findIndex(n => n.kind === 'assistant' && n.messageId === messageId)
   if (idx < 0) return undefined
@@ -283,12 +294,19 @@ function Row({ k, v, mono }: { k: string; v: unknown; mono?: boolean }) {
  * @returns nothing while the message carries no block (older sessions, other providers).
  */
 export function PrivasysReproducibilityAction({ messageId, sessionId, useChat, replay, t }: Props) {
-  const nodes = useChat(s => s.legacy.nodes)
-  const located = useMemo(() => locate(nodes, messageId), [nodes, messageId])
-  const turn = located?.node.turn
-  const turnEnd = useChat(s => (turn === undefined ? undefined : s.legacy.turnEnds.get(turn - 1)))
-  const repro = located === undefined ? undefined : reproOf(located.node.usage)
+  // Only this reply's node. A pill is mounted per reply, and each one used to
+  // select the whole node list and walk it (a find, two filters, two sorts)
+  // on every publish of the chat, so a streaming turn cost replies x nodes per
+  // frame. Selecting the one node re-renders a pill only when its reply moves.
+  const node = useChat(s => assistantNodeOf(s.legacy.nodes, messageId))
   const { open, setOpen, rootRef, panelRef, pos } = useStatDialog()
+  // The whole turn (its steps, tool results and prompt) is for the dialog and
+  // the replay alone, so the node list is read only while the dialog is open.
+  const nodes = useChat(s => (open ? s.legacy.nodes : NO_NODES))
+  const located = useMemo(() => (open ? locate(nodes, messageId) : undefined), [open, nodes, messageId])
+  const turn = node?.turn
+  const turnEnd = useChat(s => (turn === undefined ? undefined : s.legacy.turnEnds.get(turn - 1)))
+  const repro = node === undefined ? undefined : reproOf(node.usage)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | undefined>(undefined)
   const [copied, setCopied] = useState(false)
@@ -297,22 +315,22 @@ export function PrivasysReproducibilityAction({ messageId, sessionId, useChat, r
   // A replayed reply judges itself against the hash kept when the replay was
   // armed (this browser, this session id). Never claims a match it cannot show.
   const replayInfo = repro?.harness?.replay
-  const replyText = located === undefined ? '' : assistantText(located.node)
+  const replyText = useMemo(() => (node === undefined ? '' : assistantText(node)), [node])
   useEffect(() => {
-    if (replayInfo === undefined || located === undefined) return
+    if (replayInfo === undefined || turn === undefined) return
     const stored = readStoredReplay(sessionId)
-    if (stored === undefined || stored.of.turn !== located.node.turn) return
+    if (stored === undefined || stored.of.turn !== turn) return
     let cancelled = false
     void sha256Hex(replyText).then((hex) => {
       if (!cancelled) setReplyVerdict(hex === stored.reply_sha256 ? 'match' : 'differs')
     })
     return () => { cancelled = true }
-  }, [replayInfo, replyText, sessionId, located?.node.turn])
+  }, [replayInfo, replyText, sessionId, turn])
 
-  if (located === undefined || repro === undefined) return null
+  if (node === undefined || repro === undefined) return null
 
-  const stepsRecorded = located.steps.map(n => reproOf(n.usage))
-  const recorded = located.prompt !== undefined
+  const stepsRecorded = located === undefined ? [] : located.steps.map(n => reproOf(n.usage))
+  const recorded = located !== undefined && located.prompt !== undefined
     && stepsRecorded.every(b => b !== undefined && b.harness !== undefined)
   // Reproducibility is a property of PINNED sessions: a pinned call runs
   // strict (a single-use KV-cache salt, so the whole prompt is prefilled
@@ -328,10 +346,10 @@ export function PrivasysReproducibilityAction({ messageId, sessionId, useChat, r
   const unavailableReason = !recorded
     ? t('message.repro.replayUnavailable')
     : t('message.repro.replayNotStrict')
-  const prevTurnEndSeq = turnEnd ?? located.prevTurnMaxSeq
+  const prevTurnEndSeq = turnEnd ?? located?.prevTurnMaxSeq
 
   const onReplay = async (): Promise<void> => {
-    if (!replayable || located.prompt === undefined) return
+    if (!replayable || located === undefined || located.prompt === undefined) return
     setBusy(true)
     setError(undefined)
     try {
@@ -420,7 +438,7 @@ export function PrivasysReproducibilityAction({ messageId, sessionId, useChat, r
             <Row k={t('message.repro.topP')} v={repro.top_p} />
             <Row k={t('message.repro.topK')} v={repro.top_k} />
             <Row k={t('message.repro.maxTokens')} v={repro.max_tokens} />
-            {located.steps.length > 1 && (
+            {located !== undefined && located.steps.length > 1 && (
               <Row k={t('message.repro.steps')} v={String(located.steps.length)} />
             )}
           </dl>

@@ -2140,4 +2140,123 @@ edit('packages/client/ui-user-questions/src/client/QuestionComposer.tsx', [
   ],
 ])
 
+// --- A view target nothing watches stops being rebuilt. -------------------
+// Upstream keeps a MONOTONIC set of active view targets: the first subscriber
+// to a target (the Trajectory tab, say) activates it, and it stays active for
+// the life of the tab. Every flush then advances its builder, and the
+// trajectory builder rebuilds its whole snapshot on each one (new maps, a
+// flattened node array and two sorts, roughly every third frame while a reply
+// streams), and each context keeps a built node for it. Open the Trajectory
+// once and the tab carries a second full model of the conversation, rebuilt
+// continuously, until it is closed. A browser tab reached 4 GB on dev.
+//
+// Here the binding counts a target's subscribers, and a minute after the last
+// one leaves it takes the target out of the active set and drops its builder,
+// its snapshot and the per-context nodes built for it. The next subscriber
+// activates it again, and activation already rebuilds a target from its
+// contexts (activateTarget -> replaceView -> buildTargetNodes), the same path
+// upstream's own registry reset takes. The grace period keeps a quick switch
+// between tabs from rebuilding anything.
+edit('packages/client/ui-conversation/src/client/conversation/assembly.ts', [
+  [
+    'assembly: count the subscribers of a target',
+    `        subscribe: (listener) => {\n` +
+      `          const unsubscribe = this.snapshot.subscribe(listener)\n` +
+      `          this.activate(target)\n` +
+      `          return unsubscribe\n` +
+      `        },\n`,
+    `        subscribe: (listener) => {\n` +
+      `          const unsubscribe = this.snapshot.subscribe(listener)\n` +
+      `          this.retainTarget(target)\n` +
+      `          return () => {\n` +
+      `            unsubscribe()\n` +
+      `            this.releaseTarget(target)\n` +
+      `          }\n` +
+      `        },\n`,
+  ],
+  [
+    'assembly: retain and release a target',
+    `  activate(target: string): void {\n` +
+      `    if (this.assembler.activateTarget(target)) this.snapshot.set(this.currentSnapshot())\n` +
+      `    this.openTurn.set(this.assembler.openTurn())\n` +
+      `  }\n`,
+    `  activate(target: string): void {\n` +
+      `    if (this.assembler.activateTarget(target)) this.snapshot.set(this.currentSnapshot())\n` +
+      `    this.openTurn.set(this.assembler.openTurn())\n` +
+      `  }\n` +
+      `\n` +
+      `  // Privasys: subscribers per target, and the pending release of a target\n` +
+      `  // that has none (apply-overlay.mjs, "A view target nothing watches").\n` +
+      `  private readonly targetSubscribers = new Map<string, number>()\n` +
+      `  private readonly targetReleases = new Map<string, ReturnType<typeof setTimeout>>()\n` +
+      `\n` +
+      `  private retainTarget(target: string): void {\n` +
+      `    this.targetSubscribers.set(target, (this.targetSubscribers.get(target) ?? 0) + 1)\n` +
+      `    const pending = this.targetReleases.get(target)\n` +
+      `    if (pending !== undefined) {\n` +
+      `      clearTimeout(pending)\n` +
+      `      this.targetReleases.delete(target)\n` +
+      `    }\n` +
+      `    this.activate(target)\n` +
+      `  }\n` +
+      `\n` +
+      `  private releaseTarget(target: string): void {\n` +
+      `    const left = (this.targetSubscribers.get(target) ?? 1) - 1\n` +
+      `    if (left > 0) {\n` +
+      `      this.targetSubscribers.set(target, left)\n` +
+      `      return\n` +
+      `    }\n` +
+      `    this.targetSubscribers.delete(target)\n` +
+      `    if (this.targetReleases.has(target)) return\n` +
+      `    this.targetReleases.set(target, setTimeout(() => {\n` +
+      `      this.targetReleases.delete(target)\n` +
+      `      if (this.targetSubscribers.has(target)) return\n` +
+      `      if (this.assembler.deactivateTarget(target)) this.snapshot.set(this.currentSnapshot())\n` +
+      `    }, 60_000))\n` +
+      `  }\n`,
+  ],
+  [
+    'assembly: no release fires after dispose',
+    `  dispose(): void {\n` +
+      `    this.cancelFrame()\n` +
+      `    this.disposeFeed()\n` +
+      `  }\n`,
+    `  dispose(): void {\n` +
+      `    this.cancelFrame()\n` +
+      `    this.disposeFeed()\n` +
+      `    for (const pending of this.targetReleases.values()) clearTimeout(pending)\n` +
+      `    this.targetReleases.clear()\n` +
+      `  }\n`,
+  ],
+])
+edit('packages/client/ui-conversation/src/client/conversation/assembler.ts', [
+  [
+    'assembler: take a target out of the active set',
+    `  /**\n` +
+      `   * Read the latest snapshot of a registered target.\n`,
+    `  /**\n` +
+      `   * Privasys: take a target nothing watches out of the active set, and drop\n` +
+      `   * what was built for it: its builder, its snapshot, and the node each of\n` +
+      `   * its contexts keeps. activateTarget rebuilds all of it from the contexts,\n` +
+      `   * as resetViewBuilders does, so a later subscriber sees the same view.\n` +
+      `   * @param target - an active view target.\n` +
+      `   * @returns whether the target was active.\n` +
+      `   */\n` +
+      `  deactivateTarget(target: string): boolean {\n` +
+      `    if (!this.activeTargets.delete(target)) return false\n` +
+      `    for (const context of this.contextsByTarget.get(target) ?? []) context.current.delete(target)\n` +
+      `    this.dirtyByTarget.delete(target)\n` +
+      `    const view = this.views.get(target)\n` +
+      `    if (view !== undefined) {\n` +
+      `      view.builder = undefined\n` +
+      `      view.snapshot = undefined\n` +
+      `    }\n` +
+      `    return true\n` +
+      `  }\n` +
+      `\n` +
+      `  /**\n` +
+      `   * Read the latest snapshot of a registered target.\n`,
+  ],
+])
+
 console.log('[overlay] done')
