@@ -20,9 +20,10 @@ on:
       - 'brands/**'
       - 'Dockerfile'
       - '.github/workflows/**'
-  # A push builds the Privasys brand. An adopter's brand (brands/<name>) is
-  # built on demand, once per harness roll that adopter takes, rather than on
-  # every push: a branded image nobody deploys is 25 runner-minutes wasted.
+  # A push builds the Privasys brand. Another brand under brands/ is built on
+  # demand. An adopter normally keeps its brand in its own repository instead,
+  # building this Dockerfile from a pinned commit with its brand copied into
+  # brands/ (see README, "Your own brand").
   workflow_dispatch:
     inputs:
       brand:

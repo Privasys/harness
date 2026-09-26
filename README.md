@@ -180,6 +180,20 @@ upstream dsh at the pin. The overlay (`web/apply-overlay.mjs`) is the only
 place upstream code is touched, and every edit there is anchored: a missing
 anchor fails the build, which is the signal to rebase on a re-pin.
 
+## Your own brand
+
+The image can carry another product's name and logo without a fork. A brand is
+a directory under `brands/`: `brand.json` with the product `title` (and
+`"platform": "production"` when it serves the production platform), plus any of
+`FishLogo.tsx` (the square mark), `BrandWordmark.tsx` (the sidebar name),
+`favicon.svg` (also the sign-in page's app icon) and `lockup.svg` (the
+sign-in page's logo). Anything left out falls back to the Privasys default.
+Build with `--build-arg HARNESS_BRAND=<name>`.
+
+An adopter usually keeps its brand in its own repository: check this one out
+at a pinned commit, copy the brand into `brands/<name>`, and build. The pin is
+what a harness upgrade moves.
+
 ## Tenancy
 
 Today a deployment is one trust domain, on the platform's standard tenancy
