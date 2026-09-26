@@ -134,6 +134,7 @@ func forward(w http.ResponseWriter, r *http.Request, client *http.Client, host, 
 	if forwardableAuthorization(r) == "" {
 		req.Header.Del("Authorization") // a worker's bearer never leaves this proxy
 	}
+	dropWorkerAPIKey(req.Header) // nor does it as an x-api-key (subject.go)
 	// A body the proxy rewrote (sampling.go) or one dsh sent with a known
 	// length travels with that length; only an unknown length is chunked.
 	req.ContentLength = r.ContentLength
@@ -280,7 +281,11 @@ func main() {
 		// bearer is the worker's own token and the only thing that names it.
 		sub := subjectOfEgress(r)
 		if cfg.onPlatform {
+			// On the platform the credential is the attested identity and the
+			// spend token below; nothing dsh sends as a key travels, whichever
+			// header its model adapter puts it in.
 			r.Header.Del("Authorization")
+			r.Header.Del("X-Api-Key")
 			if sub != "" {
 				r.Header.Set("X-Privasys-On-Behalf-Of", sub)
 			}

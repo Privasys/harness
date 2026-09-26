@@ -69,11 +69,37 @@ func subjectOfEgress(r *http.Request) string {
 	if workerMgr == nil {
 		return currentSubject()
 	}
-	tok := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer"))
-	if w := workerMgr.ByToken(tok); w != nil {
+	if w := workerMgr.ByToken(workerToken(r)); w != nil {
 		return w.Subject
 	}
 	return ""
+}
+
+// workerToken is the bearer a dsh worker presents to this proxy. A client
+// speaking OpenAI's wire sends it as `Authorization: Bearer`; one speaking
+// Anthropic's Messages wire sends it as `x-api-key`, and dsh 0.1.7-rc.2's
+// model adapter (the api-key face of the split llm-deepseek) is the latter.
+// Reading Authorization alone attributed every model call to nobody, so no
+// spend token went with it and Confidential AI billed the harness app, which
+// has no account: "Request quota exhausted" on the first prompt (2026-09-26).
+func workerToken(r *http.Request) string {
+	if tok := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer")); tok != "" {
+		return tok
+	}
+	return strings.TrimSpace(r.Header.Get("X-Api-Key"))
+}
+
+// dropWorkerAPIKey removes an x-api-key that is a worker's own bearer. Like
+// its Authorization twin it names the worker to THIS proxy and must never
+// leave it; forwarded, it would hand the model's operator a credential that
+// acts as that user here.
+func dropWorkerAPIKey(h http.Header) {
+	if workerMgr == nil {
+		return
+	}
+	if k := strings.TrimSpace(h.Get("X-Api-Key")); k != "" && workerMgr.ByToken(k) != nil {
+		h.Del("X-Api-Key")
+	}
 }
 
 // forwardableAuthorization returns the caller's Authorization header when it
