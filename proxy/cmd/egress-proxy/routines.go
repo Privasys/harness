@@ -192,6 +192,11 @@ var routineEng *routineEngine
 // this holder until they act on their device: not a failure to back off from.
 var errNeedsHolder = errors.New("the tool needs the holder")
 
+// errRevoked is the holder having withdrawn this app's access to what the
+// feed reads. The opposite of errNeedsHolder: they have already answered, so
+// nothing asks their device again.
+var errRevoked = errors.New("the holder revoked access")
+
 // holderHold is one change feed waiting for the holder's approval.
 type holderHold struct {
 	agent    string
@@ -486,10 +491,13 @@ func (e *routineEngine) poll(ctx context.Context, st *routineState, a capability
 		cursor := st.Cursors[a.Name]
 		e.mu.Unlock()
 		changes, next, err := e.feed(ctx, st.Subject, tool, call, cursor)
-		if errors.Is(err, errNeedsHolder) {
+		if errors.Is(err, errNeedsHolder) || errors.Is(err, errRevoked) {
 			// Not a failure: the tool is waiting for the holder, so this
 			// engine waits with it, without a second call until they act.
-			if !e.holdForHolder(ctx, st, a, tool) {
+			// After a revoke it waits WITHOUT asking: the holder has just
+			// said no, and a routine that asked again the moment they
+			// disconnected their mailbox is how this was found (2026-09-28).
+			if !e.holdForHolder(ctx, st, a, tool, !errors.Is(err, errRevoked)) {
 				return
 			}
 			failures = 0
@@ -537,6 +545,9 @@ func (e *routineEngine) changes(ctx context.Context, sub, tool, call, cursor str
 	if err != nil {
 		return 0, "", err
 	}
+	if revokedByHolder(status, raw) {
+		return 0, "", fmt.Errorf("%w: %s", errRevoked, truncate(raw, 200))
+	}
 	if holderNeeded(status, raw) {
 		return 0, "", fmt.Errorf("%w: %s", errNeedsHolder, truncate(raw, 200))
 	}
@@ -567,10 +578,23 @@ func holderNeeded(status int, raw []byte) bool {
 	return json.Unmarshal(raw, &body) == nil && body.NeedsHolder
 }
 
+// revokedByHolder reads a tool's refusal for "the holder revoked this app's
+// access" (HTTP 403 with `"revoked": true`).
+func revokedByHolder(status int, raw []byte) bool {
+	if status != http.StatusForbidden {
+		return false
+	}
+	var body struct {
+		Revoked bool `json:"revoked"`
+	}
+	return json.Unmarshal(raw, &body) == nil && body.Revoked
+}
+
 // holdForHolder asks the holder's device once for the resource the tool
-// serves, then holds the feed until the runtime reports an approval for it
-// (Event) or ctx ends. It reports whether the feed may go on.
-func (e *routineEngine) holdForHolder(ctx context.Context, st *routineState, a capability.AgentSpec, tool string) bool {
+// serves, unless told not to ask, then holds the feed until the runtime
+// reports an approval for it (Event) or ctx ends. It reports whether the
+// feed may go on.
+func (e *routineEngine) holdForHolder(ctx context.Context, st *routineState, a capability.AgentSpec, tool string, ask bool) bool {
 	resource := ""
 	if e.resourceFor != nil {
 		resource = e.resourceFor(st.Subject, tool)
@@ -582,6 +606,9 @@ func (e *routineEngine) holdForHolder(ctx context.Context, st *routineState, a c
 	defer e.dropHold(st.Subject, h)
 
 	switch {
+	case !ask:
+		log.Printf("[routines] %.8s…/%s: the holder revoked this app's access to %s; the %s change feed waits, without asking, until they approve it again",
+			st.Subject, a.Name, map[bool]string{true: tool, false: resource}[resource == ""], a.Trigger.On)
 	case resource == "":
 		log.Printf("[routines] %.8s…/%s: the %s change feed needs the holder, and no declared resource serves %s, so there is nothing to ask for; waiting for any approval of theirs",
 			st.Subject, a.Name, a.Trigger.On, tool)

@@ -213,6 +213,47 @@ func TestFeedThatNeedsTheHolderAsksOnceAndHoldsForTheApproval(t *testing.T) {
 	}
 }
 
+// After the holder revoked, the feed waits for them without ever asking:
+// asking again the moment they said no is what the holder saw on dev when
+// they disconnected their mailbox (2026-09-28). Their own approval, from the
+// chat or the wallet, still releases it.
+func TestFeedTheHolderRevokedHoldsWithoutAsking(t *testing.T) {
+	h := newHoldingEngine("mailbox")
+	h.feed = func(ctx context.Context, sub, tool, call, cursor string) (int, string, error) {
+		h.calls <- tool + "." + call
+		if h.needs.Load() {
+			return 0, "", fmt.Errorf("%w: %s", errRevoked, `{"error":"the user revoked this assistant's access","revoked":true}`)
+		}
+		<-ctx.Done()
+		return 0, "", ctx.Err()
+	}
+	st := h.fresh(&routineState{Subject: "sub-1"})
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go h.poll(ctx, st, feedAgent())
+
+	h.expectCall(t, "the first call")
+	h.expectQuiet(t, "after a revoke")
+	if !h.waiting("sub-1", "Inbox triage") {
+		t.Fatal("the feed is held for the holder")
+	}
+	h.needs.Store(false)
+	h.Event(capability.Event{Type: "capability.approved", Resource: "mailbox", Subject: "sub-1"})
+	h.expectCall(t, "after the holder approved again")
+	if len(h.asks) != 0 {
+		t.Fatal("a revoke is never answered by asking the holder")
+	}
+}
+
+func TestRevokedByHolderIsAForbiddenWithTheField(t *testing.T) {
+	if !revokedByHolder(403, []byte(`{"error":"revoked","revoked":true}`)) {
+		t.Fatal("a 403 saying revoked is the holder having said no")
+	}
+	if revokedByHolder(403, []byte(`{"needs_holder":true}`)) || revokedByHolder(200, []byte(`{"revoked":true}`)) || revokedByHolder(403, []byte(`x`)) {
+		t.Fatal("only a 403 carrying revoked counts")
+	}
+}
+
 func TestFeedWithNoDeclaredResourceHoldsForAnyApproval(t *testing.T) {
 	h := newHoldingEngine("")
 	st := h.fresh(&routineState{Subject: "sub-1"})
