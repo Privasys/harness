@@ -280,7 +280,12 @@ const MUX_PATH = '/api/remote.mux';
 // The proxy's own sealed event sockets (capability_api.go): /privasys/*/events.
 const HARNESS_EVENTS_PREFIX = '/privasys/';
 
+// The session the transport uses. Replaced in place when an expired session
+// is renewed (recoverSession), so dsh's own reconnects land on the new one.
+const transport = { session: /** @type {any} */ (null) };
+
 function installSealedTransport(session) {
+    transport.session = session;
     // Unary RPC: FIFO chain so sealed HTTP frames reach the relay in counter
     // order (out-of-order = 401 replay -> "connection lost" storm).
     let chain = Promise.resolve();
@@ -295,7 +300,15 @@ function installSealedTransport(session) {
         const method = (init && init.method ? init.method : 'GET').toUpperCase();
         const body = init && init.body != null ? init.body : undefined;
         const opts = init && init.signal ? { signal: init.signal } : undefined;
-        const r = await enqueue(() => session.request(method, path, body, opts));
+        let r;
+        try {
+            r = await enqueue(() => transport.session.request(method, path, body, opts));
+        } catch (err) {
+            // A rejected request (not an HTTP status) means the sealed channel
+            // itself is gone.
+            if (!(init && init.signal && init.signal.aborted)) socketFailed();
+            throw err;
+        }
         return new Response(/** @type {any} */ (r.body), { status: r.status });
     }
     // ownsHost: dsh gates its privileged surface (writable Settings, the
@@ -337,11 +350,11 @@ function installSealedTransport(session) {
     }
     function InterceptingWebSocket(url, protocols) {
         if (isMux(url) && !carriesSealedProto(protocols)) {
-            return new SealedWebSocketAdapter(session, MUX_PATH);
+            return new SealedWebSocketAdapter(transport.session, MUX_PATH);
         }
         if (isHarnessEvents(url) && !carriesSealedProto(protocols)) {
             const u = new URL(url, location.origin);
-            return new SealedWebSocketAdapter(session, u.pathname + u.search);
+            return new SealedWebSocketAdapter(transport.session, u.pathname + u.search);
         }
         return new NativeWebSocket(url, protocols);
     }
@@ -354,45 +367,97 @@ function installSealedTransport(session) {
 
 // Transport health, across every sealed socket this page opens.
 //
-// The sealed session does not live for ever: when the relay's session ends
-// (a tab left open overnight) every socket dsh opens fails before it opens,
-// and dsh's carrier opens the next one at once, with no pause of its own. A
-// tab left like that ran for hours and grew to 10 GB (2026-09-28): each
-// attempt left its socket in the SDK's table, which only forgets a socket
-// when the sealed frame confirms the close, and a dead session confirms
-// nothing. So failures before open are paced (exponential, up to a minute),
-// each adapter lets go of everything once it is over, and after a few in a
-// row the holder is told and offered a reconnect. Never an automatic reload:
-// that would put a wallet approval on a phone nobody may be watching.
-const transportHealth = { failures: 0, banner: null };
+// The sealed session slides: the relay ends it after a quarter of an hour
+// without traffic, which is what a tab left alone runs into. From then on
+// every socket dsh opens fails before it opens, and dsh's carrier opens the
+// next one at once. Failures before open are paced (exponential, up to a
+// minute), each adapter lets go of everything once it is over, and after a
+// few in a row the session is treated as ended: the conversation is hidden
+// behind the gate, and the session is renewed.
+//
+// Renewal is silent when it can be (the privasys.id session is still valid
+// and the enclave accepts the stored voucher): the transport takes the new
+// session in place and dsh reconnects on its own. When it cannot (Firefox's
+// partitioned storage refuses a background resume, or the sign-in itself
+// expired) the gate asks for one click, and the click runs the full connect,
+// which may put an approval on the phone. Never automatically while the page
+// is hidden: that would send a wallet request to a phone nobody is watching.
+const transportHealth = { failures: 0 };
 const SOCKET_OPEN_TIMEOUT_MS = 20000;
 const LOST_AFTER_FAILURES = 4;
+let recovering = false;
 
 function socketOpened() {
     transportHealth.failures = 0;
-    if (transportHealth.banner) {
-        transportHealth.banner.remove();
-        transportHealth.banner = null;
-    }
 }
 
 /** Count a socket that never opened; returns how long to wait before saying so. */
 function socketFailed() {
     transportHealth.failures++;
-    if (transportHealth.failures >= LOST_AFTER_FAILURES && !transportHealth.banner) showConnectionLost();
+    if (transportHealth.failures >= LOST_AFTER_FAILURES) void recoverSession();
     return Math.min(60000, 500 * 2 ** Math.min(transportHealth.failures - 1, 7));
 }
 
-function showConnectionLost() {
-    const banner = el('div', { class: 'pv-lost', role: 'alert' },
-        el('div', { class: 'pv-card pv-center' },
-            el('div', { class: 'pv-card-title' }, 'Your secure connection ended'),
-            el('div', { class: 'pv-card-sub' },
-                'The encrypted session with the harness has expired. Reconnect to carry on; ' +
-                'your phone may ask you to approve it.'),
-            el('button', { class: 'pv-btn pv-btn-primary', onclick: () => location.reload() }, 'Reconnect')));
-    document.body.appendChild(banner);
-    transportHealth.banner = banner;
+/** Put a renewed session in place and show the page again. */
+function sessionRenewed(session) {
+    sealed = session;
+    transport.session = session;
+    /** @type {any} */ (window).__PRIVASYS_SEALED__ = session;
+    transportHealth.failures = 0;
+    recovering = false;
+    hideGate();
+}
+
+async function recoverSession() {
+    if (recovering || !frame) return;
+    recovering = true;
+    // The session has ended: the conversation is no longer shown.
+    setGate(spinnerCard('Reconnecting…', 'Your secure session with the harness ended. Restoring it.'));
+    if (document.hidden) {
+        await new Promise((resolve) => {
+            const onVisible = () => {
+                if (!document.hidden) {
+                    document.removeEventListener('visibilitychange', onVisible);
+                    resolve(undefined);
+                }
+            };
+            document.addEventListener('visibilitychange', onVisible);
+        });
+    }
+    try {
+        // Silent: a new sealed channel from the stored voucher, no ceremony.
+        if (typeof frame.destroySealedIframe === 'function') frame.destroySealedIframe();
+        const session = await frame.resumeSession();
+        console.log('[privasys-shell] sealed session renewed');
+        sessionRenewed(session);
+    } catch (err) {
+        console.warn('[privasys-shell] silent renewal failed; asking for a click:', msg(err));
+        showSessionEnded();
+    }
+}
+
+function showSessionEnded() {
+    setGate(el('div', { class: 'pv-card pv-center' },
+        el('div', { class: 'pv-card-title' }, 'Your secure session ended'),
+        el('div', { class: 'pv-card-sub' },
+            'The encrypted session with the harness expired while the page was not in use. ' +
+            'Reconnect to carry on where you left off; your phone may ask you to approve it.'),
+        el('button', { class: 'pv-btn pv-btn-primary', onclick: () => void reconnect() }, 'Reconnect')));
+}
+
+/** The click: the full connect, which the SDK draws in the gate if it needs to. */
+async function reconnect() {
+    gate.replaceChildren();
+    gate.classList.remove('pv-hidden');
+    try {
+        const res = await frame.connect();
+        if (!res || !res.session) throw new Error('no sealed session');
+        sessionRenewed(res.session);
+    } catch (err) {
+        console.warn('[privasys-shell] reconnect failed:', msg(err));
+        // A different account or a refused approval: start again cleanly.
+        location.reload();
+    }
 }
 
 // Adapts an SDK SealedWebSocket to the browser WebSocket surface dsh's mux

@@ -84,18 +84,6 @@
     z-index: 2;
 }
 
-/* Shown when the sealed session has ended under a page left open: dsh stays
-   visible behind it, and the one button reloads into a fresh session. */
-.pv-lost {
-    position: fixed;
-    top: 8vh;
-    left: 0;
-    right: 0;
-    display: flex;
-    justify-content: center;
-    z-index: 1000;
-}
-
 /* --- drawer --- */
 .pv-backdrop {
     position: fixed;
