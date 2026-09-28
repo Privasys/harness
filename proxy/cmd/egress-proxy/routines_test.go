@@ -138,7 +138,7 @@ func newHoldingEngine(resource string) *holdingEngine {
 	h := &holdingEngine{routineEngine: newRoutineEngine(nil, nil, map[string]string{"mail": "mail.example"}),
 		calls: make(chan string, 16), asks: make(chan string, 16)}
 	h.needs.Store(true)
-	h.feed = func(ctx context.Context, sub, tool, call, cursor string) (int, string, error) {
+	h.feed = func(ctx context.Context, sub, tool, call, account, cursor string) (int, string, error) {
 		h.calls <- tool + "." + call
 		if h.needs.Load() {
 			return 0, "", fmt.Errorf("%w: %s", errNeedsHolder, `{"error":"no account for this holder","needs_holder":true}`)
@@ -219,7 +219,7 @@ func TestFeedThatNeedsTheHolderAsksOnceAndHoldsForTheApproval(t *testing.T) {
 // chat or the wallet, still releases it.
 func TestFeedTheHolderRevokedHoldsWithoutAsking(t *testing.T) {
 	h := newHoldingEngine("mailbox")
-	h.feed = func(ctx context.Context, sub, tool, call, cursor string) (int, string, error) {
+	h.feed = func(ctx context.Context, sub, tool, call, account, cursor string) (int, string, error) {
 		h.calls <- tool + "." + call
 		if h.needs.Load() {
 			return 0, "", fmt.Errorf("%w: %s", errRevoked, `{"error":"the user revoked this assistant's access","revoked":true}`)
@@ -419,5 +419,70 @@ func TestAModelPaymentRefusalDuringARunPausesEveryAgent(t *testing.T) {
 	e.paymentRefused("sub-4", "webhook-old")
 	if len(paused) != 0 {
 		t.Fatalf("a refusal long after the last dispatch is not a run's, got %v", paused)
+	}
+}
+
+// Two accounts approved at the source: the feed call that names none is told
+// to name one, and the engine then holds one feed per account, each with its
+// own cursor, and a change on either is a change for the agent.
+func TestSeveralAccountsHoldOneFeedEach(t *testing.T) {
+	h := newHoldingEngine("mailbox")
+	type call struct{ account, cursor string }
+	seen := make(chan call, 16)
+	h.feed = func(ctx context.Context, sub, tool, callName, account, cursor string) (int, string, error) {
+		seen <- call{account, cursor}
+		switch {
+		case account == "":
+			return 0, "", &errSeveralAccounts{accounts: []string{"me@home.example", "work@corp.example"}}
+		case cursor == "":
+			// One change on each account's first call, then quiet.
+			return 1, "c-" + account, nil
+		}
+		<-ctx.Done()
+		return 0, "", ctx.Err()
+	}
+	st := h.fresh(&routineState{Subject: "sub-1"})
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { h.poll(ctx, st, feedAgent()); close(done) }()
+
+	got := map[string][]string{}
+	for len(got["me@home.example"]) < 2 || len(got["work@corp.example"]) < 2 {
+		select {
+		case c := <-seen:
+			got[c.account] = append(got[c.account], c.cursor)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("feeds so far: %v", got)
+		}
+	}
+	if len(got[""]) != 1 {
+		t.Fatalf("the account-less call is made once, then one per account: %v", got)
+	}
+	for _, a := range []string{"me@home.example", "work@corp.example"} {
+		if got[a][0] != "" || got[a][1] != "c-"+a {
+			t.Fatalf("%s keeps its own cursor: %v", a, got[a])
+		}
+	}
+	h.mu.Lock()
+	pending := st.pending["Inbox triage"]
+	h.mu.Unlock()
+	if pending.IsZero() {
+		t.Fatal("a change on an account is a change for the agent")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the agent's feeds end with it")
+	}
+}
+
+func TestSeveralAccountsIsAConflictWithTheList(t *testing.T) {
+	if got := severalAccounts(409, []byte(`{"error":"name one","accounts":["a@x.org","b@x.org"]}`)); len(got) != 2 {
+		t.Fatalf("a 409 with accounts: %v", got)
+	}
+	if severalAccounts(409, []byte(`{"error":"busy"}`)) != nil || severalAccounts(200, []byte(`{"accounts":["a"]}`)) != nil {
+		t.Fatal("only a 409 that lists accounts")
 	}
 }

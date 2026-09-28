@@ -206,6 +206,9 @@ COPY brands/${HARNESS_BRAND}/brand.json /app/brand.json
 # The routines door (a dsh plugin the proxy composes per worker) lives INSIDE
 # the CLI's tree so its bare imports of dsh packages resolve from there.
 COPY app/privasys-routines.mjs /dsh/apps/cli/config/privasys/privasys-routines.mjs
+# The connectors switch (which attested connectors a conversation may use),
+# composed per worker next to the routines door.
+COPY app/privasys-connectors.mjs /dsh/apps/cli/config/privasys/privasys-connectors.mjs
 COPY app/smoke.cordis.yml /app/smoke.cordis.yml
 # The service ceiling, IN THE IMAGE and therefore in the measurement. The
 # proxy also publishes its digest at OID 5.4.9, but baking it here gives the
@@ -247,6 +250,9 @@ ENV HARNESS_EGRESS_MODE=open
 # telemetry row at profile composition (profile-boot resolveTelemetryPatch).
 ENV DSH_TELEMETRY_DISABLED=1
 ENV HARNESS_MODEL_HOST=confidential-ai.apps.privasys.org
+# How the composer groups the connectors (name=category). A deployment word,
+# not the connectors' own: each still declares its product to the wallet.
+ENV HARNESS_CONNECTOR_CATEGORIES=mail=Mail,calendar=Calendar,files=Files,drive=Files,meetings=Meetings,web_search=Web,web_reader=Web
 # One host per tool named in HARNESS_TOOLS (name=host, comma-separated).
 ENV HARNESS_TOOL_HOSTS=web_search=web-search-brave.apps.privasys.org,web_reader=web-browser-lightpanda.apps.privasys.org,drive=privasys-drive.apps.privasys.org,mail=mail-connector.apps.privasys.org,calendar=calendar-connector.apps.privasys.org,files=files-connector.apps.privasys.org,meetings=meetings-connector.apps.privasys.org
 # Public browser-UI shell: these prefixes are the forked dsh SPA + Privasys

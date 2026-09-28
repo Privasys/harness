@@ -2237,4 +2237,44 @@ edit('packages/client/ui-conversation/src/client/conversation/assembler.ts', [
   ],
 ])
 
+// --- Connectors chip: which attested connectors a conversation may use -------
+// The host half is app/privasys-connectors.mjs (a `connectors` session
+// projection and the `/connectors` command, composed per worker by the
+// proxy). This is the composer chip that reads the one and writes through the
+// other, in the permission-presets client package: it already carries every
+// dependency a composer control needs, and no package.json is touched here.
+put('packages/client/ui-permission-presets/src/client/PrivasysConnectors.tsx', 'overlay/connectors/PrivasysConnectors.tsx')
+edit('packages/client/ui-permission-presets/src/client/index.ts', [
+  [
+    'permission client: connectors chip import',
+    `import { PermissionSelect } from './PermissionSelect.tsx'\n`,
+    `import { PermissionSelect } from './PermissionSelect.tsx'\n` +
+      `import { PrivasysConnectors } from './PrivasysConnectors.tsx'\n` +
+      `import type { PrivasysConnectorsInjected } from './PrivasysConnectors.tsx'\n`,
+  ],
+  [
+    'permission client: connectors chip slot',
+    `  ctx.effect(() => command.decorate({\n` +
+      `    name: 'permission',\n`,
+    `  // Privasys: the Connectors chip, beside the composer's other session\n` +
+      `  // controls; it writes through the host's /connectors command.\n` +
+      `  ctx.slots.inject('conversation.input.left', () => ctx.slots.register({\n` +
+      `    name: 'conversation.input.left',\n` +
+      `    id: 'privasys-connectors',\n` +
+      `    inject: (sessionId: SessionId): PrivasysConnectorsInjected => ({\n` +
+      `      toggle: async (server, on) => {\n` +
+      `        const live = sessions.binding(sessionId)?.session\n` +
+      `        if (live === undefined) throw new Error('this session is not materialized yet')\n` +
+      '        const result = await live.command(`/connectors ${server} ${on ? \'on\' : \'off\'}`)\n' +
+      '        if (!result.ok) throw new Error(`connectors: ${result.error.message}`)\n' +
+      `        return result.value.matched\n` +
+      `      },\n` +
+      `    }),\n` +
+      `  }, PrivasysConnectors))\n` +
+      `\n` +
+      `  ctx.effect(() => command.decorate({\n` +
+      `    name: 'permission',\n`,
+  ],
+])
+
 console.log('[overlay] done')

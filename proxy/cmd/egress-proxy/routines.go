@@ -34,6 +34,12 @@ package main
 // burst, the cursor is remembered per agent. Any tool that answers this shape
 // can drive an agent; the harness knows nothing about what the changes are.
 //
+// A holder may have approved several of their accounts at the source (a
+// personal and a work mailbox). The tool then answers the feed call with 409
+// and `"accounts": [...]` instead of guessing one, and the engine holds one
+// feed per account, each call naming its `"account"`, each with its own
+// cursor. Any change on any of them is a change for the agent.
+//
 // A run is dispatched through the worker's routines door (workers.go,
 // app/privasys-routines.mjs): one POST on the worker's own loopback server,
 // behind its ingress token, that dsh's webhook runtime turns into a new
@@ -124,7 +130,8 @@ func pollBackoff(failures int) time.Duration {
 type routineState struct {
 	Subject string                 `json:"subject"`
 	Agents  []capability.AgentSpec `json:"agents"`
-	// Cursors is the change-feed cursor per agent; LastRun the last dispatch.
+	// Cursors is the change-feed cursor per agent (per agent and account when
+	// the source has several, cursorKey); LastRun the last dispatch.
 	Cursors map[string]string    `json:"cursors"`
 	LastRun map[string]time.Time `json:"last_run"`
 
@@ -157,7 +164,7 @@ type routineEngine struct {
 	resourceFor func(sub, tool string) string
 	askHolder   func(sub, resource string) error
 	// feed makes one held change-feed call (changes); tests replace it.
-	feed func(ctx context.Context, sub, tool, call, cursor string) (int, string, error)
+	feed func(ctx context.Context, sub, tool, call, account, cursor string) (int, string, error)
 	// runsPerDay is the holder's cap on unattended runs per agent and UTC
 	// day (policy `spend.routines.runs_per_day`); nil or 0 is unlimited.
 	runsPerDay func(sub string) uint64
@@ -196,6 +203,23 @@ var errNeedsHolder = errors.New("the tool needs the holder")
 // feed reads. The opposite of errNeedsHolder: they have already answered, so
 // nothing asks their device again.
 var errRevoked = errors.New("the holder revoked access")
+
+// errSeveralAccounts is the source saying the holder approved several of their
+// accounts there and a feed call must name one; accounts lists them.
+type errSeveralAccounts struct{ accounts []string }
+
+func (e *errSeveralAccounts) Error() string {
+	return fmt.Sprintf("several accounts approved (%s)", strings.Join(e.accounts, ", "))
+}
+
+// cursorKey is where an agent's cursor for one account lives. The account-less
+// key is the agent's name alone, as it always was.
+func cursorKey(agent, account string) string {
+	if account == "" {
+		return agent
+	}
+	return agent + "\x00" + account
+}
 
 // holderHold is one change feed waiting for the holder's approval.
 type holderHold struct {
@@ -485,12 +509,50 @@ func runDue(a capability.AgentSpec, now, lastRun, pendingSince, started time.Tim
 func (e *routineEngine) poll(ctx context.Context, st *routineState, a capability.AgentSpec) {
 	tool, call, _ := eventSource(a.Trigger.On)
 	log.Printf("[routines] %.8s…/%s: holding the %s change feed", st.Subject, a.Name, a.Trigger.On)
+	several := e.pollAccount(ctx, st, a, tool, call, "")
+	if several == nil {
+		return
+	}
+	// One feed per account the holder approved, until the agent goes. An
+	// account approved later joins when the agent's feeds are next started.
+	log.Printf("[routines] %.8s…/%s: holding one feed per account (%s)", st.Subject, a.Name, strings.Join(several.accounts, ", "))
+	var wg sync.WaitGroup
+	for _, account := range several.accounts {
+		wg.Add(1)
+		go func(account string) {
+			defer wg.Done()
+			e.pollAccount(ctx, st, a, tool, call, account)
+		}(account)
+	}
+	wg.Wait()
+}
+
+// pollAccount holds one feed: the agent's source for one account, or for the
+// only one when account is "". It returns the accounts when the source says
+// there are several and none was named, and nil when the feed is over.
+func (e *routineEngine) pollAccount(ctx context.Context, st *routineState, a capability.AgentSpec, tool, call, account string) *errSeveralAccounts {
+	key := cursorKey(a.Name, account)
 	failures := 0
 	for ctx.Err() == nil {
 		e.mu.Lock()
-		cursor := st.Cursors[a.Name]
+		cursor := st.Cursors[key]
 		e.mu.Unlock()
-		changes, next, err := e.feed(ctx, st.Subject, tool, call, cursor)
+		changes, next, err := e.feed(ctx, st.Subject, tool, call, account, cursor)
+		var several *errSeveralAccounts
+		if errors.As(err, &several) {
+			if account == "" && len(several.accounts) > 0 {
+				return several
+			}
+			// Named, and still told to name one: the account is no longer
+			// this app's. Nothing to hold.
+			log.Printf("[routines] %.8s…/%s: %s: %v; this feed ends", st.Subject, a.Name, account, err)
+			return nil
+		}
+		if account != "" && errors.Is(err, errRevoked) {
+			// One account withdrawn; the agent's other accounts carry on.
+			log.Printf("[routines] %.8s…/%s: the holder withdrew %s; its feed ends", st.Subject, a.Name, account)
+			return nil
+		}
 		if errors.Is(err, errNeedsHolder) || errors.Is(err, errRevoked) {
 			// Not a failure: the tool is waiting for the holder, so this
 			// engine waits with it, without a second call until they act.
@@ -498,14 +560,14 @@ func (e *routineEngine) poll(ctx context.Context, st *routineState, a capability
 			// said no, and a routine that asked again the moment they
 			// disconnected their mailbox is how this was found (2026-09-28).
 			if !e.holdForHolder(ctx, st, a, tool, !errors.Is(err, errRevoked)) {
-				return
+				return nil
 			}
 			failures = 0
 			continue
 		}
 		if err != nil {
 			if ctx.Err() != nil {
-				return
+				return nil
 			}
 			failures++
 			wait := pollBackoff(failures)
@@ -515,7 +577,7 @@ func (e *routineEngine) poll(ctx context.Context, st *routineState, a capability
 			}
 			select {
 			case <-ctx.Done():
-				return
+				return nil
 			case <-time.After(wait):
 			}
 			continue
@@ -526,18 +588,24 @@ func (e *routineEngine) poll(ctx context.Context, st *routineState, a capability
 		}
 		e.mu.Lock()
 		if next != "" {
-			st.Cursors[a.Name] = next
+			st.Cursors[key] = next
 		}
 		if changes > 0 && st.pending[a.Name].IsZero() {
 			st.pending[a.Name] = e.now()
 		}
 		e.mu.Unlock()
 	}
+	return nil
 }
 
-// changes makes one held change-feed call as the holder.
-func (e *routineEngine) changes(ctx context.Context, sub, tool, call, cursor string) (int, string, error) {
-	args, _ := json.Marshal(map[string]any{"since": cursor, "wait_seconds": routinePollWait})
+// changes makes one held change-feed call as the holder, for one of their
+// accounts at the source when account is named.
+func (e *routineEngine) changes(ctx context.Context, sub, tool, call, account, cursor string) (int, string, error) {
+	req := map[string]any{"since": cursor, "wait_seconds": routinePollWait}
+	if account != "" {
+		req["account"] = account
+	}
+	args, _ := json.Marshal(req)
 	cctx, cancel := context.WithTimeout(ctx, (routinePollWait+30)*time.Second)
 	defer cancel()
 	carrier, _ := http.NewRequestWithContext(cctx, http.MethodPost, "/", nil)
@@ -550,6 +618,9 @@ func (e *routineEngine) changes(ctx context.Context, sub, tool, call, cursor str
 	}
 	if holderNeeded(status, raw) {
 		return 0, "", fmt.Errorf("%w: %s", errNeedsHolder, truncate(raw, 200))
+	}
+	if accounts := severalAccounts(status, raw); accounts != nil {
+		return 0, "", &errSeveralAccounts{accounts: accounts}
 	}
 	if status/100 != 2 {
 		return 0, "", fmt.Errorf("status %d: %s", status, truncate(raw, 200))
@@ -576,6 +647,21 @@ func holderNeeded(status int, raw []byte) bool {
 		NeedsHolder bool `json:"needs_holder"`
 	}
 	return json.Unmarshal(raw, &body) == nil && body.NeedsHolder
+}
+
+// severalAccounts reads a tool's answer for "the holder approved several of
+// their accounts here; name one" (HTTP 409 with `"accounts"`), or nil.
+func severalAccounts(status int, raw []byte) []string {
+	if status != http.StatusConflict {
+		return nil
+	}
+	var body struct {
+		Accounts []string `json:"accounts"`
+	}
+	if json.Unmarshal(raw, &body) != nil || len(body.Accounts) == 0 {
+		return nil
+	}
+	return body.Accounts
 }
 
 // revokedByHolder reads a tool's refusal for "the holder revoked this app's

@@ -539,6 +539,10 @@ func (m *WorkerManager) prepare(w *Worker) error {
 		"    - id: privasys-routines\n      name: %q\n      config: { path: %q, agentPreset: %s, permissionPreset: %s }\n",
 		envOr("HARNESS_ROUTINES_PLUGIN", "/dsh/apps/cli/config/privasys/privasys-routines.mjs"), routineDoorPath,
 		routineAgentPreset, routinePermissionPreset)
+	// The connectors switch: which of the attested connectors a conversation
+	// may use (app/privasys-connectors.mjs), one row per tool this deployment
+	// mounts.
+	patch += connectorsPatch()
 	if err := os.WriteFile(filepath.Join(w.Dir, "worker.cordis.yml"), []byte(patch), 0o600); err != nil {
 		return err
 	}
@@ -551,6 +555,45 @@ func (m *WorkerManager) prepare(w *Worker) error {
 		}
 	}
 	return nil
+}
+
+// connectorsPatch composes the connectors switch for a worker: every tool in
+// HARNESS_TOOL_HOSTS, labelled from its name, grouped by the category the
+// deployment gives it (HARNESS_CONNECTOR_CATEGORIES, name=category pairs).
+// On by default; a conversation switches one off from the composer.
+func connectorsPatch() string {
+	categories := map[string]string{}
+	for _, pair := range strings.Split(os.Getenv("HARNESS_CONNECTOR_CATEGORIES"), ",") {
+		if name, category, ok := strings.Cut(strings.TrimSpace(pair), "="); ok && name != "" {
+			categories[name] = strings.TrimSpace(category)
+		}
+	}
+	rows := []map[string]string{}
+	for _, pair := range strings.Split(os.Getenv("HARNESS_TOOL_HOSTS"), ",") {
+		name, _, ok := strings.Cut(strings.TrimSpace(pair), "=")
+		if !ok || name == "" {
+			continue
+		}
+		row := map[string]string{"server": name, "label": connectorLabel(name)}
+		if c := categories[name]; c != "" {
+			row["category"] = c
+		}
+		rows = append(rows, row)
+	}
+	// JSON is YAML's flow style, so the config goes in as it is.
+	cfg, _ := json.Marshal(map[string]any{"connectors": rows})
+	return fmt.Sprintf("    - id: privasys-connectors\n      name: %q\n      config: %s\n",
+		envOr("HARNESS_CONNECTORS_PLUGIN", "/dsh/apps/cli/config/privasys/privasys-connectors.mjs"), cfg)
+}
+
+// connectorLabel is a tool's name as a person reads it: "web_search" is
+// "Web search".
+func connectorLabel(name string) string {
+	words := strings.ReplaceAll(name, "_", " ")
+	if words == "" {
+		return words
+	}
+	return strings.ToUpper(words[:1]) + words[1:]
 }
 
 // refreshProfiles replaces dst with a copy of src (symlinks preserved, so
