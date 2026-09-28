@@ -22,13 +22,19 @@ import {
   useAttestation,
 } from './attestation-view/index.ts'
 
-/** Wire-name prefix map: MCP server -> platform app id (prod control plane). */
-const SERVER_APPS: Readonly<Record<string, { appId: string; label: string }>> = {
-  web_search: { appId: '82cb3965811d4ad298cac29e4837fd45', label: 'Web Search (Brave)' },
-  web_reader: { appId: '09965ab93f2e480ea0417cce438f0696', label: 'Web Reader (Lightpanda)' },
-  drive: { appId: 'cf7a0d585468416884c341ebe0ce4025', label: 'Privasys Drive' },
+/**
+ * The harness's own MCP servers: they answer inside this enclave, so a call to
+ * one is attested by the harness's own report. Every other server is a tool
+ * app the proxy reaches over mutual RA-TLS, listed in the summary's `tools`.
+ */
+const HARNESS_SERVERS = new Set(['access', 'agents'])
+
+/** The control plane that answers for a tool's host: dev apps live on test. */
+function controlPlaneFor(host: string): string {
+  return /\.apps\.test\.privasys\.org$/i.test(host)
+    ? 'https://api.developer.test.privasys.org'
+    : 'https://api.developer.privasys.org'
 }
-const TOOLS_CONTROL_PLANE = 'https://api.developer.privasys.org'
 
 function shellConfig() {
   return (globalThis as { __PRIVASYS_SHELL__?: Record<string, unknown> }).__PRIVASYS_SHELL__ ?? {}
@@ -75,7 +81,6 @@ function base64ToHex(value: string): string {
 /** Attestation report for one tool call, keyed by the call's wire tool name. */
 export function PrivasysAttestationTab({ toolWireName }: { toolWireName: string }) {
   const server = serverOf(toolWireName)
-  const known = server !== undefined ? SERVER_APPS[server] : undefined
 
   // The harness's own pinned dependency set — the identities the egress proxy
   // refuses to deviate from. Same-origin, served unsealed by the measured proxy.
@@ -88,10 +93,19 @@ export function PrivasysAttestationTab({ toolWireName }: { toolWireName: string 
     return () => { current = false }
   }, [])
 
+  // The tool as the proxy knows it: its host, the app that host proved to be
+  // on the last verified connection, and what the deployment calls it.
+  const tool = server === undefined || HARNESS_SERVERS.has(server)
+    ? undefined
+    : pins?.tools?.find(entry => entry.name === server)
+  const known = tool?.app_id
+    ? { appId: tool.app_id, label: tool.label || server, host: tool.host }
+    : undefined
+
   const cfg = shellConfig()
   const verifyQuoteUrl = cfg.verifyQuoteUrl ?? 'https://as.privasys.org/verify-quote'
   const attestUrl = known !== undefined
-    ? `${TOOLS_CONTROL_PLANE}/api/v1/apps/${dashed(known.appId)}/attest`
+    ? `${controlPlaneFor(known.host)}/api/v1/apps/${dashed(known.appId)}/attest`
     : ''
   const [state, actions] = useAttestation({
     attestUrl,
@@ -101,15 +115,31 @@ export function PrivasysAttestationTab({ toolWireName }: { toolWireName: string 
     autoVerifyQuote: Boolean(attestUrl),
   })
 
-  if (server === undefined || known === undefined) {
-    return (
-      <div style={{ fontSize: 13, padding: '4px 0' }}>
-        <p>
-          <strong>{toolWireName}</strong> runs inside the harness enclave itself — no
-          data leaves the attested boundary for this call. The enclave&apos;s full live
-          report is behind <strong>Secure Hardware Attestation</strong> in the sidebar.
-        </p>
-      </div>
+  const note = (text) => (
+    <div style={{ fontSize: 13, padding: '12px 16px' }}>
+      <p style={{ margin: 0, lineHeight: 1.5 }}>{text}</p>
+    </div>
+  )
+  if (server === undefined || HARNESS_SERVERS.has(server)) {
+    return note(
+      <>
+        <strong>{toolWireName}</strong> runs inside the harness enclave itself, so no
+        data leaves the attested boundary for this call. The enclave&apos;s full live
+        report is behind <strong>Secure Hardware Attestation</strong> in the sidebar.
+      </>,
+    )
+  }
+  if (pins === undefined) return note('Reading the harness dependency set…')
+  if (pins === null) return note('Could not read the harness dependency set, so the tool that served this call cannot be shown.')
+  if (known === undefined) {
+    return note(
+      <>
+        <strong>{toolWireName}</strong> is served by{' '}
+        {tool ? <><strong>{tool.label}</strong> ({tool.host})</> : 'a tool app'}, reached
+        over mutual RA-TLS and admitted only if it matches the harness&apos;s pinned
+        dependency set. This harness has not connected to it since it started, so
+        there is no live report to show yet.
+      </>,
     )
   }
 
@@ -124,7 +154,7 @@ export function PrivasysAttestationTab({ toolWireName }: { toolWireName: string 
   const { status, reason } = attestationStatusOf(summary, Boolean(attestUrl))
 
   return (
-    <div className="pv-att-scope" style={{ fontSize: 13, minWidth: 320, padding: '4px 10px 14px' }}>
+    <div className="pv-att-scope" style={{ fontSize: 13, minWidth: 320, padding: '12px 16px 16px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
         <strong>{known.label}</strong>
         <AttestationStatusBadge status={status} {...(reason !== undefined ? { reason } : {})} />

@@ -663,6 +663,10 @@ func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp 
 			"dependencies":    deps.Pinned(),
 			"model_host":      cfg.modelHost,
 			"tool_hosts":      cfg.toolHosts,
+			// Each tool, the app its host proved to be on the last verified
+			// connection, and what the deployment calls it: what the page
+			// attests a tool call against (the trajectory Attestation tab).
+			"tools": attestedTools(cfg.toolHosts, deps),
 			// The non-attested egress posture. The panel must show this
 			// beside the attested set, never instead of it: what this
 			// harness PERMITS and what a session actually USED are

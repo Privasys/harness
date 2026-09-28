@@ -570,15 +570,7 @@ func connectorsPatch() string {
 			categories[name] = strings.TrimSpace(category)
 		}
 	}
-	labels := map[string][2]string{}
-	for _, entry := range strings.Split(os.Getenv("HARNESS_CONNECTOR_LABELS"), ";") {
-		name, text, ok := strings.Cut(strings.TrimSpace(entry), "=")
-		if !ok || name == "" {
-			continue
-		}
-		label, detail, _ := strings.Cut(text, "|")
-		labels[name] = [2]string{strings.TrimSpace(label), strings.TrimSpace(detail)}
-	}
+	labels := connectorLabels()
 	rows := []map[string]string{}
 	for _, pair := range strings.Split(os.Getenv("HARNESS_TOOL_HOSTS"), ",") {
 		name, _, ok := strings.Cut(strings.TrimSpace(pair), "=")
@@ -601,6 +593,21 @@ func connectorsPatch() string {
 	cfg, _ := json.Marshal(map[string]any{"connectors": rows})
 	return fmt.Sprintf("    - id: privasys-connectors\n      name: %q\n      config: %s\n",
 		envOr("HARNESS_CONNECTORS_PLUGIN", "/dsh/apps/cli/config/privasys/privasys-connectors.mjs"), cfg)
+}
+
+// connectorLabels reads HARNESS_CONNECTOR_LABELS: per tool, its label and
+// the line saying what it reaches.
+func connectorLabels() map[string][2]string {
+	labels := map[string][2]string{}
+	for _, entry := range strings.Split(os.Getenv("HARNESS_CONNECTOR_LABELS"), ";") {
+		name, text, ok := strings.Cut(strings.TrimSpace(entry), "=")
+		if !ok || name == "" {
+			continue
+		}
+		label, detail, _ := strings.Cut(text, "|")
+		labels[name] = [2]string{strings.TrimSpace(label), strings.TrimSpace(detail)}
+	}
+	return labels
 }
 
 // connectorLabel is a tool's name as a person reads it: "web_search" is

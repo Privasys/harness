@@ -321,6 +321,7 @@ func (t *RATLSTransport) dialVerified(_ context.Context, _ string, addr string) 
 			cli.Close()
 			return nil, fmt.Errorf("ratls: %s failed the declared-dependency gate — refusing to send tool data: %w", host, derr)
 		}
+		t.Deps.NoteHost(host, rc.AppIDFromCert(info))
 	}
 
 	// Per-host workload pinning: the attested leaf must carry the exact
