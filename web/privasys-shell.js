@@ -352,10 +352,59 @@ function installSealedTransport(session) {
     /** @type {any} */ (window).WebSocket = InterceptingWebSocket;
 }
 
+// Transport health, across every sealed socket this page opens.
+//
+// The sealed session does not live for ever: when the relay's session ends
+// (a tab left open overnight) every socket dsh opens fails before it opens,
+// and dsh's carrier opens the next one at once, with no pause of its own. A
+// tab left like that ran for hours and grew to 10 GB (2026-09-28): each
+// attempt left its socket in the SDK's table, which only forgets a socket
+// when the sealed frame confirms the close, and a dead session confirms
+// nothing. So failures before open are paced (exponential, up to a minute),
+// each adapter lets go of everything once it is over, and after a few in a
+// row the holder is told and offered a reconnect. Never an automatic reload:
+// that would put a wallet approval on a phone nobody may be watching.
+const transportHealth = { failures: 0, banner: null };
+const SOCKET_OPEN_TIMEOUT_MS = 20000;
+const LOST_AFTER_FAILURES = 4;
+
+function socketOpened() {
+    transportHealth.failures = 0;
+    if (transportHealth.banner) {
+        transportHealth.banner.remove();
+        transportHealth.banner = null;
+    }
+}
+
+/** Count a socket that never opened; returns how long to wait before saying so. */
+function socketFailed() {
+    transportHealth.failures++;
+    if (transportHealth.failures >= LOST_AFTER_FAILURES && !transportHealth.banner) showConnectionLost();
+    return Math.min(60000, 500 * 2 ** Math.min(transportHealth.failures - 1, 7));
+}
+
+function showConnectionLost() {
+    const banner = el('div', { class: 'pv-lost', role: 'alert' },
+        el('div', { class: 'pv-card pv-center' },
+            el('div', { class: 'pv-card-title' }, 'Your secure connection ended'),
+            el('div', { class: 'pv-card-sub' },
+                'The encrypted session with the harness has expired. Reconnect to carry on; ' +
+                'your phone may ask you to approve it.'),
+            el('button', { class: 'pv-btn pv-btn-primary', onclick: () => location.reload() }, 'Reconnect')));
+    document.body.appendChild(banner);
+    transportHealth.banner = banner;
+}
+
 // Adapts an SDK SealedWebSocket to the browser WebSocket surface dsh's mux
 // client uses: addEventListener('open'|'message'|'close'|'error'), readyState
 // vs WebSocket.OPEN, send(string), close(code,reason). dsh requires text
 // message data, so inbound sealed bytes are UTF-8 decoded to a string.
+//
+// The SDK keeps the callbacks registered here for as long as it keeps the
+// socket, which for a dead session is for ever. They therefore reach the
+// adapter only through `ref`, cut when the socket is over, so what the SDK
+// retains is an empty box and not the adapter with every listener dsh hung
+// on it.
 class SealedWebSocketAdapter extends EventTarget {
     constructor(session, path) {
         super();
@@ -363,43 +412,81 @@ class SealedWebSocketAdapter extends EventTarget {
         this.readyState = 0;
         this.binaryType = 'blob';
         this._decoder = new TextDecoder();
+        this._done = false;
+        const ref = { a: this };
+        this._ref = ref;
         try {
             this._sws = session.openWebSocket(path);
         } catch (err) {
-            this.readyState = 3;
-            queueMicrotask(() => {
-                this.dispatchEvent(new Event('error'));
-                this.dispatchEvent(new CloseEvent('close', { code: 1006, reason: msg(err), wasClean: false }));
-            });
+            this._sws = null;
+            this._finish(1006, msg(err), false);
             return;
         }
-        this._sws.ready.then(
-            () => { this.readyState = 1; this.dispatchEvent(new Event('open')); },
-            (err) => {
-                this.readyState = 3;
-                this.dispatchEvent(new Event('error'));
-                this.dispatchEvent(new CloseEvent('close', { code: 1006, reason: msg(err), wasClean: false }));
+        this._timer = setTimeout(() => {
+            const a = ref.a;
+            if (a && a.readyState === 0) {
+                try { a._sws && a._sws.close(4008, 'open timed out'); } catch { /* ignore */ }
+                a._finish(1006, 'the sealed socket did not open in time', false);
             }
+        }, SOCKET_OPEN_TIMEOUT_MS);
+        this._sws.ready.then(
+            () => {
+                const a = ref.a;
+                if (!a || a._done) return;
+                clearTimeout(a._timer);
+                a.readyState = 1;
+                socketOpened();
+                a.dispatchEvent(new Event('open'));
+            },
+            (err) => { const a = ref.a; if (a) a._finish(1006, msg(err), false); }
         );
         this._unsub = this._sws.onMessage((bytes) => {
-            this.dispatchEvent(new MessageEvent('message', { data: this._decoder.decode(bytes) }));
+            const a = ref.a;
+            if (a && a.readyState === 1) {
+                a.dispatchEvent(new MessageEvent('message', { data: a._decoder.decode(bytes) }));
+            }
         });
         this._sws.onClose((info) => {
-            this.readyState = 3;
-            this.dispatchEvent(new CloseEvent('close', {
-                code: info.code, reason: info.reason, wasClean: info.wasClean
-            }));
+            const a = ref.a;
+            if (a) a._finish(info.code, info.reason, info.wasClean);
         });
-        this._sws.onError(() => { this.dispatchEvent(new Event('error')); });
+        this._sws.onError(() => {
+            const a = ref.a;
+            if (a && !a._done) a.dispatchEvent(new Event('error'));
+        });
     }
     send(data) {
         // dsh sends JSON text; the SDK seals it into a binary frame.
+        if (this.readyState !== 1 || !this._sws) throw new Error('the sealed socket is not open');
         this._sws.send(data);
     }
     close(code, reason) {
-        this.readyState = 2;
+        if (this._done) return;
+        try { if (this._sws) this._sws.close(code, reason); } catch { /* ignore */ }
+        // A native socket reports its close on its own; this one waits for the
+        // sealed frame to confirm, which a dead session never does. Say it now.
+        this._finish(typeof code === 'number' ? code : 1000, reason || '', true);
+    }
+    /** The socket is over: say so once, and let go of everything. */
+    _finish(code, reason, wasClean) {
+        if (this._done) return;
+        this._done = true;
+        const opened = this.readyState === 1;
+        this.readyState = 3;
+        clearTimeout(this._timer);
         try { if (this._unsub) this._unsub(); } catch { /* ignore */ }
-        try { this._sws.close(code, reason); } catch { /* ignore */ }
+        this._unsub = null;
+        this._sws = null;
+        if (this._ref) this._ref.a = null;
+        // A socket that never opened is paced, so a dead session costs one
+        // attempt a minute at worst rather than a tight loop.
+        const delay = opened ? 0 : socketFailed();
+        const fire = () => {
+            if (!opened && !wasClean) this.dispatchEvent(new Event('error'));
+            this.dispatchEvent(new CloseEvent('close', { code, reason, wasClean }));
+        };
+        if (delay > 0) setTimeout(fire, delay);
+        else queueMicrotask(fire);
     }
 }
 function msg(err) { return String((err && err.message) || err || 'error'); }
