@@ -97,7 +97,7 @@ function useStandings(): ReadonlyMap<string, Standing> {
 }
 
 /** What to say under a connector's name: its account when approved, else why it cannot be used. */
-function lineFor(c: Connector, s: Standing | undefined): { text?: string; warn: boolean } {
+function lineFor(c: Connector, s: Standing | undefined): { text: string | undefined; warn: boolean } {
   switch (s?.state) {
     case 'approved':
       return s.account
