@@ -4,21 +4,20 @@
 package main
 
 import (
+	"strings"
 	"testing"
-
-	"github.com/Privasys/attested-harness/proxy/internal/attested"
 )
 
 // A tool is shown with the app its host proved to be, and until it has
 // proved anything, with no app at all rather than a guess.
 func TestAttestedToolsNameTheAppEachHostProved(t *testing.T) {
 	t.Setenv("HARNESS_CONNECTOR_LABELS", "calendar=Calendar|Google, Outlook or any CalDAV calendar")
-	deps := attested.NewDepSet()
-	deps.NoteHost("Calendar-Connector.apps.test.privasys.org", "07a002a2a136474696b5a5b540b604d6")
+	proved := map[string]string{"calendar-connector.apps.test.privasys.org": "07a002a2a136474696b5a5b540b604d6"}
+	appOf := func(host string) string { return proved[strings.ToLower(host)] }
 	got := attestedTools(map[string]string{
 		"calendar":   "calendar-connector.apps.test.privasys.org",
 		"web_search": "web-search-brave.apps.privasys.org",
-	}, deps)
+	}, appOf)
 	if len(got) != 2 || got[0].Name != "calendar" || got[0].Label != "Calendar" ||
 		got[0].AppID != "07a002a2a136474696b5a5b540b604d6" {
 		t.Fatalf("calendar: %+v", got)

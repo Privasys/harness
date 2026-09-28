@@ -666,7 +666,7 @@ func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp 
 			// Each tool, the app its host proved to be on the last verified
 			// connection, and what the deployment calls it: what the page
 			// attests a tool call against (the trajectory Attestation tab).
-			"tools": attestedTools(cfg.toolHosts, deps),
+			"tools": attestedTools(cfg.toolHosts, peerAppIDOf),
 			// The non-attested egress posture. The panel must show this
 			// beside the attested set, never instead of it: what this
 			// harness PERMITS and what a session actually USED are
@@ -725,6 +725,9 @@ func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp 
 		}
 		return ""
 	})
+	// Where each connector stands for the holder, pushed to the composer chip
+	// on every event about them (connectors_events.go).
+	registerConnectorsAPI(mux, cfg.toolHosts, legs, notify)
 	// The access server tells the agent the same truth the Sessions row
 	// shows: the storage resource is the one the mirror exercises.
 	accessWithdrawn = func(sub, resource string) bool {

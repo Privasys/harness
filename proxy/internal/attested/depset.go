@@ -45,31 +45,6 @@ type DepSet struct {
 	// transport hooks it to evict pooled verified connections, so a peer
 	// admitted under the old set is re-verified on its next dial.
 	OnChange func()
-
-	// hosts is which declared app answered each host, as its attested leaf
-	// said on the last connection that passed the gate: what lets a page
-	// show a tool call next to the enclave that served it.
-	hosts map[string]string
-}
-
-// NoteHost records the app a host proved to be, after it passed the gate.
-func (d *DepSet) NoteHost(host, appID string) {
-	if host == "" || appID == "" {
-		return
-	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.hosts == nil {
-		d.hosts = map[string]string{}
-	}
-	d.hosts[strings.ToLower(host)] = appID
-}
-
-// HostApp is the app a host last proved to be, or "" if none has yet.
-func (d *DepSet) HostApp(host string) string {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return d.hosts[strings.ToLower(host)]
 }
 
 // NewDepSet builds the runtime dependency-set client from the container's

@@ -3,11 +3,7 @@
 
 package main
 
-import (
-	"sort"
-
-	"github.com/Privasys/attested-harness/proxy/internal/attested"
-)
+import "sort"
 
 // attestedTool is one mounted tool as the attestation summary shows it.
 type attestedTool struct {
@@ -21,7 +17,7 @@ type attestedTool struct {
 
 // attestedTools lists every mounted tool with the app its host proved to be,
 // labelled as the composer labels it (HARNESS_CONNECTOR_LABELS).
-func attestedTools(toolHosts map[string]string, deps *attested.DepSet) []attestedTool {
+func attestedTools(toolHosts map[string]string, appOf func(host string) string) []attestedTool {
 	labels := connectorLabels()
 	out := make([]attestedTool, 0, len(toolHosts))
 	for name, host := range toolHosts {
@@ -29,8 +25,8 @@ func attestedTools(toolHosts map[string]string, deps *attested.DepSet) []atteste
 		if l := labels[name][0]; l != "" {
 			t.Label = l
 		}
-		if deps != nil {
-			t.AppID = deps.HostApp(host)
+		if appOf != nil {
+			t.AppID = appOf(host)
 		}
 		out = append(out, t)
 	}
