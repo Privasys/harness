@@ -46,8 +46,8 @@ cannot weaken them.
 
 ## dsh pin
 
-Current pin: `477b4f420553e8a52c2fbccc464d7561b239c443` (release
-`dsh-v0.1.7-rc.2`), set as `DSH_PIN` in the Dockerfile. Upgrades are
+Current pin: `4878cdabd87d4041bdaff61d04c966883b9fd07a` (release
+`dsh-v0.2.0-rc.1`), set as `DSH_PIN` in the Dockerfile. Upgrades are
 deliberate re-pin commits: regenerate the bundle (`web/gen-bundle.mjs`),
 dry-run the overlay against a checkout of the new pin, rebase any anchor that
 moved, ship a new measured image version. Never a floating branch.

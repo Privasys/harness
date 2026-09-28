@@ -469,34 +469,6 @@ edit('packages/bundle/web-app/presets/cordis.patch.yml', [
   ],
 ])
 
-// --- 2e0. Firefox: intrinsic-prototype detection is V8-specific -------------
-// dsh 0.1.3's lossless-JSON validator proves a value's prototype is a realm's
-// intrinsic Object.prototype by comparing the constructor's source text to the
-// exact literal `function Object() { [native code] }`. That is V8's formatting.
-// SpiderMonkey prints `function Object() {\n    [native code]\n}`, so on
-// FIREFOX every plain object fails the check — every assistant-stream chunk is
-// refused, the session event feed dies at connect, and the UI shows
-// "Assistant stream raw chunk must be a lossless JSON object" for a chunk whose
-// keys, values and prototype are all perfectly ordinary. Chromium is
-// unaffected, which is why this looked like a data bug for a long time.
-//
-// Compare on whitespace-normalised source so V8, SpiderMonkey and JSC all
-// satisfy it while a FORGED constructor (any body that is not the native
-// marker) still fails. Upstream fix candidate: report and drop this patch.
-edit('packages/util/values/src/index.ts', [
-  [
-    'engine-agnostic intrinsic constructor check',
-    `    return constructor.name === name\n` +
-      `      && constructor.prototype === prototype\n` +
-      `      && Function.prototype.toString.call(constructor) === \`function \${name}() { [native code] }\``,
-    `    // privasys: whitespace-normalised — SpiderMonkey and JSC format the\n` +
-      `    // native marker with newlines and indentation, V8 does not.\n` +
-      `    return constructor.name === name\n` +
-      `      && constructor.prototype === prototype\n` +
-      `      && Function.prototype.toString.call(constructor).replace(/\\s+/g, ' ')\n` +
-      `        === \`function \${name}() { [native code] }\``,
-  ],
-])
 
 // The same V8-only comparison is duplicated in three more copies of the
 // helper (upstream discussion #5709 counts four sites in total). core/tools
@@ -1604,35 +1576,41 @@ edit('packages/api/session-controller/src/client/sessions/manager.ts', [
 edit('packages/api/session-controller/src/client/sessions/service.ts', [
   [
     'service delete',
-    `  async fork(opts: {\n` +
-      `    sessionId: SessionId\n` +
-      `    atSeq?: number\n` +
-      `    increaseTitle?: boolean\n` +
-      `  }): Promise<SessionId> {`,
-    `  async delete(sessionId: SessionId): Promise<void> {\n` +
+    // Anchored on the end of create(), not on fork()'s parameter list:
+    // fork's parameters move (0.2.0 added onCreated) and its JSDoc now sits
+    // above it, which an insertion before `async fork` would split.
+    `    if (!result.ok) throw new SessionCreateError(result.error, opts.sessionId)\n` +
+      `    this.projectList()\n` +
+      `    return result.value.sessionId\n` +
+      `  }\n`,
+    `    if (!result.ok) throw new SessionCreateError(result.error, opts.sessionId)\n` +
+      `    this.projectList()\n` +
+      `    return result.value.sessionId\n` +
+      `  }\n` +
+      `\n` +
+      `  /** Privasys: delete one session for good (log, registry accounting, Drive copy). */\n` +
+      `  async delete(sessionId: SessionId): Promise<void> {\n` +
       `    const result = await this.manager.delete(sessionId)\n` +
       `    if (!result.ok) throw new Error(\`\${result.error.code}: \${result.error.message}\`)\n` +
       `    this.projectList()\n` +
-      `  }\n` +
-      `\n` +
-      `  async fork(opts: {\n` +
-      `    sessionId: SessionId\n` +
-      `    atSeq?: number\n` +
-      `    increaseTitle?: boolean\n` +
-      `  }): Promise<SessionId> {`,
+      `  }\n`,
   ],
 ])
 edit('packages/api/session-controller/src/client/contract/sessions.ts', [
   [
     'contract delete',
-    `  fork(opts: { sessionId: SessionId; atSeq?: number; increaseTitle?: boolean }): Promise<SessionId>`,
-    `  fork(opts: { sessionId: SessionId; atSeq?: number; increaseTitle?: boolean }): Promise<SessionId>\n` +
+    // Anchored on the member after fork(), so fork's parameters can move.
+    `  /**\n` +
+      `   * Borrow an already-retained Agent-scoped Context without extending its lifetime.`,
+    `  /**\n` +
       `  /**\n` +
       `   * Privasys: delete one session for good (log, registry accounting, Drive\n` +
       `   * copy). A running session is refused.\n` +
       `   * @param sessionId - the session to delete.\n` +
       `   */\n` +
-      `  delete?(sessionId: SessionId): Promise<void>`,
+      `  delete?(sessionId: SessionId): Promise<void>\n` +
+      `  /**\n` +
+      `   * Borrow an already-retained Agent-scoped Context without extending its lifetime.`,
   ],
 ])
 

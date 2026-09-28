@@ -53,7 +53,18 @@ FROM node:22-bookworm AS dsh-builder
 # (3) Scheduled tasks are new and ship disabled; the excluded-row check
 # keeps them that way, since a timer that wakes the agent is an unattended
 # run and those go through the proxy's routines, not a plugin.
-ARG DSH_PIN=477b4f420553e8a52c2fbccc464d7561b239c443
+#
+# dsh-v0.2.0-rc.1 (2026-09-28), 261 commits on. Three overlay anchors moved,
+# and one of them is gone for good: upstream now checks intrinsic prototypes
+# against the engine's own native text, so our Firefox patch is dropped. The
+# session-delete additions are anchored on neighbouring members now instead
+# of on fork()'s parameter list, which moved again. Automation left the
+# web-app bundle (time-context, schedule), so the rc.2 clock collision is gone.
+# New: product analytics in the web-app bundle, exporting to DeepSeek and off
+# for a web profile only through an expression; the deployment switches it
+# off literally, the allow-list drops the shared otel transport, and the
+# build asserts no telemetry row is enabled in the composition that boots.
+ARG DSH_PIN=4878cdabd87d4041bdaff61d04c966883b9fd07a
 RUN corepack enable \
  && git clone https://github.com/deepseek-ai/deepseek-harness /dsh \
  && git -C /dsh checkout "${DSH_PIN}"

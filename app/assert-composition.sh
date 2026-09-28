@@ -50,7 +50,7 @@ grep -q "agent-loop" "$HEADLESS_DUMP" || fail "the headless profile carries no a
 for row in web-search-deepseek web-fetch-http session-log-deepseek \
            plugin-package-inventory-deepseek session-telemetry-otel \
            tool-result-pruner dsh-llm-pi-ai \
-           llm-deepseek-account schedule; do
+           llm-deepseek-account schedule otel; do
 	for dump in "$WEB_DUMP" "$HEADLESS_DUMP"; do
 		# Read each declaration of the row as a BLOCK: from its `- id:` line
 		# to the next line indented no deeper. `disabled: true` sits among
@@ -112,6 +112,23 @@ for dump in "$DEPLOY_DUMP"; do
 		END { if (inblock && !off) n++; print n + 0 }
 	' "$dump")
 	[ "$clocks" = "1" ] || fail "expected exactly 1 enabled time-context row in $(basename "$dump"), found $clocks"
+done
+
+# No telemetry row may be enabled in the composition that boots. dsh 0.2.0
+# mounts product analytics in the web-app bundle, off for a web profile only
+# through an expression; the deployment patch switches both rows off in so
+# many words, and this is where that promise is checked.
+for row in desktop-product-telemetry product-analytics session-telemetry-otel otel; do
+	enabled=$(awk -v row="$row" '
+		function indent(s) { match(s, /^ */); return RLENGTH }
+		$0 ~ "^ *- id: " row "$" { inblock = 1; depth = indent($0); off = 0; next }
+		inblock {
+			if (indent($0) <= depth) { if (!off) print row; inblock = 0 }
+			else { if ($0 ~ /^ *disabled: true$/) off = 1; next }
+		}
+		END { if (inblock && !off) print row }
+	' "$DEPLOY_DUMP")
+	[ -z "$enabled" ] || fail "telemetry row '${row}' is enabled in the composition that boots"
 done
 
 # The model leg is the api-key adapter face, pointed at the in-TCB proxy. dsh

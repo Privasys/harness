@@ -114,6 +114,16 @@
 - id: ui-plugin-manager
   disabled: true
 
+# dsh 0.2.0-rc.1 mounts product analytics in the web-app bundle, exporting to
+# DeepSeek's collector (dsh-otel-collector.deepseeksvc.com). Both rows are
+# off for a web profile only through an expression that tests for the
+# desktop profile. This deployment sends no telemetry, so it switches them
+# off in its own words, and app/assert-composition.sh checks that it did.
+- id: desktop-product-telemetry
+  disabled: true
+- id: product-analytics
+  disabled: true
+
 # Clock for the agent (dsh injects NO date/time by default). dsh-time-context
 # appends a timestamp message at the ABSOLUTE TAIL of the step batch
 # (prepend:true listener) and throttles refreshes — the cache-safe injection

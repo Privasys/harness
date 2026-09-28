@@ -19,6 +19,9 @@ const DROP = new Set([
   // DeepSeek-cloud reporting surfaces: session-log upload, plugin-inventory
   // metadata in requests, OTEL telemetry.
   'session-log-deepseek', 'plugin-package-inventory-deepseek', 'session-telemetry-otel',
+  // The shared OTel transport (dsh 0.2.0 split it out of session telemetry).
+  // Inert on its own; its only consumers are the telemetry plugins.
+  'otel',
   // Mid-transcript in-place tool-result rewriting: a prefix-cache killer for
   // the confidential inference backend.
   'tool-result-pruner',
@@ -135,7 +138,7 @@ const header = `# @privasys/harness-bundle — the Privasys Privasys Harness cor
 #     deployment's only model leg is the attested one
 #   session-log-deepseek     — no session-log upload to DeepSeek
 #   plugin-package-inventory-deepseek — no plugin metadata in model requests
-#   session-telemetry-otel   — no telemetry
+#   session-telemetry-otel, otel — no telemetry, and not its transport
 #   tool-result-pruner       — mid-transcript in-place rewrites bust the
 #     confidential backend's prefix cache
 #   tool-pwsh, pwsh-sandbox  — Windows-only, dead weight in a Linux enclave

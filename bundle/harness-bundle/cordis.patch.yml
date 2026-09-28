@@ -13,7 +13,7 @@
 #     deployment's only model leg is the attested one
 #   session-log-deepseek     — no session-log upload to DeepSeek
 #   plugin-package-inventory-deepseek — no plugin metadata in model requests
-#   session-telemetry-otel   — no telemetry
+#   session-telemetry-otel, otel — no telemetry, and not its transport
 #   tool-result-pruner       — mid-transcript in-place rewrites bust the
 #     confidential backend's prefix cache
 #   tool-pwsh, pwsh-sandbox  — Windows-only, dead weight in a Linux enclave
