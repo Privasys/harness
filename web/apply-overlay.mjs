@@ -90,6 +90,17 @@ const BRAND_TITLE = JSON.parse(readFileSync(join(brandDir, 'brand.json'), 'utf8'
 if (!BRAND_TITLE) throw new Error(`overlay: brands/${BRAND}/brand.json has no title`)
 console.log(`[overlay] brand ${BRAND} ("${BRAND_TITLE}")`)
 
+// The brand's legal pages, linked from the User menu. A brand that names none
+// gets the platform's: Privasys runs the harness whatever its name.
+const BRAND_LEGAL = {
+  privacy: 'https://privasys.org/legal/privacy',
+  terms: 'https://privasys.org/legal/terms',
+  ...(JSON.parse(readFileSync(join(brandDir, 'brand.json'), 'utf8')).legal ?? {}),
+}
+for (const [k, v] of Object.entries(BRAND_LEGAL)) {
+  if (!/^https:\/\/[^\s"'<>]+$/.test(String(v))) throw new Error(`overlay: brands/${BRAND}/brand.json legal.${k} is not an https URL`)
+}
+
 // brandPut copies the brand's own file when it has one, else the default.
 function brandPut(rel, from, brandFile) {
   const own = join(brandDir, brandFile)
@@ -128,6 +139,9 @@ brandPut('packages/client/ui-primitives/src/FishLogo.tsx', 'overlay/brand/FishLo
 brandPut('packages/client/ui-primitives/src/BrandWordmark.tsx', 'overlay/brand/BrandWordmark.tsx', 'BrandWordmark.tsx')
 put('packages/client/ui-brand-official/src/client/index.ts', 'overlay/brand/index.ts')
 put('packages/client/ui-brand-official/src/client/PrivasysRows.tsx', 'overlay/brand/PrivasysRows.tsx')
+write('packages/client/ui-brand-official/src/client/privasys-legal.ts',
+  `/** The brand's legal pages (brand.json "legal"), written by the overlay. */\n` +
+  `export const PRIVASYS_LEGAL = ${JSON.stringify({ privacy: BRAND_LEGAL.privacy, terms: BRAND_LEGAL.terms })} as const\n`)
 // The foot rows are dsh's own foot control (Settings trigger / Cordis badge
 // geometry, dsh icons, StateDot status, Menu and Modal primitives) — one
 // shared row component and one CSS module. ui-brand-official ships no CSS
@@ -2309,6 +2323,22 @@ edit('packages/client/ui-permission-presets/src/client/index.ts', [
       `      },\n` +
       `    },\n` +
       `  }), 'privasys: /connectors decoration')\n`,
+  ],
+])
+
+// "Open configuration file" asks the Host to open its settings file in a
+// local editor. dsh offers it on a loopback Host, which our transport claims
+// to be (ownsHost), but the Host here is an enclave with nobody at it: the
+// action could only ever fail. Not offered.
+edit('packages/client/ui-settings-general/src/client/index.ts', [
+  [
+    'settings: no open-configuration-file action',
+    `  const documentController = ctx.remote.$host.isLoopback\n` +
+      `    ? new SettingsDocumentStore(ctx, ctx.configForms.describe())\n` +
+      `    : undefined\n`,
+    `  // Privasys: the Host is an enclave; its settings file opens on a machine\n` +
+      `  // nobody sits at, so the open-document action is not offered.\n` +
+      `  const documentController = undefined as SettingsDocumentStore | undefined\n`,
   ],
 ])
 

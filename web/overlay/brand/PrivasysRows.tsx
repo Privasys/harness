@@ -20,6 +20,7 @@
  */
 import { useRef, useState } from 'react'
 import { IconUserOutlineRegular, Menu } from '@deepseek-ai/dsh-client-ui-primitives'
+import { PRIVASYS_LEGAL } from './privasys-legal.ts'
 import type { SidebarFooterActionOwnerProps } from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import { PrivasysAttestationRow } from './PrivasysAttestation.tsx'
 import { PrivasysStorageRow } from './PrivasysStorage.tsx'
@@ -69,10 +70,18 @@ export function PrivasysUserRow({ wide }: SidebarFooterActionOwnerProps) {
             onClick={() => { setOpen(value => !value) }}
           />
         )}
-        items={[{ id: 'sign-out', label: 'Sign out', icon: <SignOutIcon /> }]}
+        items={[
+          { id: 'privacy', label: 'Privacy policy' },
+          { id: 'terms', label: 'Terms of service' },
+          { type: 'separator', id: 'legal-end' },
+          { id: 'sign-out', label: 'Sign out', icon: <SignOutIcon /> },
+        ]}
         onSelect={(id) => {
           setOpen(false)
           if (id === 'sign-out') shell().logout?.()
+          // The brand's own pages (brand.json "legal"), in a new tab: this one
+          // holds the sealed session.
+          if (id === 'privacy' || id === 'terms') window.open(PRIVASYS_LEGAL[id], '_blank', 'noopener,noreferrer')
         }}
         onClose={() => { setOpen(false) }}
         side="top"
