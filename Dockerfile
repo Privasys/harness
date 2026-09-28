@@ -253,6 +253,9 @@ ENV HARNESS_MODEL_HOST=confidential-ai.apps.privasys.org
 # How the composer groups the connectors (name=category). A deployment word,
 # not the connectors' own: each still declares its product to the wallet.
 ENV HARNESS_CONNECTOR_CATEGORIES=mail=Mail,calendar=Calendar,files=Files,drive=Files,meetings=Meetings,web_search=Web,web_reader=Web
+# And what each one is called, with a line saying whose service it reaches,
+# so Privasys Drive is never mistaken for Google Drive (name=Label|Detail;...).
+ENV HARNESS_CONNECTOR_LABELS="web_search=Web search|Search the web through Privasys;web_reader=Web reader|Open and read a web page;drive=Privasys Drive|Your files in Privasys Drive;files=Google Drive & OneDrive|Files in your Google Drive or OneDrive;mail=Email|Gmail, Outlook or any IMAP mailbox;calendar=Calendar|Google, Outlook or any CalDAV calendar;meetings=Meetings|Zoom and Microsoft Teams transcripts"
 # One host per tool named in HARNESS_TOOLS (name=host, comma-separated).
 ENV HARNESS_TOOL_HOSTS=web_search=web-search-brave.apps.privasys.org,web_reader=web-browser-lightpanda.apps.privasys.org,drive=privasys-drive.apps.privasys.org,mail=mail-connector.apps.privasys.org,calendar=calendar-connector.apps.privasys.org,files=files-connector.apps.privasys.org,meetings=meetings-connector.apps.privasys.org
 # Public browser-UI shell: these prefixes are the forked dsh SPA + Privasys

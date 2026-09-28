@@ -2275,6 +2275,103 @@ edit('packages/client/ui-permission-presets/src/client/index.ts', [
       `  ctx.effect(() => command.decorate({\n` +
       `    name: 'permission',\n`,
   ],
+  [
+    // The bare `/connectors` opens the same switches as the chip: pick one to
+    // turn it on or off, the pick written through the command, as
+    // `/permission` does it.
+    'permission client: connectors picker',
+    `  }), 'ui-permission: /permission decoration')\n`,
+    `  }), 'ui-permission: /permission decoration')\n` +
+      `\n` +
+      `  // Privasys: the bare /connectors picks one connector to switch.\n` +
+      `  type PrivasysConnector = { server: string; label: string; detail?: string; on: boolean }\n` +
+      `  const connectorsOf = (session: ClientSessionContext): PrivasysConnector[] | undefined => {\n` +
+      `    const view = sessionFor(session)?.projections.faceOf('connectors' as never).getSnapshot() as { connectors: PrivasysConnector[] } | undefined\n` +
+      `    return view?.connectors\n` +
+      `  }\n` +
+      `  ctx.effect(() => command.decorate({\n` +
+      `    name: 'connectors',\n` +
+      `    available: session => (connectorsOf(session)?.length ?? 0) > 0,\n` +
+      `    ui: {\n` +
+      `      kind: 'popupSelect',\n` +
+      `      options: async (session) => (connectorsOf(session) ?? []).map(c => ({\n` +
+      `        id: c.server,\n` +
+      `        label: c.label,\n` +
+      `        badge: c.on ? 'on' : 'off',\n` +
+      `        ...(c.detail ? { detail: c.detail } : {}),\n` +
+      `      })),\n` +
+      `      onSelect: async (option, session) => {\n` +
+      `        const c = connectorsOf(session)?.find(x => x.server === option.id)\n` +
+      `        const live = sessions.binding(session.sessionId)?.session\n` +
+      `        if (c === undefined || live === undefined) return\n` +
+      '        const result = await live.command(`/connectors ${c.server} ${c.on ? \'off\' : \'on\'}`)\n' +
+      '        if (!result.ok) throw new Error(`connectors: ${result.error.message}`)\n' +
+      `      },\n` +
+      `    },\n` +
+      `  }), 'privasys: /connectors decoration')\n`,
+  ],
+])
+
+// The /connectors command is the deployment's (app/privasys-connectors.mjs,
+// definitionId "privasys-connectors"); dsh gives a menu row its title, icon
+// and description only for commands it knows, so it learns this one here.
+edit('packages/client/ui-commands/src/client/resolution.ts', [
+  [
+    'commands: connectors identity',
+    `  export: '@deepseek-ai/dsh-session-log-export',\n`,
+    `  export: '@deepseek-ai/dsh-session-log-export',\n` +
+      `  connectors: 'privasys-connectors',\n`,
+  ],
+])
+edit('packages/client/ui-commands/src/client/presentation.ts', [
+  [
+    'commands: connectors icon import',
+    `  PermissionIconFullAccessRegular,\n} from '@deepseek-ai/dsh-client-ui-primitives'\n`,
+    `  PermissionIconFullAccessRegular, IconLinkOutlineRegular,\n} from '@deepseek-ai/dsh-client-ui-primitives'\n`,
+  ],
+  [
+    'commands: connectors row order',
+    `  commands: ['compact', 'permission', 'model', 'export'],\n`,
+    `  commands: ['compact', 'permission', 'connectors', 'model', 'export'],\n`,
+  ],
+  [
+    'commands: connectors face',
+    `  hostFace('export', IconDownloadOutlineRegular),\n`,
+    `  hostFace('export', IconDownloadOutlineRegular),\n` +
+      `  hostFace('connectors', IconLinkOutlineRegular),\n`,
+  ],
+])
+edit('packages/client/ui-commands/src/client/locales.ts', [
+  [
+    'commands: connectors zh label',
+    `  'label.export': '下载日志',\n`,
+    `  'label.export': '下载日志',\n  'label.connectors': '连接器',\n`,
+  ],
+  [
+    'commands: connectors zh description',
+    `  'description.export': '将当前会话内容导出为 ZIP',\n`,
+    `  'description.export': '将当前会话内容导出为 ZIP',\n  'description.connectors': '选择本次对话可以使用的连接器',\n`,
+  ],
+  [
+    'commands: connectors zh token',
+    `  'token.export': '导出',\n`,
+    `  'token.export': '导出',\n  'token.connectors': 'connectors',\n`,
+  ],
+  [
+    'commands: connectors en label',
+    `  'label.export': 'Export',\n`,
+    `  'label.export': 'Export',\n  'label.connectors': 'Connectors',\n`,
+  ],
+  [
+    'commands: connectors en description',
+    `  'description.export': 'Download this Session log as a ZIP archive',\n`,
+    `  'description.export': 'Download this Session log as a ZIP archive',\n  'description.connectors': 'Choose which connectors this conversation may use',\n`,
+  ],
+  [
+    'commands: connectors en token',
+    `  'token.export': 'export',\n`,
+    `  'token.export': 'export',\n  'token.connectors': 'connectors',\n`,
+  ],
 ])
 
 console.log('[overlay] done')

@@ -14,11 +14,12 @@ import (
 func TestConnectorsPatchListsEveryMountedTool(t *testing.T) {
 	t.Setenv("HARNESS_TOOL_HOSTS", "web_search=search.example,mail=mail.example")
 	t.Setenv("HARNESS_CONNECTOR_CATEGORIES", "mail=Mail, web_search=Web")
+	t.Setenv("HARNESS_CONNECTOR_LABELS", "mail=Email|Gmail, Outlook or any IMAP mailbox")
 	got := connectorsPatch()
 	for _, want := range []string{
 		"- id: privasys-connectors\n",
 		`{"category":"Web","label":"Web search","server":"web_search"}`,
-		`{"category":"Mail","label":"Mail","server":"mail"}`,
+		`{"category":"Mail","detail":"Gmail, Outlook or any IMAP mailbox","label":"Email","server":"mail"}`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("patch lacks %q:\n%s", want, got)

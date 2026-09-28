@@ -558,8 +558,10 @@ func (m *WorkerManager) prepare(w *Worker) error {
 }
 
 // connectorsPatch composes the connectors switch for a worker: every tool in
-// HARNESS_TOOL_HOSTS, labelled from its name, grouped by the category the
-// deployment gives it (HARNESS_CONNECTOR_CATEGORIES, name=category pairs).
+// HARNESS_TOOL_HOSTS, grouped by the category the deployment gives it
+// (HARNESS_CONNECTOR_CATEGORIES, name=category pairs), named as the
+// deployment names it (HARNESS_CONNECTOR_LABELS, "name=Label|Detail" entries
+// separated by ";", so a detail may carry commas), else from its name.
 // On by default; a conversation switches one off from the composer.
 func connectorsPatch() string {
 	categories := map[string]string{}
@@ -567,6 +569,15 @@ func connectorsPatch() string {
 		if name, category, ok := strings.Cut(strings.TrimSpace(pair), "="); ok && name != "" {
 			categories[name] = strings.TrimSpace(category)
 		}
+	}
+	labels := map[string][2]string{}
+	for _, entry := range strings.Split(os.Getenv("HARNESS_CONNECTOR_LABELS"), ";") {
+		name, text, ok := strings.Cut(strings.TrimSpace(entry), "=")
+		if !ok || name == "" {
+			continue
+		}
+		label, detail, _ := strings.Cut(text, "|")
+		labels[name] = [2]string{strings.TrimSpace(label), strings.TrimSpace(detail)}
 	}
 	rows := []map[string]string{}
 	for _, pair := range strings.Split(os.Getenv("HARNESS_TOOL_HOSTS"), ",") {
@@ -577,6 +588,12 @@ func connectorsPatch() string {
 		row := map[string]string{"server": name, "label": connectorLabel(name)}
 		if c := categories[name]; c != "" {
 			row["category"] = c
+		}
+		if l := labels[name]; l[0] != "" {
+			row["label"] = l[0]
+		}
+		if d := labels[name][1]; d != "" {
+			row["detail"] = d
 		}
 		rows = append(rows, row)
 	}

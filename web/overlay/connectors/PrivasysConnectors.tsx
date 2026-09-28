@@ -27,6 +27,8 @@ interface Connector {
   server: string
   label: string
   category: string
+  /** One line saying whose service it reaches ("Files in your Google Drive or OneDrive"). */
+  detail?: string
   on: boolean
 }
 
@@ -66,7 +68,20 @@ export function PrivasysConnectors(props: PrivasysConnectorsProps) {
   const items: MenuEntry[] = []
   for (const g of groups) {
     if (g.category !== '') items.push({ type: 'label', id: `category:${g.category}`, text: g.category })
-    for (const c of g.connectors) items.push({ id: c.server, label: c.label, disabled: busy !== null })
+    for (const c of g.connectors) {
+      items.push({
+        id: c.server,
+        label: c.detail
+          ? (
+            <span style={{ display: 'flex', flexDirection: 'column' }}>
+              <span>{c.label}</span>
+              <span style={{ fontSize: '0.85em', opacity: 0.65 }}>{c.detail}</span>
+            </span>
+          )
+          : c.label,
+        disabled: busy !== null,
+      })
+    }
   }
 
   const choose = (server: string): void => {

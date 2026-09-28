@@ -42,6 +42,7 @@ function connectorsOf(config) {
       server,
       label: String(c?.label || server),
       category: String(c?.category || ''),
+      detail: String(c?.detail || ''),
       on: c?.on !== false,
     })
   }
