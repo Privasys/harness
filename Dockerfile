@@ -64,7 +64,12 @@ FROM node:22-bookworm AS dsh-builder
 # for a web profile only through an expression; the deployment switches it
 # off literally, the allow-list drops the shared otel transport, and the
 # build asserts no telemetry row is enabled in the composition that boots.
-ARG DSH_PIN=4878cdabd87d4041bdaff61d04c966883b9fd07a
+#
+# dsh-v0.2.0-rc.2 (2026-09-29): no bundle composes differently (base, web-app
+# and headless roll the same rows). One anchor moved: the question composer's
+# block field, whose autoFocus line upstream rewrote for an opt-in
+# asynchronous question mode; the secret edit now anchors on variant/value.
+ARG DSH_PIN=639ed015397290b3745d163aafe02ffee4aa3f84
 RUN corepack enable \
  && git clone https://github.com/deepseek-ai/deepseek-harness /dsh \
  && git -C /dsh checkout "${DSH_PIN}"

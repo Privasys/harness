@@ -2051,13 +2051,11 @@ edit('packages/client/ui-user-questions/src/client/QuestionComposer.tsx', [
   ],
   [
     'ui-user-questions: secret on the block field',
-    `                    <AnswerField\n` +
-      `                      autoFocus={!focusedQuestions.current.has(index)}\n` +
-      `                      variant="block"\n` +
+    // Anchored on variant/value only: the autoFocus line above them moves
+    // (0.2.0-rc.2 rewrote it for the asynchronous question mode).
+    `                      variant="block"\n` +
       `                      value={draft.custom}\n`,
-    `                    <AnswerField\n` +
-      `                      autoFocus={!focusedQuestions.current.has(index)}\n` +
-      `                      variant="block"\n` +
+    `                      variant="block"\n` +
       `                      secret={question.secret === true}\n` +
       `                      value={draft.custom}\n`,
   ],
