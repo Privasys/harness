@@ -81,7 +81,14 @@ export function PrivasysFormPanel({ pending, t }: PrivasysFormPanelProps) {
       }),
     }))
   }
-  const cancel = (): void => { settle('cancel', () => pending.cancel()) }
+  // dsh 0.2.0-rc.2: cancel became dismiss(), and a panel keyed to a tool call
+  // only leaves the seat (nothing is sent; the tool-call row brings it back),
+  // exactly as the stock composer does. Anything else is a real cancel.
+  const cancel = (): void => {
+    if (pending.dismissal === 'hide') { void pending.dismiss(); return }
+    settle('cancel', () => pending.dismiss())
+  }
+  const cancelLabel = t(pending.dismissal === 'hide' ? 'nav.close' : 'nav.cancel')
 
   const setCustom = (q: FormQuestion, value: string): void => {
     setDrafts(current => ({ ...current, [q.id]: { selected: q.multiSelect === true ? draftOf(q).selected : [], custom: value } }))
@@ -117,7 +124,7 @@ export function PrivasysFormPanel({ pending, t }: PrivasysFormPanelProps) {
           </div>
           <div className={css.headerActions}>
             <button
-              type="button" className={css.iconButton} aria-label={t('nav.cancel')} title={t('nav.cancel')}
+              type="button" className={css.iconButton} aria-label={cancelLabel} title={cancelLabel}
               disabled={busy !== null} onClick={cancel}
             >
               <IconCloseOutlineRegular />
@@ -200,9 +207,13 @@ export function PrivasysFormPanel({ pending, t }: PrivasysFormPanelProps) {
             {error ?? (complete || missing.length === questions.length ? null : t('error.incomplete'))}
           </div>
           <div className={css.footerActions}>
-            <Button variant="outline" disabled={busy !== null} onClick={cancel}>
-              {t('nav.cancel')}
-            </Button>
+            {/* A panel that only hides has its close control in the header, labelled
+                as such; the footer offers Cancel only when it really cancels. */}
+            {pending.dismissal === 'cancel' && (
+              <Button variant="outline" disabled={busy !== null} onClick={cancel}>
+                {t('nav.cancel')}
+              </Button>
+            )}
             <Button variant="primary" disabled={busy !== null || !complete} onClick={submit}>
               {busy === 'answer' ? t('submitting') : t('submit')}
             </Button>
