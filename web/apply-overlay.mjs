@@ -139,7 +139,7 @@ brandPut('packages/client/ui-primitives/src/FishLogo.tsx', 'overlay/brand/FishLo
 brandPut('packages/client/ui-primitives/src/BrandWordmark.tsx', 'overlay/brand/BrandWordmark.tsx', 'BrandWordmark.tsx')
 put('packages/client/ui-brand-official/src/client/index.ts', 'overlay/brand/index.ts')
 put('packages/client/ui-brand-official/src/client/PrivasysRows.tsx', 'overlay/brand/PrivasysRows.tsx')
-write('packages/client/ui-brand-official/src/client/privasys-legal.ts',
+write('packages/client/ui-settings-general/src/client/privasys-legal.ts',
   `/** The brand's legal pages (brand.json "legal"), written by the overlay. */\n` +
   `export const PRIVASYS_LEGAL = ${JSON.stringify({ privacy: BRAND_LEGAL.privacy, terms: BRAND_LEGAL.terms })} as const\n`)
 // The foot rows are dsh's own foot control (Settings trigger / Cordis badge
@@ -718,11 +718,6 @@ put('packages/client/ui-brand-official/src/client/PrivasysAttestation.tsx', 'ove
 // how an honest product acquires a false badge. Reads the measured proxy's
 // /privasys/policy and /privasys/egress-log, same-origin.
 put('packages/client/ui-brand-official/src/client/PrivasysPolicy.tsx', 'overlay/brand/PrivasysPolicy.tsx')
-// The storage row: where this user's sessions are kept, and the only place they
-// can ask for them to live in their own Drive. A sidebar row rather than a
-// modal, because the commitment is a NON-BLOCKING banner — nobody mid-task
-// should be interrupted to decide about storage.
-put('packages/client/ui-brand-official/src/client/PrivasysStorage.tsx', 'overlay/brand/PrivasysStorage.tsx')
 put('apps/web/public/privasys/privasys-attestation.css', 'vendor/privasys-attestation.css')
 
 // --- 2g. greenfield content: no DeepSeek-authored text reaches user or model
@@ -2338,7 +2333,63 @@ edit('packages/client/ui-settings-general/src/client/index.ts', [
       `  // nobody sits at, so the open-document action is not offered.\n` +
       `  const documentController = undefined as SettingsDocumentStore | undefined\n`,
   ],
+  // The Settings seat and the pages that are ours. The launcher seat
+  // (settings.launcher) is the one dsh designed for an account launcher and
+  // leaves free on the web: it draws Settings with the signed-in user below
+  // it, and a Storage row above it only while setup is incomplete. Storage
+  // is a Settings page: where this user's conversations are kept, and the
+  // one place to connect the Drive. The storage row opens the panel on that
+  // page, which needs the shell's own openSection: bound here, where the
+  // shell store is made.
+  [
+    'settings: privasys imports',
+    `import { GeneralSection } from './GeneralSection.tsx'\n`,
+    `import { GeneralSection } from './GeneralSection.tsx'\n` +
+      `import { PrivasysLauncher } from './PrivasysLauncher.tsx'\n` +
+      `import { PrivasysStorageSection } from './PrivasysStorageSection.tsx'\n` +
+      `import { bindPrivasysSettings } from './privasys-settings-shell.ts'\n`,
+  ],
+  [
+    'settings: privasys shell binding',
+    `    const shellInstance = shellHandle.create()\n`,
+    `    const shellInstance = shellHandle.create()\n` +
+      `    bindPrivasysSettings(shellInstance.actions)\n`,
+  ],
+  [
+    'settings: privasys launcher and storage page',
+    `  }, GeneralSection))\n}\n`,
+    `  }, GeneralSection))\n` +
+      `  ctx.slots.inject('settings.launcher', () =>\n` +
+      `    ctx.slots.register({ name: 'settings.launcher' }, PrivasysLauncher))\n` +
+      `  ctx.slots.inject('settings.section', () => ctx.slots.register({\n` +
+      `    name: 'settings.section',\n` +
+      `    id: 'storage',\n` +
+      `    order: 5,\n` +
+      `    label: () => 'Storage',\n` +
+      `  }, PrivasysStorageSection))\n` +
+      `}\n`,
+  ],
 ])
+edit('packages/client/ui-settings-general/src/client/SettingsRoot.tsx', [
+  [
+    'settings: storage nav icon import',
+    `  IconPersonalizationOutlineMedium, IconSettingsOutlineMedium, IconUserOutlineMedium,\n`,
+    `  IconPersonalizationOutlineMedium, IconSettingsOutlineMedium, IconUserOutlineMedium, IconFolderOpenOutlineMedium,\n`,
+  ],
+  [
+    'settings: storage nav icon',
+    `  if (id === 'archived-sessions') return <IconArchiveOutlineMedium className={css.navIcon} size={16} />\n`,
+    `  if (id === 'archived-sessions') return <IconArchiveOutlineMedium className={css.navIcon} size={16} />\n` +
+      `  if (id === 'storage') return <IconFolderOpenOutlineMedium className={css.navIcon} size={16} />\n`,
+  ],
+])
+for (const file of [
+  'privasys-storage.ts', 'privasys-settings-shell.ts', 'PrivasysStorageSection.tsx',
+  'PrivasysLauncher.tsx', 'PrivasysUserPanel.tsx', 'PrivasysSettings.module.css',
+]) put(`packages/client/ui-settings-general/src/client/${file}`, `overlay/settings/${file}`)
+// The foot row control and its CSS, shared with the Attestation row above.
+put('packages/client/ui-settings-general/src/client/PrivasysFootRow.tsx', 'overlay/brand/PrivasysFootRow.tsx')
+put('packages/client/ui-settings-general/src/client/PrivasysFoot.module.css', 'overlay/brand/PrivasysFoot.module.css')
 
 // The /connectors command is the deployment's (app/privasys-connectors.mjs,
 // definitionId "privasys-connectors"); dsh gives a menu row its title, icon

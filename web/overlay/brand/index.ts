@@ -4,11 +4,11 @@
  * `packages/client/ui-brand-official/src/client/index.ts`: keeps upstream's
  * brand-slot registrations verbatim (OfficialBrandMark/Name now render the
  * Privasys art via the FishLogo/BrandWordmark overrides in ui-primitives) and
- * ADDS one `sidebar.footer.action` occupant — a column of three rows,
- * Attestation / Sessions / User — at the sidebar foot above Settings, per the
+ * ADDS one `sidebar.footer.action` occupant — a column of rows (today the
+ * Attestation row) — at the sidebar foot above Settings, per the
  * designed list slot (ui-sidebar contract: "Optional actions beside Settings
  * at the sidebar foot"; each occupant owns its geometry). One occupant rather
- * than three: dsh lays occupants out in a row, and a column is our layout to
+ * than several: dsh lays occupants out in a row, and a column is our layout to
  * own, not the sidebar's to be overridden. No sidebar source is edited.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'

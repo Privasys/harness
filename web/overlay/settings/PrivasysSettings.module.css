@@ -1,0 +1,106 @@
+/* Privasys settings pages and the launcher column (attested-harness fork).
+   Only tokens dsh's theme defines (--dsw-alias-*), so the pages read as dsh's
+   own in both themes. */
+
+/* The launcher sits in SettingsRoot's trigger row, which already carries the
+   2px overhang the foot rows add themselves: take it back, and share the row
+   with the connection indicator. */
+.launcher {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.launcher button {
+  margin: 0;
+  width: 100%;
+}
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 560px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.page p {
+  margin: 0;
+}
+
+.page strong {
+  color: var(--dsw-alias-label-primary);
+  font-weight: 500;
+}
+
+.title {
+  margin: 0;
+  color: var(--dsw-alias-label-primary);
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 24px;
+}
+
+.subtitle {
+  margin: 14px 0 0;
+  color: var(--dsw-alias-label-primary);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 22px;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.muted {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.warn {
+  color: var(--dsw-alias-state-warn-primary);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* A legal page fills the content column: the options area stops scrolling
+   and the framed page scrolls itself. */
+.optionsFill {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.legal {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+
+.external {
+  align-self: flex-end;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.frame {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: 12px;
+  background: #fff;
+}
