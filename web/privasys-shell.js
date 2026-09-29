@@ -299,7 +299,10 @@ function installSealedTransport(session) {
         const path = url.pathname + url.search;
         const method = (init && init.method ? init.method : 'GET').toUpperCase();
         const body = init && init.body != null ? init.body : undefined;
-        const opts = init && init.signal ? { signal: init.signal } : undefined;
+        /** @type {any} */
+        let opts;
+        if (init && init.signal) opts = { signal: init.signal };
+        if (init && init.headers) opts = { ...(opts || {}), headers: init.headers };
         let r;
         try {
             r = await enqueue(() => transport.session.request(method, path, body, opts));
@@ -323,6 +326,16 @@ function installSealedTransport(session) {
     // workstream and this flag is correct only while the harness is
     // effectively single-tenant.
     /** @type {any} */ (window).__DSH_TRANSPORT__ = { fetch: sealedFetch, ownsHost: true };
+
+    // File uploads. Without a hook, dsh posts a dropped file from a Web
+    // Worker with a plain XMLHttpRequest to the host, which bypasses the
+    // sealed session, and the enclave refuses an unsealed /api request (the
+    // composer showed "Upload failed"). The hook sends it through the sealed
+    // session like any other call. The body arrives as a Blob or a stream;
+    // the sealed channel carries bytes, so it is read in full first.
+    /** @type {any} */ (window).__DSH_FILE_UPLOAD__ = {
+        fetch: async (input, init) => sealedFetch(input, { ...init, body: await bytesOf(init && init.body) }),
+    };
 
     // Event downlink: route ONLY the mux socket through the sealed session.
     // Everything else (incl. the SDK's own sealed socket, which carries the
@@ -458,6 +471,28 @@ async function reconnect() {
         // A different account or a refused approval: start again cleanly.
         location.reload();
     }
+}
+
+/** A request body as bytes: a Blob or a stream is read in full; anything else is passed as it is. */
+async function bytesOf(body) {
+    if (body == null) return undefined;
+    if (typeof Blob !== 'undefined' && body instanceof Blob) return new Uint8Array(await body.arrayBuffer());
+    if (typeof ReadableStream !== 'undefined' && body instanceof ReadableStream) {
+        const reader = body.getReader();
+        const chunks = [];
+        let size = 0;
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+            size += value.length;
+        }
+        const out = new Uint8Array(size);
+        let at = 0;
+        for (const c of chunks) { out.set(c, at); at += c.length; }
+        return out;
+    }
+    return body;
 }
 
 // Adapts an SDK SealedWebSocket to the browser WebSocket surface dsh's mux
