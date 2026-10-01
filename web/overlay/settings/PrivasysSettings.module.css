@@ -15,6 +15,22 @@
   width: 100%;
 }
 
+/* dsh draws its connection pill ("Connecting", "Reconnecting") beside the
+   Settings seat, centred on the whole seat. The seat is a column of rows
+   here, so the pill would float between them: pin it to the right edge of
+   the Settings row instead, (42 - 28) / 2 from its top, one row and the
+   column gap lower while the Storage row is shown above it. The seat's
+   wrapper is display: contents, so the pill is its next sibling. */
+:global([data-slot='settings.launcher']):has(.launcher) + * {
+  position: absolute;
+  top: 7px;
+  right: 8px;
+}
+
+:global([data-slot='settings.launcher']):has(.launcher [data-privasys-storage-alert]) + * {
+  top: 51px;
+}
+
 .page {
   display: flex;
   flex-direction: column;
@@ -103,4 +119,21 @@
   border: 0.5px solid var(--dsw-alias-border-l3);
   border-radius: 12px;
   background: #fff;
+}
+
+.input {
+  max-width: 360px;
+  height: 36px;
+  padding: 0 12px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-family: inherit;
+  font-size: 14px;
+}
+
+.input:focus-visible {
+  outline: 2px solid var(--dsw-alias-border-l3);
+  outline-offset: -1px;
 }

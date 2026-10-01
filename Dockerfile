@@ -214,6 +214,8 @@ COPY app/privasys-routines.mjs /dsh/apps/cli/config/privasys/privasys-routines.m
 # The connectors switch (which attested connectors a conversation may use),
 # composed per worker next to the routines door.
 COPY app/privasys-connectors.mjs /dsh/apps/cli/config/privasys/privasys-connectors.mjs
+# What the assistant calls the user (the proxy keeps the name current).
+COPY app/privasys-profile.mjs /dsh/apps/cli/config/privasys/privasys-profile.mjs
 COPY app/smoke.cordis.yml /app/smoke.cordis.yml
 # The service ceiling, IN THE IMAGE and therefore in the measurement. The
 # proxy also publishes its digest at OID 5.4.9, but baking it here gives the

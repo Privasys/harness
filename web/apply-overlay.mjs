@@ -2384,7 +2384,7 @@ edit('packages/client/ui-settings-general/src/client/SettingsRoot.tsx', [
   ],
 ])
 for (const file of [
-  'privasys-storage.ts', 'privasys-settings-shell.ts', 'PrivasysStorageSection.tsx',
+  'privasys-storage.ts', 'privasys-settings-shell.ts', 'privasys-profile.ts', 'PrivasysStorageSection.tsx',
   'PrivasysLauncher.tsx', 'PrivasysUserPanel.tsx', 'PrivasysSettings.module.css',
 ]) put(`packages/client/ui-settings-general/src/client/${file}`, `overlay/settings/${file}`)
 // The foot row control and its CSS, shared with the Attestation row above.

@@ -411,6 +411,8 @@ func main() {
 	// Per-workspace Drive knowledge (knowledge.go): the same per-user
 	// document storage, a second file, enforced on the tool leg.
 	knowledge = newKnowledgeStore(tenantDocs, client, cfg.toolHosts["drive"])
+	// What the assistant calls each user (profile.go): a third file there.
+	profiles = newProfileStore(tenantDocs)
 	// Standing consent to per-call tool fees comes from that same document;
 	// the meter turns it into the byte-exact header and keeps the running
 	// total the per-session figure bounds.
@@ -432,6 +434,7 @@ func main() {
 	var mgr *WorkerManager
 	if workersEnabled() {
 		mgr = newWorkerManager(cfg, broker, client)
+		workerOf = mgr.Get
 		mgr.holders = holderBroker(declaredResources(), legs)
 		if mgr.holders != nil {
 			log.Printf("[workers] holder folders declared as %q: a worker's roots are the holder's folder when the runtime opens it", mgr.holders.Resource())
@@ -746,6 +749,9 @@ func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp 
 	// workspace dialog over the sealed session.
 	if knowledge != nil {
 		registerKnowledgeAPI(mux, knowledge)
+	}
+	if profiles != nil {
+		registerProfileAPI(mux, profiles)
 	}
 	if mgr != nil {
 		// Operators' view of the workers (no subjects, only keys).

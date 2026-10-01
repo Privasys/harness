@@ -543,6 +543,14 @@ func (m *WorkerManager) prepare(w *Worker) error {
 	// may use (app/privasys-connectors.mjs), one row per tool this deployment
 	// mounts.
 	patch += connectorsPatch()
+	// What the assistant calls this user (profile.go, app/privasys-profile.mjs):
+	// the agent reads a copy in the worker's own directory on every prompt.
+	patch += profilePatch(w)
+	if profiles != nil {
+		if err := writeWorkerProfile(w, profiles.Get(w.Subject)); err != nil {
+			log.Printf("[profile] %.8s…: worker copy: %v", w.Subject, err)
+		}
+	}
 	if err := os.WriteFile(filepath.Join(w.Dir, "worker.cordis.yml"), []byte(patch), 0o600); err != nil {
 		return err
 	}

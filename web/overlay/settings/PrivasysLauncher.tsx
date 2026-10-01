@@ -17,7 +17,8 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SettingsLauncherOwnerProps } from '@deepseek-ai/dsh-client-ui-settings/client'
 import { FootRow } from './PrivasysFootRow.tsx'
-import { PrivasysUserPanel, shellHooks } from './PrivasysUserPanel.tsx'
+import { PrivasysUserPanel } from './PrivasysUserPanel.tsx'
+import { displayName, snapshot as profileSnapshot, subscribe as profileSubscribe } from './privasys-profile.ts'
 import { openSettingsSection } from './privasys-settings-shell.ts'
 import { snapshot, subscribe, summarise } from './privasys-storage.ts'
 import foot from './PrivasysFoot.module.css'
@@ -26,7 +27,10 @@ import css from './PrivasysSettings.module.css'
 function StorageAlertRow({ wide }: { wide: boolean }) {
   const s = summarise(useSyncExternalStore(subscribe, snapshot))
   if (s === undefined || s.healthy) return null
+  // The attribute lets the stylesheet place dsh's connection pill on the
+  // Settings row below this one.
   return (
+    <div data-privasys-storage-alert="">
     <FootRow
       wide={wide}
       icon={<IconFolderOpenOutlineRegular size={wide ? 16 : 18} />}
@@ -37,14 +41,14 @@ function StorageAlertRow({ wide }: { wide: boolean }) {
       haspopup="dialog"
       onClick={() => { openSettingsSection('storage') }}
     />
+    </div>
   )
 }
 
 export function PrivasysLauncher({ wide, settingsOpen, openSettings }: SettingsLauncherOwnerProps) {
   const [userOpen, setUserOpen] = useState(false)
-  // Resolved at render: the shell sets it before the post-auth dsh boot, so
-  // it is ready by the time the sidebar mounts.
-  const name = shellHooks().userName?.() || 'Account'
+  // What the assistant calls the user (their setting, else the sign-in's).
+  const name = displayName(useSyncExternalStore(profileSubscribe, profileSnapshot)) || 'Account'
   return (
     <div className={wide ? `${foot.column} ${css.launcher}` : `${foot.column} ${foot.rail} ${css.launcher}`}>
       <StorageAlertRow wide={wide} />

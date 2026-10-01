@@ -3,24 +3,27 @@
  * Settings (SettingsRoot's panel, nav rail and content column, drawn with
  * SettingsRoot.module.css so the two read as one family), with its own pages.
  *
+ *   Your name                         what the assistant calls you (profile.json
+ *                                     in your Drive folder, privasys-profile.ts)
  *   Privacy policy, Terms of service  the brand's own pages (brand.json
  *                                     "legal"), shown in the content column
  *   Sign out                          ends the sealed session in this browser
  *
- * The pages to come (how the assistant addresses you, your language, your
- * default instructions) are more entries in PAGES.
+ * The pages to come (your language, your default instructions) are more
+ * entries in PAGES.
  *
  * The legal pages are the brand's public web pages, framed as they are: the
  * browser fetches them from the brand's site, never through the enclave, and
  * only once the page is opened.
  */
-import { useId, useRef, useState, type ReactNode } from 'react'
+import { useId, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import clsx from 'clsx'
 import {
-  Button, IconCloseOutlineRegular, IconDeliverDocMedium, IconShieldOutlineMedium, useModalLayer,
+  Button, IconCloseOutlineRegular, IconDeliverDocMedium, IconShieldOutlineMedium, IconUserOutlineMedium, useModalLayer,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { PRIVASYS_LEGAL } from './privasys-legal.ts'
+import { save, snapshot, subscribe } from './privasys-profile.ts'
 import root from './SettingsRoot.module.css'
 import css from './PrivasysSettings.module.css'
 
@@ -44,7 +47,7 @@ export function SignOutIcon({ size = 16, className }: { size?: number; className
   )
 }
 
-type PageId = 'privacy' | 'terms' | 'sign-out'
+type PageId = 'name' | 'privacy' | 'terms' | 'sign-out'
 
 interface Page {
   id: PageId
@@ -53,6 +56,7 @@ interface Page {
 }
 
 const PAGES: readonly Page[] = [
+  { id: 'name', label: 'Your name', icon: <IconUserOutlineMedium className={root.navIcon} size={16} /> },
   { id: 'privacy', label: 'Privacy policy', icon: <IconShieldOutlineMedium className={root.navIcon} size={16} /> },
   { id: 'terms', label: 'Terms of service', icon: <IconDeliverDocMedium className={root.navIcon} size={16} /> },
   { id: 'sign-out', label: 'Sign out', icon: <SignOutIcon className={root.navIcon} /> },
@@ -69,6 +73,53 @@ function LegalPage({ href, title }: { href: string; title: string }) {
         referrerPolicy="no-referrer"
         sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
       />
+    </div>
+  )
+}
+
+function NamePage() {
+  const profile = useSyncExternalStore(subscribe, snapshot)
+  const [draft, setDraft] = useState<string | undefined>(undefined)
+  const [busy, setBusy] = useState(false)
+  const [problem, setProblem] = useState('')
+  const [saved, setSaved] = useState(false)
+  const value = draft ?? profile.name
+  const submit = async (): Promise<void> => {
+    setBusy(true)
+    setProblem('')
+    const error = await save(value)
+    setBusy(false)
+    if (error !== '') { setProblem(error); return }
+    setDraft(undefined)
+    setSaved(true)
+  }
+  return (
+    <div className={css.page}>
+      <h2 className={css.title}>What should the assistant call you?</h2>
+      <p>
+        The assistant addresses you by this name, in every session and in the
+        agents that work for you. It is kept in your own Drive folder, beside your
+        other settings for this harness.
+      </p>
+      <input
+        className={css.input}
+        value={value}
+        maxLength={80}
+        placeholder="Your name"
+        aria-label="Your name"
+        onChange={(e) => { setDraft(e.target.value); setSaved(false) }}
+        onKeyDown={(e) => { if (e.key === 'Enter' && !busy) void submit() }}
+      />
+      <div className={css.actions}>
+        <Button variant="primary" size="sm" disabled={busy || draft === undefined} onClick={() => { void submit() }}>
+          {busy ? 'Saving…' : 'Save'}
+        </Button>
+      </div>
+      {problem !== '' && <p className={css.warn}>{problem}</p>}
+      {saved && profile.persisted && <p className={css.muted}>Saved. The assistant uses it from your next message.</p>}
+      {saved && !profile.persisted && (
+        <p className={css.warn}>Used from your next message, but not kept: connect your Drive in Settings, Storage, to keep it.</p>
+      )}
     </div>
   )
 }
@@ -97,7 +148,7 @@ function SignOutPage({ name }: { name: string }) {
  * button and Escape (useModalLayer) close it.
  */
 export function PrivasysUserPanel({ name, onClose }: { name: string; onClose: () => void }) {
-  const [active, setActive] = useState<PageId>('privacy')
+  const [active, setActive] = useState<PageId>('name')
   const titleId = useId()
   const panel = useRef<HTMLDivElement>(null)
   useModalLayer(panel, true, onClose)
@@ -132,7 +183,8 @@ export function PrivasysUserPanel({ name, onClose }: { name: string; onClose: ()
               <span className={root.hiddenLabel}>Close</span>
             </button>
           </div>
-          <div className={clsx(root.options, active !== 'sign-out' && css.optionsFill)}>
+          <div className={clsx(root.options, (active === 'privacy' || active === 'terms') && css.optionsFill)}>
+            {active === 'name' && <NamePage />}
             {active === 'privacy' && <LegalPage href={PRIVASYS_LEGAL.privacy} title="Privacy policy" />}
             {active === 'terms' && <LegalPage href={PRIVASYS_LEGAL.terms} title="Terms of service" />}
             {active === 'sign-out' && <SignOutPage name={name} />}
