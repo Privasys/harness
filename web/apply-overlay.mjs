@@ -2453,4 +2453,30 @@ edit('packages/client/ui-commands/src/client/locales.ts', [
   ],
 ])
 
+// --- 2m. A file upload stores under a holder folder ---------------------------
+// Before dsh reports a stored attachment it fsyncs every directory from the
+// file up to `/`. A holder's home is /data/holders/<key>/..., and the runtime
+// lays /data/holders out execute-only, so a worker can pass through it to its
+// own folder but cannot list the others: opening it for the fsync is refused
+// (EACCES), and every dropped file failed with "failed to store file upload:
+// EACCES ... open '/data/holders'". A directory this worker may not open is
+// not its own; its entries are its owner's to make durable (the runtime's
+// here), so the walk skips it rather than failing the upload.
+edit('packages/attachment/attachment-local/src/store.ts', [
+  [
+    'attachments: skip a directory this process may not open',
+    `  const handle = await open(path, constants.O_RDONLY)\n  try {\n    await handle.sync()\n`,
+    `  let handle: Awaited<ReturnType<typeof open>>\n` +
+      `  try {\n` +
+      `    handle = await open(path, constants.O_RDONLY)\n` +
+      `  } catch (error) {\n` +
+      `    // Privasys: a directory this process may not open is not its own\n` +
+      `    // (a holder folder's execute-only parent): its owner makes it durable.\n` +
+      `    if ((error as { code?: unknown }).code === 'EACCES') return\n` +
+      `    throw error\n` +
+      `  }\n` +
+      `  try {\n    await handle.sync()\n`,
+  ],
+])
+
 console.log('[overlay] done')
