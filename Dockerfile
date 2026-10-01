@@ -188,7 +188,10 @@ FROM node:22-bookworm-slim
 # egress for a boot-time registry fetch.
 RUN corepack enable && corepack prepare pnpm@11.7.0 --activate \
  && apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates curl bubblewrap && rm -rf /var/lib/apt/lists/*
+      ca-certificates curl bubblewrap poppler-utils && rm -rf /var/lib/apt/lists/*
+# poppler-utils gives the agent pdftotext and pdfinfo: dsh's read tool takes
+# UTF-8 text only, so a PDF dropped in the composer could not be read at all
+# (the agent looked for python3, pdftotext and strings, and found none).
 # bubblewrap is dsh's sandbox backend on Linux. Without it dsh refuses to run
 # ANY shell command — "sandbox mode workspace-write is requested but no sandbox
 # backend is usable on this host; refusing to run the command unconfined" —
