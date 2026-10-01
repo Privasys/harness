@@ -620,6 +620,7 @@ func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp 
 		req.Header.Del("Sec-Fetch-Mode")
 		req.Header.Del("Sec-Fetch-Dest")
 		req.Header.Del("Sec-Fetch-User")
+		restoreUploadContentType(req)
 	}
 	rp.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, err error) {
 		// dsh not yet listening (still booting) — 503, so the platform's
