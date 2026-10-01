@@ -254,7 +254,7 @@ ENV HARNESS_EGRESS_MODE=open
 # No telemetry leaves the enclave: any non-empty value hard-disables dsh's
 # telemetry row at profile composition (profile-boot resolveTelemetryPatch).
 ENV DSH_TELEMETRY_DISABLED=1
-ENV HARNESS_MODEL_HOST=confidential-ai.apps.privasys.org
+ENV HARNESS_MODEL_HOST=cai-imperial.apps.privasys.org
 # How the composer groups the connectors (name=category). A deployment word,
 # not the connectors' own: each still declares its product to the wallet.
 ENV HARNESS_CONNECTOR_CATEGORIES=mail=Mail,calendar=Calendar,files=Files,drive=Files,meetings=Meetings,web_search=Web,web_reader=Web
