@@ -69,7 +69,17 @@ FROM node:22-bookworm AS dsh-builder
 # and headless roll the same rows). One anchor moved: the question composer's
 # block field, whose autoFocus line upstream rewrote for an opt-in
 # asynchronous question mode; the secret edit now anchors on variant/value.
-ARG DSH_PIN=639ed015397290b3745d163aafe02ffee4aa3f84
+#
+# dsh-v0.2.1-alpha.1 (2026-10-05). Reminders became part of Web: the host
+# Schedule service and its panel, and four reminder tools in every shipped
+# preset. Adopted rather than kept off (built-in beats ours to maintain),
+# with one gate: creating or changing a reminder asks the holder, because a
+# due reminder reaches the model as "a scheduled message from the user".
+# Tasks live in the worker's dsh home, the holder's folder. Each preset also
+# mounts its own clock now; those are switched off so the deployment's clock
+# stays the only one. One overlay anchor moved: StatsPills split into Activity
+# and Usage, so the chat imports anchor on ApprovalCommand instead.
+ARG DSH_PIN=5badb15009ae1756c3afe0ae0cef1faafc290ccc
 RUN corepack enable \
  && git clone https://github.com/deepseek-ai/deepseek-harness /dsh \
  && git -C /dsh checkout "${DSH_PIN}"

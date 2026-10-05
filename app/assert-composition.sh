@@ -50,7 +50,7 @@ grep -q "agent-loop" "$HEADLESS_DUMP" || fail "the headless profile carries no a
 for row in web-search-deepseek web-fetch-http session-log-deepseek \
            plugin-package-inventory-deepseek session-telemetry-otel \
            tool-result-pruner dsh-llm-pi-ai \
-           llm-deepseek-account schedule otel; do
+           llm-deepseek-account otel; do
 	for dump in "$WEB_DUMP" "$HEADLESS_DUMP"; do
 		# Read each declaration of the row as a BLOCK: from its `- id:` line
 		# to the next line indented no deeper. `disabled: true` sits among

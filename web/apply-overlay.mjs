@@ -921,6 +921,58 @@ const ROUTINE_PRESET =
   `      name: '@deepseek-ai/dsh-command-compact'\n` +
   `\n` +
   MCP_FLEET_ROWS
+// --- 2s. dsh's built-in reminders, behind the holder's approval -------------
+// dsh 0.2.1 makes reminders part of Web: the host Schedule service and its
+// panel, and four reminder tools in every shipped preset. The deployment adopts
+// them rather than keeping its own, and adds one gate: creating or changing a
+// reminder asks the holder first. Tasks live in the worker's dsh home, which is
+// the holder's folder, so they are the holder's data like their sessions.
+edit('packages/schedule/tool-schedule/src/index.ts', [
+  [
+    'tool-schedule: approval gate on create and update',
+    `function registerScheduleTools(ctx: Context): void {\n`,
+    `function registerScheduleTools(ctx: Context): void {\n` +
+      `  // Privasys: creating or changing a reminder needs the holder's approval.\n` +
+      `  // A due reminder reaches the model as "a scheduled message from the user",\n` +
+      `  // so a reminder the agent was talked into by something it read (an email,\n` +
+      `  // a page, a file) would come back each time with the user's authority.\n` +
+      `  // Listing and deleting stay free: neither can plant anything. In an\n` +
+      `  // unattended run the approval policy is \`never\`, so \`ask\` is a refusal.\n` +
+      `  ctx.on('tools/pre-execute', async (exec, next) => {\n` +
+      `    if (exec.name !== 'schedule_create' && exec.name !== 'schedule_update') return next()\n` +
+      `    const args = (exec.arguments ?? {}) as Record<string, unknown>\n` +
+      `    const title = typeof args.title === 'string' ? args.title.trim() : ''\n` +
+      `    const prompt = typeof args.prompt === 'string' ? args.prompt.trim() : ''\n` +
+      `    const timing = (['after_seconds', 'at', 'every_seconds', 'daily', 'weekly', 'cron', 'change'] as const)\n` +
+      `      .filter(key => args[key] !== undefined)\n` +
+      `      .map(key => \`\${key}: \${JSON.stringify(args[key])}\`)\n` +
+      `      .join(', ')\n` +
+      `    const action = exec.name === 'schedule_create' ? 'Schedule a reminder' : 'Change reminder ' + String(args.id ?? '')\n` +
+      `    let text = action + (title === '' ? '' : \` "\${title}"\`) + (prompt === '' ? '' : \`: \${prompt}\`) + (timing === '' ? '' : \` (\${timing})\`)\n` +
+      `    if (text.length > 600) text = text.slice(0, 599) + '\\u2026'\n` +
+      `    return { kind: 'ask' as const, reason: \`privasys: \${exec.name} needs the holder's approval\`, displayReason: { en: text } }\n` +
+      `  })\n`,
+  ],
+])
+
+// Each preset also mounts its own clock now. The deployment's clock
+// (app/profile.cordis.yml, `privasys-time-context`, with the replay pin) stays
+// the only one: a second would stamp every turn twice. Disabled rather than
+// removed, so the composed preset says what was decided.
+const PRESET_CLOCK_ROW =
+  `          - id: time-context\n` +
+  `            name: '@deepseek-ai/dsh-time-context'\n`
+const PRESET_CLOCK_ROW_DISABLED =
+  `          # Privasys: the deployment's own clock is the only one.\n` +
+  `          - id: time-context\n` +
+  `            name: '@deepseek-ai/dsh-time-context'\n` +
+  `            disabled: true\n`
+for (const preset of ['standard', 'ptc', 'cordis']) {
+  edit(`packages/bundle/web-app/presets/${preset}.patch.yml`, [
+    [`preset ${preset} clock off`, PRESET_CLOCK_ROW, PRESET_CLOCK_ROW_DISABLED],
+  ])
+}
+
 const ROUTINE_PRESET_PATCH =
   `# Agent preset routine: one '@deepseek-ai/dsh-agent-preset' declaration, like\n` +
   `# every shipped preset. Written by the Privasys overlay, not by upstream.\n` +
@@ -1023,8 +1075,10 @@ edit('packages/client/ui-chat/src/client/apply.ts', [
   ],
   [
     'ui-chat: privasys imports',
-    `import { StatsPills } from './chat/StatsPills.tsx'\n`,
-    `import { StatsPills } from './chat/StatsPills.tsx'\n` +
+    // Anchored on the ApprovalCommand import, which the registrations below
+    // already depend on (0.2.1 split StatsPills, the previous anchor).
+    `import { ApprovalCommand } from './chat/ApprovalCommand.tsx'\n`,
+    `import { ApprovalCommand } from './chat/ApprovalCommand.tsx'\n` +
       `import { PrivasysReproducibilityAction, replayTurn, type PrivasysReproInjected } from './chat/PrivasysReproducibility.tsx'\n` +
       `import { PrivasysSamplingChip } from './chat/PrivasysSampling.tsx'\n`,
   ],
