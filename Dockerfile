@@ -79,7 +79,17 @@ FROM node:22-bookworm AS dsh-builder
 # mounts its own clock now; those are switched off so the deployment's clock
 # stays the only one. One overlay anchor moved: StatsPills split into Activity
 # and Usage, so the chat imports anchor on ApprovalCommand instead.
-ARG DSH_PIN=5badb15009ae1756c3afe0ae0cef1faafc290ccc
+#
+# dsh-v0.2.1-alpha.2 (2026-10-09). Upstream reworked the web server for native
+# HTTPS and IPv6, which moved the two security edits: the ingress-token gate now
+# sits on the one listener shared by HTTP and HTTPS, and the launch-token
+# deferral replaces only the browser-auth step, keeping upstream's Host/Origin
+# fence (it now takes the carrier's host and protocol). Session delete anchors
+# on fork()'s doc comment (fork gained allowMigration). New base rows: a
+# working-directory tool, confined by the sandboxed fs it stats through. The
+# reasoning-translation plugin (Bing/Google/DeepSeek) is an optional
+# experimental bundle, not composed here, and the plugin manager stays dropped.
+ARG DSH_PIN=d743267388641bc76f17c45ce8b4c231aed1d32c
 RUN corepack enable \
  && git clone https://github.com/deepseek-ai/deepseek-harness /dsh \
  && git -C /dsh checkout "${DSH_PIN}"

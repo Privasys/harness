@@ -192,28 +192,23 @@ edit('packages/api/gateway/src/stream-server.ts', [
 edit('packages/client/connection/src/rpc-host.ts', [
   [
     'requestRejection launch-token deferral',
-    `  requestRejection(request: ConnectionTrustRequest): ConnectionRequestRejection {\n` +
-      `    if (!isTrustedApiRequest(request, this.trustedHosts)) return 403\n` +
-      `    return this.browserAuth.isAuthenticated(request) ? undefined : 401\n` +
-      `  }`,
-    `  requestRejection(request: ConnectionTrustRequest): ConnectionRequestRejection {\n` +
-      `    if (!isTrustedApiRequest(request, this.trustedHosts)) return 403\n` +
-      `    // Privasys: trusted Host == attested ingress == authenticated (see note above).\n` +
-      `    return undefined\n` +
-      `  }`,
+    // Only the launch-token step is replaced: upstream's Host/Origin fence on the
+    // line above (now given the carrier's host and protocol) stays exactly theirs.
+    `    return this.browserAuth.isAuthenticated(request, carrier?.protocol === 'https:') ? undefined : 401\n`,
+    `    // Privasys: trusted Host == attested ingress == authenticated (see note above).\n` +
+      `    return undefined\n`,
   ],
   [
     'authorizeIndex launch-token deferral',
-    `  authorizeIndex(request: ConnectionIndexRequest, response: ConnectionIndexResponse): boolean {\n` +
-      `    return this.browserAuth.authorizeIndex(request, response)\n` +
-      `  }`,
-    `  authorizeIndex(request: ConnectionIndexRequest, response: ConnectionIndexResponse): boolean {\n` +
-      `    // Privasys: a trusted-host index request came through the measured\n` +
+    // The trust check is upstream's own fence, called the way requestRejection
+    // calls it, so the index and the API admit exactly the same requests.
+    `    return this.browserAuth.authorizeIndex(request, response, this.ctx.get('webServer')?.protocol === 'https:')\n`,
+    `    // Privasys: a trusted-host index request came through the measured\n` +
       `    // ingress, so serve the SPA without the launch-token cookie the sealed\n` +
       `    // relay cannot carry (ConnectionIndexRequest extends ConnectionTrustRequest).\n` +
-      `    if (isTrustedApiRequest(request, this.trustedHosts)) return true\n` +
-      `    return this.browserAuth.authorizeIndex(request, response)\n` +
-      `  }`,
+      `    const carrier = this.ctx.get('webServer')\n` +
+      `    if (isTrustedApiRequest(request, this.trustedHosts, carrier?.host, carrier?.protocol ?? 'http:')) return true\n` +
+      `    return this.browserAuth.authorizeIndex(request, response, this.ctx.get('webServer')?.protocol === 'https:')\n`,
   ],
 ])
 
@@ -295,9 +290,11 @@ edit('packages/host/webserver/src/index.ts', [
   ],
   [
     'ingress token gate on requests',
-    `    this.server = createServer((req, res) => {\n` +
+    // 0.2.1-alpha.2: the request path is one `listener` shared by the HTTP and
+    // the new native-HTTPS server, so this single gate covers both.
+    `    const listener = (req: IncomingMessage, res: ServerResponse): void => {\n` +
       `      const next = (): void => {\n`,
-    `    this.server = createServer((req, res) => {\n` +
+    `    const listener = (req: IncomingMessage, res: ServerResponse): void => {\n` +
       `      // Privasys: only the proxy that started this process may use it.\n` +
       `      if (!privasysIngressAdmits(req)) {\n` +
       `        res.writeHead(401)\n` +
@@ -308,15 +305,15 @@ edit('packages/host/webserver/src/index.ts', [
   ],
   [
     'ingress token gate on upgrades',
-    `    this.server.on('upgrade', (req, socket, head) => {\n` +
-      `      const onError = (error: Error): void => {\n`,
-    `    this.server.on('upgrade', (req, socket, head) => {\n` +
-      `      // Privasys: same gate as the request path.\n` +
-      `      if (!privasysIngressAdmits(req)) {\n` +
-      `        socket.destroy()\n` +
-      `        return\n` +
-      `      }\n` +
-      `      const onError = (error: Error): void => {\n`,
+    `      this.server.on('upgrade', (req, socket, head) => {\n` +
+      `        const onError = (error: Error): void => {\n`,
+    `      this.server.on('upgrade', (req, socket, head) => {\n` +
+      `        // Privasys: same gate as the request path.\n` +
+      `        if (!privasysIngressAdmits(req)) {\n` +
+      `          socket.destroy()\n` +
+      `          return\n` +
+      `        }\n` +
+      `        const onError = (error: Error): void => {\n`,
   ],
 ])
 
@@ -1623,17 +1620,17 @@ edit('packages/workspace/workspace/src/index.ts', [
 edit('packages/api/session-controller/src/client/sessions/manager.ts', [
   [
     'manager delete',
-    `  async fork(\n` +
-      `    opts: { sessionId: SessionId; atSeq?: SessionSeq },\n` +
-      `  ): Promise<RemoteResult<{ sessionId: SessionId }>> {`,
+    // Anchored on fork()'s doc comment, not its parameter list, which moved
+    // again (0.2.1-alpha.2 added allowMigration).
+    `  /**\n` +
+      `   * Contract session.fork; on success merge the child into summaries\n`,
     `  /** Privasys: delete one Session for good; the Host's removal event drops the row. */\n` +
       `  async delete(sessionId: SessionId): Promise<RemoteResult<{ sessionId: SessionId }>> {\n` +
       `    return this.remote.session.delete({ sessionId })\n` +
       `  }\n` +
       `\n` +
-      `  async fork(\n` +
-      `    opts: { sessionId: SessionId; atSeq?: SessionSeq },\n` +
-      `  ): Promise<RemoteResult<{ sessionId: SessionId }>> {`,
+      `  /**\n` +
+      `   * Contract session.fork; on success merge the child into summaries\n`,
   ],
 ])
 edit('packages/api/session-controller/src/client/sessions/service.ts', [
