@@ -276,8 +276,9 @@ func fetchAIScope(r *http.Request, client *http.Client, driveHost, sub string) (
 	if err != nil {
 		return nil, false, err
 	}
-	req.Header.Set("X-Privasys-On-Behalf-Of", sub)
-	decorateSpend(req, sub)
+	// The holder's files.ai grant when they approved one, else the older
+	// on-behalf-of headers (aigrant.go).
+	actForUser(req, driveHost, sub)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, false, err

@@ -388,6 +388,8 @@ func main() {
 	// manifest, read back from the environment. The storage folder's broker
 	// is also the mirror's.
 	broker, legs := resourceLegsFor(declaredResources(), envOr("HARNESS_STORAGE_RESOURCE", "storage"))
+	// Drive knowledge through the holder's files.ai grant, when declared.
+	setAIGrant(legs, cfg.toolHosts["drive"])
 	if !broker.Enabled() {
 		log.Printf("[capability] no runtime broker in the environment: consent and persistence are unavailable off-platform")
 	} else {

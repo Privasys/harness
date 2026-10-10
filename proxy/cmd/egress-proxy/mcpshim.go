@@ -306,10 +306,7 @@ func fetchCatalogue(r *http.Request, client *http.Client, host, sub string) ([]u
 	// The catalogue fetch is the one assistant request tool apps serve
 	// without an acting user (it runs on mcp-client's startup timer), but
 	// naming the subject when one is bound is harmless and consistent.
-	if sub != "" {
-		req.Header.Set("X-Privasys-On-Behalf-Of", sub)
-		decorateSpend(req, sub)
-	}
+	actForUser(req, host, sub)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -360,12 +357,11 @@ func callToolWith(r *http.Request, client *http.Client, host, fn string, args js
 	// every tool call) and, since 2026-09-08, the PAYER of a priced call.
 	// The subject is the relay-asserted sign-in identity recorded by the
 	// ingress front — never anything the model supplied.
-	if sub != "" {
-		req.Header.Set("X-Privasys-On-Behalf-Of", sub)
-		// The spend token + proof are what the tool's runtime verifies to
-		// name the payer; the header above is the transitional twin.
-		decorateSpend(req, sub)
-	}
+	// At Drive, the holder's files.ai grant names them when they approved
+	// one; otherwise (and at every other tool app) the user's identifier
+	// and the spend token whose proof the tool's runtime verifies to name
+	// the payer (aigrant.go).
+	actForUser(req, host, sub)
 	// The consent header is set by THIS layer from the user's policy, never
 	// copied from what dsh or the model sent: the model could otherwise
 	// approve a fee on the user's behalf simply by asking.
