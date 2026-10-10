@@ -60,6 +60,31 @@ func actForUser(req *http.Request, host, sub string) {
 		req.Header.Set("Authorization", auth)
 		return
 	}
+	// A connector the holder approved: name the capability, and the connector
+	// takes the holder from its grant (connectors sdk caller.GrantHeader).
+	if id := connectorGrantID(host, sub); id != "" {
+		req.Header.Set("X-Privasys-Grant", id)
+	}
+	// TRANSITIONAL: the user's identifier, for Drive without a files.ai grant
+	// and for connectors that predate the grant header. Goes once both are out.
 	req.Header.Set("X-Privasys-On-Behalf-Of", sub)
 	decorateSpend(req, sub)
+}
+
+// connectorGrantID is the id of the holder's approved grant at the app behind
+// host, matched through attestation (resourceForTool), or "".
+func connectorGrantID(host, sub string) string {
+	name := resourceForTool(sub, "", host)
+	if name == "" {
+		return ""
+	}
+	for _, l := range currentAccessLegs() {
+		if l.name != name || l.kind == "storage.folder" || l.kind == "app_storage" || l.kind == "files.ai" {
+			continue
+		}
+		if g := l.broker.Granted(sub); g != nil && g.Status == "approved" && g.CapabilityID != "" {
+			return g.CapabilityID
+		}
+	}
+	return ""
 }
