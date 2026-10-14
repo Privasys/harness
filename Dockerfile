@@ -89,7 +89,17 @@ FROM node:22-bookworm AS dsh-builder
 # working-directory tool, confined by the sandboxed fs it stats through. The
 # reasoning-translation plugin (Bing/Google/DeepSeek) is an optional
 # experimental bundle, not composed here, and the plugin manager stays dropped.
-ARG DSH_PIN=d743267388641bc76f17c45ce8b4c231aed1d32c
+#
+# dsh-v0.2.1-alpha.3 (2026-10-14). Trust moved into connection admit(): only
+# its final 401 is deferred now, after upstream's fence and both auth paths.
+# The stream server's binary-frame edit replaces only the rejection, keeping
+# the liveness heartbeat upstream added to the same handler. Session delete's
+# handle tracking wraps create/resume by opening and shared closing, with
+# counts. A saved key now outranks the environment in web, so the model leg
+# keeps the worker's launch-environment token first: it is how the proxy
+# attributes the call. New rows: remote-access (peer access control the
+# gateway needs) admitted; harness-dev-context switched off.
+ARG DSH_PIN=2fbf4359b82fb94c03dcce0b831660d87f12ea5c
 RUN corepack enable \
  && git clone https://github.com/deepseek-ai/deepseek-harness /dsh \
  && git -C /dsh checkout "${DSH_PIN}"

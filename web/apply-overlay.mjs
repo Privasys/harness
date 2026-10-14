@@ -155,28 +155,17 @@ brandPut('apps/web/public/favicon.svg', 'vendor/privasys-logo.mini.svg', 'favico
 edit('packages/api/gateway/src/stream-server.ts', [
   [
     'mux server binary-frame acceptance',
-    `      this.socket.on('message', (data, isBinary) => {\n` +
-      `        if (isBinary) {\n` +
+    // Only the rejection block is replaced: 0.2.1-alpha.3 added a liveness
+    // heartbeat (this.alive()) to the same handler, which a restated
+    // handler would have dropped.
+    `        if (isBinary) {\n` +
       `          this.socket.close(1003, 'text messages required')\n` +
       `          return\n` +
-      `        }\n` +
-      `        try {\n` +
-      `          this.receive(rawText(data))\n` +
-      `        } catch {\n` +
-      `          this.socket.close(1008, 'invalid Remote stream request')\n` +
-      `        }\n` +
-      `      })`,
-    `      this.socket.on('message', (data, _isBinary) => {\n` +
-      `        // Privasys: the sealed relay (enclave-os sessionrelay/websocket.go)\n` +
+      `        }\n`,
+    `        // Privasys: the sealed relay (enclave-os sessionrelay/websocket.go)\n` +
       `        // writes client->app frames as binary; rawText() decodes\n` +
-      `        // Buffer/ArrayBuffer as UTF-8, so accept both opcodes instead of\n` +
-      `        // rejecting binary.\n` +
-      `        try {\n` +
-      `          this.receive(rawText(data))\n` +
-      `        } catch {\n` +
-      `          this.socket.close(1008, 'invalid Remote stream request')\n` +
-      `        }\n` +
-      `      })`,
+      `        // Buffer/ArrayBuffer as UTF-8, so both opcodes are accepted.\n` +
+      `        void isBinary\n`,
   ],
 ])
 
@@ -191,12 +180,15 @@ edit('packages/api/gateway/src/stream-server.ts', [
 //         authenticatedUrl + the token/cookie machinery for direct use.)
 edit('packages/client/connection/src/rpc-host.ts', [
   [
-    'requestRejection launch-token deferral',
-    // Only the launch-token step is replaced: upstream's Host/Origin fence on the
-    // line above (now given the carrier's host and protocol) stays exactly theirs.
-    `    return this.browserAuth.isAuthenticated(request, carrier?.protocol === 'https:') ? undefined : 401\n`,
-    `    // Privasys: trusted Host == attested ingress == authenticated (see note above).\n` +
-      `    return undefined\n`,
+    'admit launch-token deferral',
+    // 0.2.1-alpha.3 centralised trust in admit(): fence, disposal, browser
+    // auth, API-peer auth, then 401. Only that last refusal changes; a request
+    // that authenticates as an API peer keeps its own identity.
+    `    return record === undefined ? { rejection: 401 } : { peer: record.peer }\n`,
+    `    // Privasys: trusted Host == attested ingress == authenticated (see note\n` +
+      `    // above): a request that passed the fence without a launch token or an\n` +
+      `    // API peer credential is the browser peer, never refused.\n` +
+      `    return record === undefined ? { peer: this.browserPeer } : { peer: record.peer }\n`,
   ],
   [
     'authorizeIndex launch-token deferral',
@@ -804,6 +796,21 @@ edit('packages/llm/llm-deepseek-api-key/src/index.ts', [
     `    options, providerName: 'DeepSeek',`,
     `    options, providerName: 'Privasys',`,
   ],
+  [
+    'worker key wins over a saved key',
+    `    const ref = connection.apiKeyEnv\n` +
+      `    const credentials = ctx.get('credentials')\n`,
+    `    const ref = connection.apiKeyEnv\n` +
+      `    // Privasys: the launch environment carries the worker's own token, which\n` +
+      `    // is how the egress proxy knows whose call this is (it strips the token\n` +
+      `    // before the call leaves). dsh 0.2.1-alpha.3 lets a key saved in\n` +
+      `    // $DSH_HOME/.credentials.yaml win over the environment, so a key a user\n` +
+      `    // once saved on the Models page would replace the worker token and every\n` +
+      `    // model turn would go out naming nobody. Here the environment wins.\n` +
+      `    const launched = launchEnvironmentOf(ctx).get(ref)\n` +
+      `    if (launched !== undefined && launched.value.length > 0) return assertUsableApiKey(launched.value, 'llm-deepseek', ref)\n` +
+      `    const credentials = ctx.get('credentials')\n`,
+  ],
 ])
 
 // (e) Skill discovery: the dsh-* development skills live in the checkout's
@@ -1269,10 +1276,16 @@ for (const rel of modelPluginFiles(MODEL_PLUGIN_SRC)) {
 }
 editAll('packages/client/ui-settings-models/src/client/locales.ts', [
   [
-    'base-url placeholder',
-    `  deepSeekBaseUrl: 'https://api.deepseek.com/anthropic',`,
+    'base-url placeholder (en)',
+    `  deepSeekBaseUrl: 'https://api.deepseek.com/anthropic (Default to use DEEPSEEK_BASE_URL)',`,
     `  deepSeekBaseUrl: 'http://127.0.0.1:9411/model/v1',`,
-    2,
+    1,
+  ],
+  [
+    'base-url placeholder (zh)',
+    `  deepSeekBaseUrl: 'https://api.deepseek.com/anthropic（默认使用环境 DEEPSEEK_BASE_URL）',`,
+    `  deepSeekBaseUrl: 'http://127.0.0.1:9411/model/v1',`,
+    1,
   ],
 ])
 edit('packages/client/ui-settings-models/src/client/locales.ts', [
@@ -1329,90 +1342,49 @@ function editAll(rel, transforms) {
 
 // (a) session controller: retain Agent handles so one Agent can be released.
 editAll('packages/api/session-controller/src/agent.ts', [
+  // Privasys: keep each live Agent's handle so one session can be released
+  // on its own (dsh keeps every resumed Agent until unload). The calls are
+  // wrapped by their openings and their shared closing, with counts, so a
+  // changed argument list no longer breaks the edit while a NEW create or
+  // resume path still fails the build instead of going unretained.
   [
     'agent handle map',
-    `  private readonly creations = new Map<SessionId, Promise<Agent>>()`,
-    `  private readonly creations = new Map<SessionId, Promise<Agent>>()\n` +
+    `  private readonly resumes = new Map<SessionId, Promise<Agent>>()\n`,
+    `  private readonly resumes = new Map<SessionId, Promise<Agent>>()\n` +
       `  // Privasys: the handles create/resume hand back, so a session can be\n` +
       `  // released on its own (dsh keeps every resumed Agent until unload).\n` +
-      `  private readonly handles = new Map<SessionId, { agent: Agent; dispose(): Promise<void> }>()`,
+      `  private readonly handles = new Map<SessionId, { agent: Agent; dispose(): Promise<void> }>()\n`,
     1,
   ],
   [
-    'resume handle retained (4)',
-    `    return (await this.ctx.agents.resume({
-` +
-      `      resumeSessionId: sessionId,
-` +
-      `      agentOptions: this.agentOptions(),
-` +
-      `      setup: composition.setup,
-` +
-      `    })).agent`,
-    `    return this.retain(await this.ctx.agents.resume({
-` +
-      `      resumeSessionId: sessionId,
-` +
-      `      agentOptions: this.agentOptions(),
-` +
-      `      setup: composition.setup,
-` +
-      `    }))`,
+    'resume calls retained',
+    `return (await this.ctx.agents.resume({`,
+    `return this.retain(await this.ctx.agents.resume({`,
+    2,
+  ],
+  [
+    'create call retained',
+    `return (await this.ctx.agents.create({`,
+    `return this.retain(await this.ctx.agents.create({`,
     1,
   ],
   [
-    'resume handle retained (8)',
-    `        return (await this.ctx.agents.resume({
-` +
-      `          resumeSessionId: sessionId,
-` +
-      `          agentOptions: this.agentOptions(),
-` +
-      `          setup: composition.setup,
-` +
-      `        })).agent`,
-    `        return this.retain(await this.ctx.agents.resume({
-` +
-      `          resumeSessionId: sessionId,
-` +
-      `          agentOptions: this.agentOptions(),
-` +
-      `          setup: composition.setup,
-` +
-      `        }))`,
-    1,
+    'retained calls close on the handle',
+    `})).agent`,
+    `}))`,
+    3,
   ],
   [
-    'create handle retained',
-    `    return (await this.ctx.agents.create({\n` +
-      `      sessionId,\n` +
-      `      agentOptions: this.agentOptions(),\n` +
-      `      meta: {\n` +
-      `        cwd,\n` +
-      `        ...(composition.agentPreset === undefined ? {} : { agentPreset: composition.agentPreset }),\n` +
-      `      },\n` +
-      `      setup: composition.setup,\n` +
-      `    })).agent\n` +
-      `  }`,
-    `    return this.retain(await this.ctx.agents.create({\n` +
-      `      sessionId,\n` +
-      `      agentOptions: this.agentOptions(),\n` +
-      `      meta: {\n` +
-      `        cwd,\n` +
-      `        ...(composition.agentPreset === undefined ? {} : { agentPreset: composition.agentPreset }),\n` +
-      `      },\n` +
-      `      setup: composition.setup,\n` +
-      `    }))\n` +
-      `  }\n` +
-      `\n` +
-      `  /** Privasys: remember one live Agent's handle and hand back its Agent. */\n` +
+    'retain and release helpers',
+    `  private createMinted(cwd: string, composition: ApiSessionComposition): Promise<Agent> {\n`,
+    `  /** Privasys: remember one live Agent's handle and hand back its Agent. */\n` +
       `  private retain(handle: { agent: Agent; dispose(): Promise<void> }): Agent {\n` +
       `    this.handles.set(handle.agent.id, handle)\n` +
       `    return handle.agent\n` +
       `  }\n` +
       `\n` +
       `  /**\n` +
-      `   * Privasys: release one live Agent — stop and drain it, unregister it,\n` +
+      `   * Privasys: release one live Agent: stop and drain it, unregister it,\n` +
       `   * detach its session (which emits \`session/disposed\`, hence\n` +
       `   * \`api-session/removed\`). A session this controller never resumed is a\n` +
       `   * no-op.\n` +
@@ -1423,7 +1395,9 @@ editAll('packages/api/session-controller/src/agent.ts', [
       `    this.handles.delete(sessionId)\n` +
       `    await handle.dispose()\n` +
       `    return true\n` +
-      `  }`,
+      `  }\n` +
+      `\n` +
+      `  private createMinted(cwd: string, composition: ApiSessionComposition): Promise<Agent> {\n`,
     1,
   ],
 ])

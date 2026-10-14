@@ -118,7 +118,9 @@ done
 # mounts product analytics in the web-app bundle, off for a web profile only
 # through an expression; the deployment patch switches both rows off in so
 # many words, and this is where that promise is checked.
-for row in desktop-product-telemetry product-analytics session-telemetry-otel otel; do
+# harness-dev-context (dsh 0.2.1-alpha.3) rides the same check: it is off in the
+# deployment patch, and here is where that is held to.
+for row in desktop-product-telemetry product-analytics session-telemetry-otel otel harness-dev-context; do
 	enabled=$(awk -v row="$row" '
 		function indent(s) { match(s, /^ */); return RLENGTH }
 		$0 ~ "^ *- id: " row "$" { inblock = 1; depth = indent($0); off = 0; next }
