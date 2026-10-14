@@ -142,8 +142,11 @@ type WorkerManager struct {
 	byUID     map[int]*Worker
 	freePorts []int
 	cooldown  map[string]time.Time // key -> earliest next start after a failed one
-	nextPort  int
-	nextUID   int
+	// reminderWakes holds, per subject, the timer that starts a reaped
+	// holder's worker again before their next reminder (reminders.go).
+	reminderWakes map[string]*time.Timer
+	nextPort      int
+	nextUID       int
 }
 
 func newWorkerManager(cfg config, broker *capability.Broker, client *http.Client) *WorkerManager {
@@ -884,6 +887,11 @@ func (m *WorkerManager) Reap(ctx context.Context) {
 		}
 		m.mu.Unlock()
 		for _, w := range idle {
+			// A holder's reminder due soon keeps the worker; a later one is armed
+			// to start it again before it falls due (reminders.go).
+			if m.reapReminder(w) {
+				continue
+			}
 			log.Printf("[workers] %s: idle for %s, stopping", w.Key, m.idle)
 			m.Stop(w)
 		}
