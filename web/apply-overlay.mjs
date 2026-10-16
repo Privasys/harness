@@ -860,6 +860,26 @@ edit('packages/bundle/web-app/presets/cordis.patch.yml', [
       `                - /run/privasys-skills\n` +
       `              watch: false`,
   ],
+  [
+    'cordis preset: plugin install tools off',
+    // The bundle drops the host plugin manager, so these could never install;
+    // switching the rows off keeps them off if that dependency ever changes.
+    `          - id: tool-plugin-manager\n` +
+      `            name: '@deepseek-ai/dsh-plugin-manager/tools'\n` +
+      `            disabled: !!js "!ctx.get('profileContext')"\n` +
+      `          - id: tool-plugin-market\n` +
+      `            name: '@deepseek-ai/dsh-plugin-market/tools'\n` +
+      `            disabled: !!js "!ctx.get('profileContext')"\n`,
+    `          # Privasys: nothing installs into this composition after the build;\n` +
+      `          # it is the measured identity. Upstream enables both whenever a\n` +
+      `          # profile context exists, which this deployment always has.\n` +
+      `          - id: tool-plugin-manager\n` +
+      `            name: '@deepseek-ai/dsh-plugin-manager/tools'\n` +
+      `            disabled: true\n` +
+      `          - id: tool-plugin-market\n` +
+      `            name: '@deepseek-ai/dsh-plugin-market/tools'\n` +
+      `            disabled: true\n`,
+  ],
 ])
 
 // --- 2g. the `routine` agent preset: what an unattended run may use ---------
