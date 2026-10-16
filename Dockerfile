@@ -214,7 +214,7 @@ RUN DSH_CLIENT_TITLE="$(node -p 'require(process.argv[1]).title' "/build/brands/
 # rather than vendored, so the public repo stays the one place they live, and
 # so the image's identity commits to exactly this text.
 FROM node:22-bookworm AS skills-builder
-ARG SKILLS_PIN=007d38d364c7219e2c74ef2fa8289d3144068e91
+ARG SKILLS_PIN=1f341fa62ab336814e00a72800fda3cc0cdf3448
 RUN git clone https://github.com/Privasys/agent-skills /skills \
  && git -C /skills checkout "${SKILLS_PIN}" \
  && rm -rf /skills/.git
