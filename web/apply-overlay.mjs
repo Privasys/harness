@@ -2382,7 +2382,9 @@ edit('packages/client/ui-settings-general/src/client/index.ts', [
   ],
   [
     'settings: privasys launcher and storage page',
-    `  }, GeneralSection))\n}\n`,
+    // Anchored after GeneralSection, not on the function's closing brace:
+    // 0.2.1-alpha.4 appends its Host release prompt after it.
+    `  }, GeneralSection))\n`,
     `  }, GeneralSection))\n` +
       `  ctx.slots.inject('settings.launcher', () =>\n` +
       `    ctx.slots.register({ name: 'settings.launcher' }, PrivasysLauncher))\n` +
@@ -2391,8 +2393,7 @@ edit('packages/client/ui-settings-general/src/client/index.ts', [
       `    id: 'storage',\n` +
       `    order: 5,\n` +
       `    label: () => 'Storage',\n` +
-      `  }, PrivasysStorageSection))\n` +
-      `}\n`,
+      `  }, PrivasysStorageSection))\n`,
   ],
 ])
 edit('packages/client/ui-settings-general/src/client/SettingsRoot.tsx', [

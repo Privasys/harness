@@ -99,7 +99,14 @@ FROM node:22-bookworm AS dsh-builder
 # keeps the worker's launch-environment token first: it is how the proxy
 # attributes the call. New rows: remote-access (peer access control the
 # gateway needs) admitted; harness-dev-context switched off.
-ARG DSH_PIN=2fbf4359b82fb94c03dcce0b831660d87f12ea5c
+#
+# dsh-v0.2.1-alpha.5 (2026-10-16), through alpha.4. One anchor moved: the
+# settings registrations hang after GeneralSection, since upstream now appends
+# a Host release prompt (offered on reconnecting to another release, kept).
+# alpha.4 added plugin installs from custom index sources: the market service
+# needs the plugin manager this allow-list drops, and its model-facing
+# tool-plugin-market ships disabled in every preset; the build holds it off.
+ARG DSH_PIN=1517a4dbca0a2789ff1d41ba439600f8547d23fa
 RUN corepack enable \
  && git clone https://github.com/deepseek-ai/deepseek-harness /dsh \
  && git -C /dsh checkout "${DSH_PIN}"

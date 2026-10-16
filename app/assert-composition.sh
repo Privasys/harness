@@ -120,7 +120,11 @@ done
 # many words, and this is where that promise is checked.
 # harness-dev-context (dsh 0.2.1-alpha.3) rides the same check: it is off in the
 # deployment patch, and here is where that is held to.
-for row in desktop-product-telemetry product-analytics session-telemetry-otel otel harness-dev-context; do
+# tool-plugin-market (dsh 0.2.1-alpha.4) too: it lists third-party plugin indexes
+# for plugin_manager to install from, and this composition is the measured
+# identity, so nothing installs into it after the build. It ships disabled in
+# every preset; this holds it there.
+for row in desktop-product-telemetry product-analytics session-telemetry-otel otel harness-dev-context tool-plugin-market; do
 	enabled=$(awk -v row="$row" '
 		function indent(s) { match(s, /^ */); return RLENGTH }
 		$0 ~ "^ *- id: " row "$" { inblock = 1; depth = indent($0); off = 0; next }
