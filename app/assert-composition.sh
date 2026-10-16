@@ -124,17 +124,23 @@ done
 # for plugin_manager to install from, and this composition is the measured
 # identity, so nothing installs into it after the build. It ships disabled in
 # every preset; this holds it there.
-for row in desktop-product-telemetry product-analytics session-telemetry-otel otel harness-dev-context tool-plugin-market; do
+# tool-plugin-manager, the installer itself, is held to the same: the bundle
+# drops the host plugin manager, but every preset carries the tool row.
+for row in desktop-product-telemetry product-analytics session-telemetry-otel otel harness-dev-context \
+           tool-plugin-market tool-plugin-manager; do
+	# Print each enabled declaration whole, so a failure says what composed.
 	enabled=$(awk -v row="$row" '
 		function indent(s) { match(s, /^ */); return RLENGTH }
-		$0 ~ "^ *- id: " row "$" { inblock = 1; depth = indent($0); off = 0; next }
+		$0 ~ "^ *- id: " row "$" { inblock = 1; depth = indent($0); block = $0; off = 0; next }
 		inblock {
-			if (indent($0) <= depth) { if (!off) print row; inblock = 0 }
-			else { if ($0 ~ /^ *disabled: true$/) off = 1; next }
+			if (indent($0) <= depth) { if (!off) print block; inblock = 0 }
+			else { block = block "\n" $0; if ($0 ~ /^ *disabled: true$/) off = 1; next }
 		}
-		END { if (inblock && !off) print row }
+		END { if (inblock && !off) print block }
 	' "$DEPLOY_DUMP")
-	[ -z "$enabled" ] || fail "telemetry row '${row}' is enabled in the composition that boots"
+	[ -z "$enabled" ] && continue
+	echo "$enabled" >&2
+	fail "row '${row}' is enabled in the composition that boots"
 done
 
 # The model leg is the api-key adapter face, pointed at the in-TCB proxy. dsh
