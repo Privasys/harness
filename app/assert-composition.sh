@@ -50,7 +50,7 @@ grep -q "agent-loop" "$HEADLESS_DUMP" || fail "the headless profile carries no a
 for row in web-search-deepseek web-fetch-http session-log-deepseek \
            plugin-package-inventory-deepseek session-telemetry-otel \
            tool-result-pruner dsh-llm-pi-ai \
-           llm-deepseek-account otel; do
+           llm-deepseek-account otel web-deepseek-api hmr; do
 	for dump in "$WEB_DUMP" "$HEADLESS_DUMP"; do
 		# Read each declaration of the row as a BLOCK: from its `- id:` line
 		# to the next line indented no deeper. `disabled: true` sits among
@@ -127,7 +127,8 @@ done
 # tool-plugin-manager, the installer itself, is held to the same: the bundle
 # drops the host plugin manager, but every preset carries the tool row.
 for row in desktop-product-telemetry product-analytics session-telemetry-otel otel harness-dev-context \
-           tool-plugin-market tool-plugin-manager; do
+           tool-plugin-market tool-plugin-manager preset-cordis entry-customization \
+           cordis-host-runner cordis-inspect-providers cordis-client-runner ui-cordis; do
 	# Print each enabled declaration whole, so a failure says what composed.
 	enabled=$(awk -v row="$row" '
 		function indent(s) { match(s, /^ */); return RLENGTH }

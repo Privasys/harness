@@ -9,6 +9,9 @@
 #   web, web-search-deepseek, web-fetch-http, tool-web  — the agent's only
 #     egress is the attested tool fleet via the egress proxy (fail closed)
 #   llm-pi-ai                — no external model providers by default
+#   web-deepseek-api         — DeepSeek Search/Fetch API, would present the
+#     worker's token to DeepSeek
+#   hmr                      — no live recompose from the profile patch files
 #   llm-deepseek-account     — the DeepSeek-cloud account route; this
 #     deployment's only model leg is the attested one
 #   session-log-deepseek     — no session-log upload to DeepSeek
@@ -25,14 +28,6 @@
 
     - id: timer
       name: '@deepseek-ai/cordis-plugin-timer'
-
-
-    # Profile configuration reloads by default; module roots are opt-in.
-    - id: hmr
-      name: '@deepseek-ai/dsh-hmr'
-      disabled: !!js "!ctx.get('profileContext')"
-      config:
-        root: []
 
 
     - id: llm

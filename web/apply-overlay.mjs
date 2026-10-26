@@ -793,8 +793,9 @@ edit('packages/llm/llm-deepseek-api-key/src/index.ts', [
   ],
   [
     'provider heading',
-    `    options, providerName: 'DeepSeek',`,
-    `    options, providerName: 'Privasys',`,
+    // rc.3 moved providerName onto its own line; anchored on that line alone.
+    `    providerName: 'DeepSeek',`,
+    `    providerName: 'Privasys',`,
   ],
   [
     'worker key wins over a saved key',
@@ -1503,6 +1504,54 @@ edit('packages/api/session-controller/src/commands.ts', [
       `    if (live === undefined) this.ctx.emit('api-session/removed', sessionId)\n` +
       `    return { sessionId }\n` +
       `  }`,
+  ],
+  [
+    'session working directory contained: helpers',
+    // Module-level helpers right after the imports, used by session.create below.
+    `\n` +
+      `interface SessionReadState {\n`,
+    `\n` +
+      `// Privasys: a session's working directory is its sandbox's writable root, so\n` +
+      `// it must stay inside this worker's own workspace (HOME). Opened above it, a\n` +
+      `// session could write the dsh home beside it, whose profile patch dsh loads.\n` +
+      `// Both paths are canonicalised (deepest existing ancestor realpathed), so a\n` +
+      `// symlink cannot carry a session out of the workspace.\n` +
+      `function privasysCanonical(path: string): string {\n` +
+      `  let current = resolve(path)\n` +
+      `  const missing: string[] = []\n` +
+      `  for (;;) {\n` +
+      `    try { return join(realpathSync(current), ...missing) } catch {\n` +
+      `      const parent = dirname(current)\n` +
+      `      if (parent === current) return resolve(path)\n` +
+      `      missing.unshift(basename(current))\n` +
+      `      current = parent\n` +
+      `    }\n` +
+      `  }\n` +
+      `}\n` +
+      `function privasysContainCwd(cwd: string): void {\n` +
+      `  const home = process.env.HOME\n` +
+      `  if (process.env.PRIVASYS_BEARER === undefined || home === undefined || home === '') return\n` +
+      `  const root = privasysCanonical(home)\n` +
+      `  const target = privasysCanonical(cwd)\n` +
+      `  if (target === root || target.startsWith(root + sep)) return\n` +
+      `  throw new RemoteError('gateway/bad-request', 'the working directory must be inside your workspace', {})\n` +
+      `}\n` +
+      `\n` +
+      `interface SessionReadState {\n`,
+  ],
+  [
+    'session working directory contained: imports',
+    `import { randomUUID } from 'node:crypto'\n`,
+    `import { randomUUID } from 'node:crypto'\n` +
+      `import { realpathSync } from 'node:fs'\n` +
+      `import { basename, dirname, join, resolve, sep } from 'node:path'\n`,
+  ],
+  [
+    'session working directory contained: check',
+    // Both a workspace's path and an explicit cwd are client-chosen.
+    `    const cwd = workspace?.path ?? request.cwd ?? this.defaultCwd\n`,
+    `    const cwd = workspace?.path ?? request.cwd ?? this.defaultCwd\n` +
+      `    privasysContainCwd(cwd)\n`,
   ],
 ])
 edit('packages/api/session-controller/src/index.ts', [

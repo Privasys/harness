@@ -106,7 +106,16 @@ FROM node:22-bookworm AS dsh-builder
 # alpha.4 added plugin installs from custom index sources: the market service
 # needs the plugin manager this allow-list drops, and its model-facing
 # tool-plugin-market ships disabled in every preset; the build holds it off.
-ARG DSH_PIN=1517a4dbca0a2789ff1d41ba439600f8547d23fa
+#
+# dsh-v0.2.1-rc.3 (2026-10-23). One anchor moved (providerName on its own
+# line). rc.2 added DeepSeek Search/Fetch to the base bundle with
+# DEEPSEEK_API_KEY, which here is the worker's token: dropped. The profile
+# patch files in a worker's dsh home can recompose dsh (new rows, !!js) and
+# outlive a restart, so hmr is dropped, the proxy keeps only config entries
+# of the user layer at start, and a session cannot open outside its
+# workspace. Creator mode and the Cordis runners are off. The profile
+# manifests lose patchReload, which no dsh code reads.
+ARG DSH_PIN=1f81c047fc48fa190a683e469daa699857e9afe8
 RUN corepack enable \
  && git clone https://github.com/deepseek-ai/deepseek-harness /dsh \
  && git -C /dsh checkout "${DSH_PIN}"
@@ -166,14 +175,14 @@ RUN mkdir -p /dsh-home/profiles/node_modules/@privasys /dsh-home/profiles/web /d
       '  "name": "dsh-profile-web",' \
       '  "private": true,' \
       '  "dependencies": {},' \
-      '  "dsh": { "profile": { "bundles": ["@privasys/harness-bundle", "@deepseek-ai/dsh-web-app"], "patchReload": "live" } }' \
+      '  "dsh": { "profile": { "bundles": ["@privasys/harness-bundle", "@deepseek-ai/dsh-web-app"] } }' \
       '}' > /dsh-home/profiles/web/package.json \
  && printf '%s\n' \
       '{' \
       '  "name": "dsh-profile-headless",' \
       '  "private": true,' \
       '  "dependencies": {},' \
-      '  "dsh": { "profile": { "bundles": ["@privasys/harness-bundle", "@deepseek-ai/dsh-headless"], "patchReload": "startup" } }' \
+      '  "dsh": { "profile": { "bundles": ["@privasys/harness-bundle", "@deepseek-ai/dsh-headless"] } }' \
       '}' > /dsh-home/profiles/headless/package.json
 # Build the frontend, then dump-config the two shipped profiles AND the
 # deployment patch layer on top of the web one, and assert what they composed

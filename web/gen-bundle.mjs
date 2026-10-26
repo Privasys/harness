@@ -25,6 +25,13 @@ const DROP = new Set([
   // Mid-transcript in-place tool-result rewriting: a prefix-cache killer for
   // the confidential inference backend.
   'tool-result-pruner',
+  // DeepSeek's Search and Fetch API providers (dsh 0.2.1-rc.2), configured
+  // with DEEPSEEK_API_KEY, which here holds the worker's own token.
+  'web-deepseek-api',
+  // Live reload of the profile patch files (and module roots): any write to
+  // them would recompose a running dsh, new rows and !!js included. Settings
+  // apply their own writes without it; nothing else here needs it.
+  'hmr',
   // Runtime plugin installation (dsh 0.1.6-alpha.2): the composition IS the
   // measured identity, so nothing may add a plugin to it after the build, by
   // a person or by the model's tool.
@@ -134,6 +141,9 @@ const header = `# @privasys/harness-bundle — the Privasys Privasys Harness cor
 #   web, web-search-deepseek, web-fetch-http, tool-web  — the agent's only
 #     egress is the attested tool fleet via the egress proxy (fail closed)
 #   llm-pi-ai                — no external model providers by default
+#   web-deepseek-api         — DeepSeek Search/Fetch API, would present the
+#     worker's token to DeepSeek
+#   hmr                      — no live recompose from the profile patch files
 #   llm-deepseek-account     — the DeepSeek-cloud account route; this
 #     deployment's only model leg is the attested one
 #   session-log-deepseek     — no session-log upload to DeepSeek
