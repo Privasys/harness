@@ -530,6 +530,12 @@ func (m *WorkerManager) prepare(w *Worker) error {
 	if err := refreshProfiles(filepath.Join(envOr("DSH_HOME", "/dsh-home"), "profiles"), filepath.Join(w.Home, "profiles")); err != nil {
 		return fmt.Errorf("profiles: %w", err)
 	}
+	// The home-level patch sits between the profile and the deployment patch
+	// and nothing in this deployment writes it; one found there is removed
+	// rather than composed (profilelayer.go).
+	if err := os.Remove(filepath.Join(w.Home, "cordis.patch.yml")); err == nil {
+		log.Printf("[workers] %s: removed a home-level profile patch; this deployment composes none", w.Key)
+	}
 	patch := fmt.Sprintf("- id: webserver\n  name: \"@deepseek-ai/dsh-host-webserver\"\n  config:\n    host: \"127.0.0.1\"\n    port: %d\n"+
 		"- id: session-persistence-jsonl\n  name: \"@deepseek-ai/dsh-session-persistence-jsonl\"\n  config:\n    root: %s\n", w.Port, w.Sessions)
 	// The routines door: dsh's webhook runtime plus the one plugin that turns
@@ -659,7 +665,16 @@ func refreshProfiles(src, dst string) error {
 		return fmt.Errorf("copy %s: %s (%v)", src, strings.TrimSpace(string(out)), err)
 	}
 	for name, raw := range userLayers {
-		if err := os.WriteFile(filepath.Join(dst, name, "cordis.patch.yml"), raw, 0o600); err != nil {
+		// Only what dsh's own settings writers produce survives a restart
+		// (profilelayer.go).
+		kept, dropped := sanitizeUserLayer(raw)
+		if len(dropped) > 0 {
+			log.Printf("[workers] profile %s: dropped %d user-layer entries this deployment does not compose: %s", name, len(dropped), strings.Join(dropped, ", "))
+		}
+		if kept == nil {
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(dst, name, "cordis.patch.yml"), kept, 0o600); err != nil {
 			return err
 		}
 	}
