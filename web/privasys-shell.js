@@ -289,10 +289,24 @@ function installSealedTransport(session) {
     transport.session = session;
     // Unary RPC: FIFO chain so sealed HTTP frames reach the relay in counter
     // order (out-of-order = 401 replay -> "connection lost" storm).
+    // A call that has not answered in STALL_MS no longer holds the queue:
+    // its frame left in order long ago (the counter is taken when the task
+    // starts, and the relay accepts a gap), so the calls behind it may go.
+    // Without this, one hung call left every later press with nothing on
+    // the wire and no error (Settings → Storage, 2026-10-27). The culprit
+    // is named in the console so it can be found.
+    const STALL_MS = 30000;
     let chain = Promise.resolve();
-    const enqueue = (task) => {
+    const enqueue = (task, label) => {
         const run = chain.then(task, task);
-        chain = run.then(noop, noop);
+        const released = new Promise((resolve) => {
+            const t = setTimeout(() => {
+                console.warn(`[privasys] sealed call still unanswered after ${STALL_MS / 1000} s, releasing the queue: ${label}`);
+                resolve();
+            }, STALL_MS);
+            run.then(() => { clearTimeout(t); resolve(); }, () => { clearTimeout(t); resolve(); });
+        });
+        chain = released;
         return run;
     };
     async function sealedFetch(input, init) {
@@ -306,7 +320,7 @@ function installSealedTransport(session) {
         if (init && init.headers) opts = { ...(opts || {}), headers: init.headers };
         let r;
         try {
-            r = await enqueue(() => transport.session.request(method, path, body, opts));
+            r = await enqueue(() => transport.session.request(method, path, body, opts), `${method} ${path}`);
         } catch (err) {
             // A rejected request (not an HTTP status) means the sealed channel
             // itself is gone.
