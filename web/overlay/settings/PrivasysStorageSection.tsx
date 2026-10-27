@@ -70,11 +70,11 @@ export function PrivasysStorageSection() {
       {wf.ask && (
         <div className={css.actions}>
           <Button variant={wf.state === 'locked' ? 'primary' : 'outline'} size="sm" disabled={busy || folderAsk === 'sent'} onClick={askFolderAgain}>
-            {folderAsk === 'sent' ? 'Sent to your device…' : 'Approve on my device'}
+            {folderAsk === 'sent' ? 'Sent to your wallet…' : wf.state === 'locked' ? 'Unlock with the Privasys wallet' : 'Approve with the Privasys wallet'}
           </Button>
         </div>
       )}
-      {folderAsk === 'failed' ? <p className={css.muted}>That could not be sent; try again in a moment.</p> : null}
+      {folderAsk === 'failed' ? <p className={css.muted}>That could not be sent to your wallet; try again in a moment.</p> : null}
       {folderAsk === 'granted' ? <p className={css.muted}>Your device already has this approval; the folder opens at the next start.</p> : null}
 
       <details className={css.section}>
