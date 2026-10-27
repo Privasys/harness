@@ -313,6 +313,12 @@ function installSealedTransport(session) {
         const url = typeof input === 'string' ? new URL(input, location.origin) : input;
         const path = url.pathname + url.search;
         const method = (init && init.method ? init.method : 'GET').toUpperCase();
+        // dsh's hot-module-reload channel: an event stream the client opens at
+        // boot. The hmr row is not in this composition (gen-bundle.mjs), so
+        // the right answer is the 404 the Host gives, and it is given here
+        // without a sealed frame: as a sealed call it answered nothing and
+        // held the unary queue behind it for 30 s (2026-10-27).
+        if (url.pathname === '/plugins/events') return new Response(null, { status: 404 });
         const body = init && init.body != null ? init.body : undefined;
         /** @type {any} */
         let opts;
