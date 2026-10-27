@@ -286,7 +286,7 @@ func (s *Syncer) PauseAgent(name, why string, at time.Time) error {
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	out, err := setPaused(raw)
+	out, err := setPausedTo(raw, true)
 	if err != nil {
 		return fmt.Errorf("%s/%s: %w", name, agentSpecFile, err)
 	}
@@ -312,12 +312,39 @@ func (s *Syncer) PauseAgent(name, why string, at time.Time) error {
 	return nil
 }
 
-// setPaused returns the definition with `paused: true`, keeping the rest of
+// SetAgentPaused sets `paused` in an agent's definition as the holder asks
+// from the agent page: pausing by hand writes no runs/paused.md entry (that
+// file says why the HARNESS paused it), and resuming is the same write with
+// false. The definition is rewritten through WriteAgent, so it stays
+// root-owned and read-only for the worker.
+func (s *Syncer) SetAgentPaused(name string, paused bool) error {
+	if !validAgentName(name) {
+		return fmt.Errorf("%q is not a valid agent name", name)
+	}
+	s.mu.Lock()
+	root := s.agentsRoot
+	s.mu.Unlock()
+	if root == "" {
+		return errors.New("this worker has no workspace root")
+	}
+	raw, err := os.ReadFile(filepath.Join(root, name, agentSpecFile))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	out, err := setPausedTo(raw, paused)
+	if err != nil {
+		return fmt.Errorf("%s/%s: %w", name, agentSpecFile, err)
+	}
+	_, err = s.WriteAgent(name, map[string][]byte{agentSpecFile: out})
+	return err
+}
+
+// setPausedTo returns the definition with `paused` set, keeping the rest of
 // the document as the yaml library round-trips it (comments and order
 // included). An empty definition becomes the one line.
-func setPaused(raw []byte) ([]byte, error) {
+func setPausedTo(raw []byte, paused bool) ([]byte, error) {
 	if len(strings.TrimSpace(string(raw))) == 0 {
-		return []byte("paused: true\n"), nil
+		return []byte(fmt.Sprintf("paused: %v\n", paused)), nil
 	}
 	var doc yaml.Node
 	if err := yaml.Unmarshal(raw, &doc); err != nil {
@@ -327,7 +354,7 @@ func setPaused(raw []byte) ([]byte, error) {
 		return nil, errors.New("the definition is not a mapping")
 	}
 	m := doc.Content[0]
-	value := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "true"}
+	value := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: fmt.Sprintf("%v", paused)}
 	for i := 0; i+1 < len(m.Content); i += 2 {
 		if m.Content[i].Value == "paused" {
 			m.Content[i+1] = value

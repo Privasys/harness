@@ -42,6 +42,8 @@ const (
 type agentStore interface {
 	Agents() []capability.AgentSpec
 	WriteAgent(name string, files map[string][]byte) (string, error)
+	// SetAgentPaused is the agent page's one write (agents_api.go).
+	SetAgentPaused(name string, paused bool) error
 }
 
 // agentStoreFor resolves the acting holder's mirror. Tests replace it.

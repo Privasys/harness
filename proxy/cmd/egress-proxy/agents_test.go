@@ -21,6 +21,15 @@ type fakeAgentStore struct {
 }
 
 func (f *fakeAgentStore) Agents() []capability.AgentSpec { return f.agents }
+func (f *fakeAgentStore) SetAgentPaused(name string, paused bool) error {
+	for i := range f.agents {
+		if f.agents[i].Name == name {
+			f.agents[i].Paused = paused
+			return nil
+		}
+	}
+	return nil
+}
 func (f *fakeAgentStore) WriteAgent(name string, files map[string][]byte) (string, error) {
 	if f.fail != nil {
 		return "", f.fail

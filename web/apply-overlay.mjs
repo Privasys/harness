@@ -2660,4 +2660,31 @@ edit('packages/client/ui-workspace/src/client/locales.ts', [
   ],
 ])
 
+// --- 2o. The agent page, a right-sidebar tab -----------------------------------
+// The agent the current session belongs to, as the chat built it: its
+// instructions, what starts it, the pause switch. A tab TYPE registered the
+// way dsh's files tab is (definition, body, title), from ui-sidebar-files's
+// plugin body, which already has the registry, the seats and the session
+// scope: one line in its index.ts, no dsh view edited. The guide page offers
+// it as an entry box beside Files.
+for (const file of [
+  'privasys-agents.ts', 'PrivasysAgentTab.tsx', 'PrivasysAgent.module.css', 'privasys-agent-register.ts',
+]) put(`packages/client/ui-sidebar-files/src/client/${file}`, `overlay/agents/${file}`)
+edit('packages/client/ui-sidebar-files/src/client/index.ts', [
+  [
+    'sidebar-files: agent page import',
+    `import { FilesTitle } from './FilesTitle.tsx'`,
+    `import { FilesTitle } from './FilesTitle.tsx'\n` +
+      `import { applyPrivasysAgent } from './privasys-agent-register.ts'`,
+  ],
+  [
+    'sidebar-files: agent page registration',
+    `  )), 'ui-sidebar-files: files tab title')\n}`,
+    `  )), 'ui-sidebar-files: files tab title')\n` +
+      `  // Privasys: the agent page, beside the files tab.\n` +
+      `  applyPrivasysAgent(ctx)\n` +
+      `}`,
+  ],
+])
+
 console.log('[overlay] done')
