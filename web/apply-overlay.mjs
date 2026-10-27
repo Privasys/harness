@@ -2574,4 +2574,90 @@ edit('packages/attachment/attachment-local/src/store.ts', [
   ],
 ])
 
+// --- 2n. Agents, and "New agent…" -------------------------------------------
+// The sidebar's section is "Agents": a workspace without a trigger is an
+// agent the holder talks to, one with a trigger also runs by itself, and the
+// word "workspace" names nothing a holder chooses. The header's ＋ keeps
+// dsh's add menu and gains "New agent…" as its first entry: it starts a
+// session whose draft invokes the agent-builder skill (`/agent-builder `,
+// dsh's own user-invocation gesture), so building an agent is a conversation
+// and needs no screen of its own. With two entries the menu shows (dsh skips
+// a one-entry menu and opens the folder flow straight away), and "Add
+// folder…" stays below it for a plain folder.
+put('packages/client/ui-workspace/src/client/PrivasysNewAgent.ts', 'overlay/workspace/PrivasysNewAgent.ts')
+edit('packages/client/ui-workspace/src/client/WorkspacePicker.tsx', [
+  [
+    'picker: new agent imports',
+    `const ADD_WORKSPACE = '::add-workspace'`,
+    `import { IconAgentPresetOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'\n` +
+      `import { requestNewAgent } from './PrivasysNewAgent.ts'\n` +
+      `\n` +
+      `const ADD_WORKSPACE = '::add-workspace'\n` +
+      `const NEW_AGENT = '::new-agent'`,
+  ],
+  [
+    'picker: new agent entry',
+    `  const addEntries: MenuEntry[] = flowAvailable\n` +
+      `    ? [{ id: ADD_WORKSPACE, label: t('menu.addWorkspace'), icon: <IconPlusOutlineRegular size={16} />, disabled: flowBusy }]\n` +
+      `    : []`,
+    `  const addEntries: MenuEntry[] = [\n` +
+      `    // Privasys: building an agent is a conversation; the entry starts it.\n` +
+      `    { id: NEW_AGENT, label: t('menu.newAgent'), icon: <IconAgentPresetOutlineRegular size={16} />, disabled: flowBusy },\n` +
+      `    ...flowAvailable\n` +
+      `      ? [{ id: ADD_WORKSPACE, label: t('menu.addWorkspace'), icon: <IconPlusOutlineRegular size={16} />, disabled: flowBusy }]\n` +
+      `      : [],\n` +
+      `  ]`,
+  ],
+  [
+    'picker: new agent selection',
+    `  const handleSelect = (id: string): void => {\n` +
+      `    if (id === ADD_WORKSPACE) {`,
+    `  const handleSelect = (id: string): void => {\n` +
+      `    if (id === NEW_AGENT) {\n` +
+      `      // The browser owns navigation: it closes this menu and starts the session.\n` +
+      `      requestNewAgent()\n` +
+      `      return\n` +
+      `    }\n` +
+      `    if (id === ADD_WORKSPACE) {`,
+  ],
+])
+edit('packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx', [
+  [
+    'browser: new agent import',
+    `import { PrivasysDriveKnowledgeDialog } from './PrivasysDriveKnowledge.tsx'`,
+    `import { PrivasysDriveKnowledgeDialog } from './PrivasysDriveKnowledge.tsx'\n` +
+      `import { NEW_AGENT_DRAFT, onNewAgentRequest } from '../PrivasysNewAgent.ts'`,
+  ],
+  [
+    'browser: new agent session',
+    `  const closeSessionDelete = () => {\n` +
+      `    if (sessionDeleting) return`,
+    `  // Privasys: "New agent…" starts a session in the current (else most\n` +
+      `  // recent) workspace with the agent-builder draft; the holder completes\n` +
+      `  // the line with what the agent should do, and sends.\n` +
+      `  useEffect(() => onNewAgentRequest(() => {\n` +
+      `    closeAddWorkspace()\n` +
+      `    startSession(undefined, { prompt: NEW_AGENT_DRAFT, whenDraftExists: 'replace' })\n` +
+      `  }), [closeAddWorkspace, startSession])\n` +
+      `  const closeSessionDelete = () => {\n` +
+      `    if (sessionDeleting) return`,
+  ],
+])
+edit('packages/client/ui-workspace/src/client/locales.ts', [
+  ['locale: agents section (zh)', `  'section.workspaces': '工作区',`, `  'section.workspaces': '智能体',`],
+  ['locale: agents section (en)', `  'section.workspaces': 'Workspaces',`, `  'section.workspaces': 'Agents',`],
+  ['locale: add tooltip (zh)', `  'workspace.add': '添加工作区',`, `  'workspace.add': '新建智能体',`],
+  ['locale: add tooltip (en)', `  'workspace.add': 'Add workspace',`, `  'workspace.add': 'New agent',`],
+  [
+    'locale: new agent entry (zh)',
+    `  'menu.addWorkspace': '添加工作区…',`,
+    `  'menu.addWorkspace': '添加文件夹…',\n  'menu.newAgent': '新建智能体…',`,
+  ],
+  [
+    'locale: new agent entry (en)',
+    `  'menu.addWorkspace': 'Add workspace…',`,
+    `  'menu.addWorkspace': 'Add folder…',\n  'menu.newAgent': 'New agent…',`,
+  ],
+])
+
 console.log('[overlay] done')
