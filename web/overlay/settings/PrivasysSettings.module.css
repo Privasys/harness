@@ -137,3 +137,22 @@
   outline: 2px solid var(--dsw-alias-border-l3);
   outline-offset: -1px;
 }
+
+.textarea {
+  max-width: 560px;
+  min-height: 180px;
+  padding: 10px 12px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  resize: vertical;
+}
+
+.textarea:focus-visible {
+  outline: 2px solid var(--dsw-alias-border-l3);
+  outline-offset: -1px;
+}

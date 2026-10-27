@@ -20,7 +20,7 @@ import { useId, useRef, useState, useSyncExternalStore, type ReactNode } from 'r
 import { createPortal } from 'react-dom'
 import clsx from 'clsx'
 import {
-  Button, IconCloseOutlineRegular, IconDeliverDocMedium, IconShieldOutlineMedium, IconUserOutlineMedium, useModalLayer,
+  Button, IconCloseOutlineRegular, IconDeliverDocMedium, IconPersonalizationOutlineMedium, IconShieldOutlineMedium, IconUserOutlineMedium, useModalLayer,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { PRIVASYS_LEGAL } from './privasys-legal.ts'
 import { save, snapshot, subscribe } from './privasys-profile.ts'
@@ -47,7 +47,7 @@ export function SignOutIcon({ size = 16, className }: { size?: number; className
   )
 }
 
-type PageId = 'name' | 'privacy' | 'terms' | 'sign-out'
+type PageId = 'name' | 'instructions' | 'privacy' | 'terms' | 'sign-out'
 
 interface Page {
   id: PageId
@@ -57,6 +57,7 @@ interface Page {
 
 const PAGES: readonly Page[] = [
   { id: 'name', label: 'Your name', icon: <IconUserOutlineMedium className={root.navIcon} size={16} /> },
+  { id: 'instructions', label: 'Your instructions', icon: <IconPersonalizationOutlineMedium className={root.navIcon} size={16} /> },
   { id: 'privacy', label: 'Privacy policy', icon: <IconShieldOutlineMedium className={root.navIcon} size={16} /> },
   { id: 'terms', label: 'Terms of service', icon: <IconDeliverDocMedium className={root.navIcon} size={16} /> },
   { id: 'sign-out', label: 'Sign out', icon: <SignOutIcon className={root.navIcon} /> },
@@ -87,7 +88,7 @@ function NamePage() {
   const submit = async (): Promise<void> => {
     setBusy(true)
     setProblem('')
-    const error = await save(value)
+    const error = await save({ name: value })
     setBusy(false)
     if (error !== '') { setProblem(error); return }
     setDraft(undefined)
@@ -119,6 +120,55 @@ function NamePage() {
       {saved && profile.persisted && <p className={css.muted}>Saved. The assistant uses it from your next message.</p>}
       {saved && !profile.persisted && (
         <p className={css.warn}>Used from your next message, but not kept: connect your Drive in Settings, Storage, to keep it.</p>
+      )}
+    </div>
+  )
+}
+
+function InstructionsPage() {
+  const profile = useSyncExternalStore(subscribe, snapshot)
+  const [draft, setDraft] = useState<string | undefined>(undefined)
+  const [busy, setBusy] = useState(false)
+  const [problem, setProblem] = useState('')
+  const [saved, setSaved] = useState(false)
+  const value = draft ?? profile.instructions
+  const submit = async (): Promise<void> => {
+    setBusy(true)
+    setProblem('')
+    const error = await save({ instructions: value })
+    setBusy(false)
+    if (error !== '') { setProblem(error); return }
+    setDraft(undefined)
+    setSaved(true)
+  }
+  return (
+    <div className={css.page}>
+      <h2 className={css.title}>Your instructions</h2>
+      <p>
+        What the assistant should know about how you like to work: your
+        language, your tone, what to always do or never do. They go into every
+        session and every agent that works for you, after this deployment's own
+        rules and before the agent's. Kept in your own Drive folder.
+      </p>
+      <textarea
+        className={css.textarea}
+        value={value}
+        maxLength={8000}
+        rows={10}
+        placeholder={'For example:\n- Answer in French.\n- Keep replies short; I will ask for detail.\n- Never send an email without showing me the draft.'}
+        aria-label="Your instructions"
+        onChange={(e) => { setDraft(e.target.value); setSaved(false) }}
+      />
+      <div className={css.actions}>
+        <Button variant="primary" size="sm" disabled={busy || draft === undefined} onClick={() => { void submit() }}>
+          {busy ? 'Saving…' : 'Save'}
+        </Button>
+        <span className={css.muted}>{value.length} / 8000</span>
+      </div>
+      {problem !== '' && <p className={css.warn}>{problem}</p>}
+      {saved && profile.persisted && <p className={css.muted}>Saved. The assistant follows them from your next message.</p>}
+      {saved && !profile.persisted && (
+        <p className={css.warn}>Followed from your next message, but not kept: connect your Drive in Settings, Storage, to keep them.</p>
       )}
     </div>
   )
@@ -185,6 +235,7 @@ export function PrivasysUserPanel({ name, onClose }: { name: string; onClose: ()
           </div>
           <div className={clsx(root.options, (active === 'privacy' || active === 'terms') && css.optionsFill)}>
             {active === 'name' && <NamePage />}
+            {active === 'instructions' && <InstructionsPage />}
             {active === 'privacy' && <LegalPage href={PRIVASYS_LEGAL.privacy} title="Privacy policy" />}
             {active === 'terms' && <LegalPage href={PRIVASYS_LEGAL.terms} title="Terms of service" />}
             {active === 'sign-out' && <SignOutPage name={name} />}
