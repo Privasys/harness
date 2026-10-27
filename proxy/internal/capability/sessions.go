@@ -372,11 +372,13 @@ func (s *Syncer) remoteRel(reg registry, localPath string) string {
 	prefix := sessionsFolder + "/"
 	display := parts[0]
 	if ok {
-		// An agent run stays with the agent in the holder folder; only
-		// conversations are the memory Drive keeps (plan §5.9).
-		if s.isAgentCwd(meta.Cwd) {
-			return ""
-		}
+		// A session run inside an agent's workspace is mirrored like any
+		// other: since every workspace may be an agent (2026-10-27), leaving
+		// agent runs out would keep NO conversation in Drive, and worse, the
+		// prune below deleted the Drive copies of ten conversations the
+		// moment their workspace gained the agent marker, while the holder
+		// folder that was meant to keep them was locked (a scratch tmpfs).
+		// Nothing that exists locally is ever removed from Drive.
 		if reg.archived[meta.ID] {
 			prefix += archivedFolder + "/"
 		}
