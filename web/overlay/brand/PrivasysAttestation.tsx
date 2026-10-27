@@ -31,6 +31,7 @@ import {
 } from './attestation-view/index.ts'
 import { FootRow, ShieldIcon } from './PrivasysFootRow.tsx'
 import { PrivasysPolicySection } from './PrivasysPolicy.tsx'
+import { PrivasysCompositionSection } from './PrivasysComposition.tsx'
 import css from './PrivasysFoot.module.css'
 
 interface ShellAttestationConfig {
@@ -142,6 +143,8 @@ export function PrivasysAttestationRow({ wide }: SidebarFooterActionOwnerProps) 
                 )}
           {/* Posture AND behaviour, always together. */}
           <PrivasysPolicySection />
+          {/* What the measured image runs, beside the proof that it is measured. */}
+          <PrivasysCompositionSection />
         </div>
       </Modal>
     </>

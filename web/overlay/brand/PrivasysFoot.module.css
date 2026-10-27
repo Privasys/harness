@@ -193,3 +193,61 @@
   gap: 8px;
   margin-top: 8px;
 }
+
+/* "What this deployment runs" in the attestation report. */
+.compSection {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 0.5px solid var(--dsw-alias-border-l3);
+}
+
+.compTitle {
+  margin: 0 0 6px;
+  color: var(--dsw-alias-label-primary);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 22px;
+}
+
+.compGroup {
+  margin-top: 6px;
+}
+
+.compSummary {
+  cursor: pointer;
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+}
+
+.compList {
+  margin: 4px 0 6px;
+  padding-left: 18px;
+}
+
+.compRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.compName {
+  font-family: var(--dsh-font-mono, monospace);
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.compOff {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.compBadge {
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  line-height: 16px;
+}

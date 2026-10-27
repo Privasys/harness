@@ -113,6 +113,15 @@
 # (web/gen-bundle.mjs), and the page that would drive them is not mounted.
 - id: ui-plugin-manager
   disabled: true
+# The Settings pages that list the composition as if it were a setting
+# ("Built-in plugins", "Plugins"). Nothing in it can be changed from the
+# browser: the composition is the measured image. The Attestation panel lists
+# it instead, as "What this deployment runs", beside the evidence that it is
+# measured (composition.go, PrivasysComposition.tsx).
+- id: ui-settings-plugin-inventory
+  disabled: true
+- id: ui-settings-plugins
+  disabled: true
 
 # dsh 0.2.0-rc.1 mounts product analytics in the web-app bundle, exporting to
 # DeepSeek's collector (dsh-otel-collector.deepseeksvc.com). Both rows are

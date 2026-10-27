@@ -758,6 +758,8 @@ func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp 
 	// The agent page (agents_api.go): the holder's agents as the chat built
 	// them, and the pause switch.
 	registerAgentsAPI(mux)
+	// What this deployment runs (composition.go), for the Attestation panel.
+	registerCompositionAPI(mux)
 	if mgr != nil {
 		// Operators' view of the workers (no subjects, only keys).
 		mux.HandleFunc("GET /privasys/workers", func(w http.ResponseWriter, _ *http.Request) {

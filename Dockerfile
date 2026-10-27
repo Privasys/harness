@@ -201,6 +201,7 @@ RUN DSH_CLIENT_TITLE="$(node -p 'require(process.argv[1]).title' "/build/brands/
       || { echo '--- the deployment patch did not compose:'; cat /tmp/deploy-dump.err; false; }; } \
  && sh /app/assert-composition.sh /tmp/web-dump.yml /tmp/web-dump.err /tmp/headless-dump.yml /tmp/headless-dump.err \
       /tmp/deploy-dump.yml /tmp/deploy-dump.err \
+ && cp /tmp/deploy-dump.yml /app/composition.yml \
  && rm -f /tmp/web-dump.yml /tmp/headless-dump.yml /tmp/web-dump.err /tmp/headless-dump.err \
       /tmp/deploy-dump.yml /tmp/deploy-dump.err && rm -rf /dsh/.git /tmp/harness-bundle \
  && find /dsh \( -name 'AGENTS.md' -o -name 'CLAUDE.md' -o -name 'AGENTS.local.md' -o -name 'CLAUDE.local.md' \) \( -type f -o -type l \) -delete \

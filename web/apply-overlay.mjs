@@ -707,6 +707,9 @@ put('packages/client/ui-brand-official/src/client/PrivasysAttestation.tsx', 'ove
 // how an honest product acquires a false badge. Reads the measured proxy's
 // /privasys/policy and /privasys/egress-log, same-origin.
 put('packages/client/ui-brand-official/src/client/PrivasysPolicy.tsx', 'overlay/brand/PrivasysPolicy.tsx')
+// "What this deployment runs": the composition the build dumped into the
+// image, listed beside the evidence that it is measured (composition.go).
+put('packages/client/ui-brand-official/src/client/PrivasysComposition.tsx', 'overlay/brand/PrivasysComposition.tsx')
 put('apps/web/public/privasys/privasys-attestation.css', 'vendor/privasys-attestation.css')
 
 // --- 2g. greenfield content: no DeepSeek-authored text reaches user or model
