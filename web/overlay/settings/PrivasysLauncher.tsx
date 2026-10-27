@@ -20,13 +20,19 @@ import { FootRow } from './PrivasysFootRow.tsx'
 import { PrivasysUserPanel } from './PrivasysUserPanel.tsx'
 import { displayName, snapshot as profileSnapshot, subscribe as profileSubscribe } from './privasys-profile.ts'
 import { openSettingsSection } from './privasys-settings-shell.ts'
-import { snapshot, subscribe, summarise } from './privasys-storage.ts'
+import { snapshot, subscribe, summarise, workingFiles } from './privasys-storage.ts'
 import foot from './PrivasysFoot.module.css'
 import css from './PrivasysSettings.module.css'
 
 function StorageAlertRow({ wide }: { wide: boolean }) {
-  const s = summarise(useSyncExternalStore(subscribe, snapshot))
+  const view = useSyncExternalStore(subscribe, snapshot)
+  const s = summarise(view)
   if (s === undefined || s.healthy) return null
+  // Whichever of the two needs the person: the Drive first, else the
+  // working files (locked, or never approved).
+  const wf = workingFiles(view)
+  const driveFine = s.persistent && !s.stale && !view.waiting
+  const shown = driveFine ? { dot: wf.dot, word: wf.word, label: 'Working files' } : { dot: s.dot, word: s.word, label: 'Storage' }
   // The attribute lets the stylesheet place dsh's connection pill on the
   // Settings row below this one.
   return (
@@ -34,10 +40,10 @@ function StorageAlertRow({ wide }: { wide: boolean }) {
     <FootRow
       wide={wide}
       icon={<IconFolderOpenOutlineRegular size={wide ? 16 : 18} />}
-      label="Storage"
-      status={<><StateDot state={s.dot} size={10} /><span>{s.word}</span></>}
-      title="Connect your Drive to keep your conversations"
-      ariaLabel={`Storage: ${s.word}`}
+      label={shown.label}
+      status={<><StateDot state={shown.dot} size={10} /><span>{shown.word}</span></>}
+      title={driveFine ? 'Your working files need you' : 'Connect your Drive to keep your conversations'}
+      ariaLabel={`${shown.label}: ${shown.word}`}
       haspopup="dialog"
       onClick={() => { openSettingsSection('storage') }}
     />

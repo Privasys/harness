@@ -437,6 +437,12 @@ func main() {
 	if workersEnabled() {
 		mgr = newWorkerManager(cfg, broker, client)
 		workerOf = mgr.Get
+		holderStateOf = func(sub string) string {
+			if w := mgr.Get(sub); w != nil {
+				return w.HolderState()
+			}
+			return ""
+		}
 		mgr.holders = holderBroker(declaredResources(), legs)
 		if mgr.holders != nil {
 			log.Printf("[workers] holder folders declared as %q: a worker's roots are the holder's folder when the runtime opens it", mgr.holders.Resource())

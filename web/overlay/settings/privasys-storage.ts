@@ -32,6 +32,44 @@ export interface StorageState {
   stale?: boolean
   permissions?: string[]
   granted_permissions?: string[]
+  /**
+   * The working-files folder as the worker found it: "open", "locked" (the
+   * wrapped key no longer unwraps; the wallet mends it), "needs_holder"
+   * (never approved), "unavailable", another runtime status, or absent.
+   */
+  working_files?: string
+}
+
+/** What the page says about the working-files folder. */
+export interface WorkingFilesSummary {
+  state: string
+  dot: 'done' | 'warning' | 'error'
+  word: string
+  line: string
+  /** The person can mend it from their device. */
+  ask: boolean
+  /** Nothing to do: the folder is open, or its state is not theirs to mend. */
+  healthy: boolean
+}
+
+export function workingFiles(view: StorageView): WorkingFilesSummary {
+  const state = view.state?.working_files ?? ''
+  switch (state) {
+    case 'open':
+      return { state, dot: 'done', word: 'In your folder', line: 'Your agents, skills and working trees are in your own folder here, under your key.', ask: false, healthy: true }
+    case 'locked':
+      return {
+        state, dot: 'warning', word: 'Locked',
+        line: 'The key to your working files no longer opens them, after a change on this platform. Approve again on your device: your wallet sends the key and the folder opens at the next start.',
+        ask: true, healthy: false,
+      }
+    case 'needs_holder':
+      return { state, dot: 'warning', word: 'Approval needed', line: 'Your working files need your approval once, on your device.', ask: true, healthy: false }
+    case '':
+      return { state, dot: 'warning', word: 'Not open', line: 'Your working files are not open in this session.', ask: false, healthy: true }
+    default:
+      return { state, dot: 'error', word: 'Unavailable', line: `Your working files could not be opened (${state}). This is for the operator to look at; nothing is asked of you.`, ask: false, healthy: false }
+  }
 }
 
 export interface PendingAsk {
@@ -87,7 +125,9 @@ export function summarise(view: StorageView): StorageSummary | undefined {
         : withdrawn ? 'Withdrawn' : 'Not in your Drive'
   return {
     persistent, withdrawn, declined, stale,
-    healthy: persistent && !stale && !view.waiting,
+    // Nothing needs the person: the Drive is connected and the working
+    // files are open (or their state is not theirs to mend).
+    healthy: persistent && !stale && !view.waiting && workingFiles(view).healthy,
     dot, word,
     folder: state.folder ?? 'AppData/Harness',
     missing,

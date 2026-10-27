@@ -154,6 +154,11 @@ func capabilityStatus(broker *capability.Broker, withdrawn withdrawnFor, generat
 	if generation != nil && sub != "" {
 		resp["worker"] = generation(sub)
 	}
+	// The working-files folder, as the worker found it: the page shows one
+	// line per state and offers the device only when the holder can mend it.
+	if s := holderStateOf(sub); s != "" {
+		resp["working_files"] = s
+	}
 	if sub == "" || !broker.Enabled() {
 		return resp
 	}

@@ -2459,7 +2459,9 @@ edit('packages/client/ui-settings-general/src/client/index.ts', [
     `  }, GeneralSection))\n`,
     `  }, GeneralSection))\n` +
       `  ctx.slots.inject('settings.launcher', () =>\n` +
-      `    ctx.slots.register({ name: 'settings.launcher' }, PrivasysLauncher))\n` +
+      `    // dsh 0.2.1-rc.3 registers its own account launcher here on the web too\n` +
+      `    // (ui-settings-account); a lower priority shadows it (lowest renders).\n` +
+      `    ctx.slots.register({ name: 'settings.launcher', priority: -1 }, PrivasysLauncher))\n` +
       `  ctx.slots.inject('settings.section', () => ctx.slots.register({\n` +
       `    name: 'settings.section',\n` +
       `    id: 'storage',\n` +

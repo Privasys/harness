@@ -87,11 +87,13 @@ type Worker struct {
 	// (holders.go), which persists locked instead of being wiped.
 	holder bool
 
-	mu       sync.Mutex
-	ready    bool
-	lastSeen time.Time
-	started  time.Time
-	exited   chan struct{}
+	mu    sync.Mutex
+	ready bool
+	// holderState is how opening the holder folder ended (holders.go).
+	holderState string
+	lastSeen    time.Time
+	started     time.Time
+	exited      chan struct{}
 }
 
 // Upstream is the worker's loopback web server.

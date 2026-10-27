@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/Privasys/attested-harness/proxy/internal/capability"
 )
@@ -47,10 +48,21 @@ func (m *WorkerManager) openHolderFolder(w *Worker) {
 	hf, err := m.holders.OpenHolderFolder(w.Subject, w.UID)
 	if err != nil {
 		log.Printf("[workers] %s: holder folder: %v (running on the scratch)", w.Key, err)
+		// The one failure a person can mend: the runtime holds the grant but
+		// its wrapped key no longer unwraps (the app's data key changed under
+		// it); the wallet re-sends the key on the holder's say-so. The page
+		// shows this as "locked" with that one action, and anything else as
+		// unavailable, which is the operator's.
+		if strings.Contains(err.Error(), "could not be unwrapped") {
+			w.setHolderState("locked")
+		} else {
+			w.setHolderState("unavailable")
+		}
 		return
 	}
 	switch hf.Status {
 	case "open":
+		w.setHolderState("open")
 		// Everything the agent works with lives here (plan §5.9): the
 		// working trees and the agents among them, the dsh home, the
 		// holder's skills, and the sessions (an agent's runs stay; the
@@ -63,10 +75,32 @@ func (m *WorkerManager) openHolderFolder(w *Worker) {
 		w.holder = true
 		log.Printf("[workers] %s: holder folder open at %s", w.Key, hf.Path)
 	case "needs_holder":
+		w.setHolderState("needs_holder")
 		log.Printf("[workers] %s: holder folder needs the holder's approval (ask %.8s… on %s); running on the scratch", w.Key, hf.Nonce, hf.AppHost)
 	default:
+		w.setHolderState(hf.Status)
 		log.Printf("[workers] %s: holder folder %s; running on the scratch", w.Key, hf.Status)
 	}
+}
+
+// holderStateOf reports a signed-in user's working-files folder as their
+// worker last found it: "open", "locked" (the wrapped key no longer
+// unwraps; the wallet mends it), "needs_holder" (never approved), another
+// runtime status, "unavailable", or "" when no worker runs. Set in main.go
+// with the worker manager; "" in the single-worker layout.
+var holderStateOf = func(string) string { return "" }
+
+func (w *Worker) setHolderState(state string) {
+	w.mu.Lock()
+	w.holderState = state
+	w.mu.Unlock()
+}
+
+// HolderState is the last outcome of opening the holder folder (holderStateOf).
+func (w *Worker) HolderState() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.holderState
 }
 
 // closeHolderFolder locks the folder after the worker's process is gone.
