@@ -65,6 +65,13 @@ export function workingFiles(view: StorageView): WorkingFilesSummary {
       }
     case 'needs_holder':
       return { state, dot: 'warning', word: 'Approval needed', line: 'Your working files need your approval once, on your device.', ask: true, healthy: false }
+    // The runtime remembers a refusal and asks no more; both are the
+    // person's to reopen, and "unavailable (declined)" with no button left
+    // them nowhere to go (2026-10-28).
+    case 'declined':
+      return { state, dot: 'warning', word: 'Declined', line: 'You declined this earlier, so you are not being asked again. Approve it with your Privasys wallet and your working files open at the next start.', ask: true, healthy: false }
+    case 'revoked':
+      return { state, dot: 'warning', word: 'Withdrawn', line: 'You withdrew this in your wallet. Approve it again and your working files open at the next start.', ask: true, healthy: false }
     case '':
       return { state, dot: 'warning', word: 'Not open', line: 'Your working files are not open in this session.', ask: false, healthy: true }
     default:
