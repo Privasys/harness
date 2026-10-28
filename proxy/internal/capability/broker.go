@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -452,10 +453,18 @@ func (b *Broker) Events(ctx context.Context, fn func(Event)) {
 		return
 	}
 	wait := time.Second
+	last := ""
 	for ctx.Err() == nil {
 		err := b.follow(ctx, fn)
 		if errors.Is(err, errNoEvents) {
 			return
+		}
+		// Said once per change, never per retry: a stream that fails for
+		// hours used to leave no line at all, and an approval that never
+		// arrived looked like one that was never given (2026-10-28).
+		if msg := fmt.Sprint(err); msg != last {
+			log.Printf("[events] the runtime's event stream ended (%s); dialling again", msg)
+			last = msg
 		}
 		select {
 		case <-ctx.Done():

@@ -102,6 +102,15 @@ func followRuntimeEvents(ctx context.Context, stream *capability.Broker, legs []
 				}
 			}
 			mgr.Ensure(ev.Subject)
+		case ev.Type == "capability.approved" && ev.Resource == holderResourceKindName(legs):
+			// The folder opens only when a worker starts: a holder who has
+			// just approved it (or approved it again after a refusal) gets
+			// their worker replaced now, not at its next idle stop. The page
+			// reloads itself when the worker changes (privasys-storage.ts).
+			if w := mgr.Get(ev.Subject); w != nil && w.HolderState() != "open" {
+				log.Printf("[events] %.8s… approved their folder: the worker restarts on it", ev.Subject)
+				go func(sub string) { mgr.Stop(w); mgr.Ensure(sub) }(ev.Subject)
+			}
 		case ev.Type == "capability.revoked" && ev.Resource == holderResourceKindName(legs):
 			if w := mgr.Get(ev.Subject); w != nil {
 				log.Printf("[events] %.8s… revoked their folder: stopping the worker", ev.Subject)
