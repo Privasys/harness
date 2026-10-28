@@ -148,22 +148,6 @@ const REDIAL_MS = [1000, 2000, 5000, 15000, 30000]
  * it comes; the ask stays valid on the runtime for its own life. */
 const WAITING_MS = 45 * 1000
 
-/** A press that gets no answer in this long gives the button back with a
- * message, instead of a greyed button for ever: the sealed transport answers
- * unary calls in order, so one hung call ahead of ours would otherwise hold
- * the press (2026-10-27). The timer races the call itself: an abort signal
- * only reaches a call that has started, and a call still queued behind a
- * hung one never starts. */
-const ASK_TIMEOUT_MS = 20 * 1000
-
-/** The call's answer, or a rejection once ASK_TIMEOUT_MS has passed. */
-function withinAskTimeout<T>(p: Promise<T>): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const t = setTimeout(() => { reject(new Error('no answer from the harness')) }, ASK_TIMEOUT_MS)
-    p.then(v => { clearTimeout(t); resolve(v) }, e => { clearTimeout(t); reject(e as Error) })
-  })
-}
-
 let view: StorageView = { state: undefined, ask: undefined, busy: false, waiting: false, folderAsk: undefined }
 const listeners = new Set<() => void>()
 let started = false
@@ -256,7 +240,7 @@ export function refresh(): void {
 export function request(retry: boolean): void {
   if (view.busy || view.waiting) return
   set({ busy: true })
-  void withinAskTimeout(pvFetch(`/privasys/capability/request${retry ? '?retry=1' : ''}`, { method: 'POST', signal: AbortSignal.timeout(ASK_TIMEOUT_MS) }))
+  void pvFetch(`/privasys/capability/request${retry ? '?retry=1' : ''}`, { method: 'POST' })
     .then(async r => (r.ok ? await r.json() as PendingAsk : undefined))
     .then(d => {
       set({ ask: d, busy: false })
@@ -273,7 +257,7 @@ export function request(retry: boolean): void {
 export function askFolderAgain(): void {
   if (view.busy) return
   set({ busy: true })
-  void withinAskTimeout(pvFetch('/privasys/capability/request?kind=app_storage&retry=1', { method: 'POST', signal: AbortSignal.timeout(ASK_TIMEOUT_MS) }))
+  void pvFetch('/privasys/capability/request?kind=app_storage&retry=1', { method: 'POST' })
     .then(async r => (r.ok ? await r.json() as PendingAsk : undefined))
     .then(d => {
       set({ busy: false, folderAsk: d?.nonce ? 'sent' : d?.status === 'already_granted' ? 'granted' : 'failed' })
