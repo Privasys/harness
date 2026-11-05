@@ -16,7 +16,10 @@ import css from './WorkspaceBrowser.module.css'
  * @param props - the Host's delete command and the workspace locale seat.
  * @returns the dialog, closed until a request arrives.
  */
-export function PrivasysSessionDeleteDialog({ deleteSession, t }: Pick<WorkspaceBrowserProps, 'deleteSession' | 't'>) {
+export function PrivasysSessionDeleteDialog({ deleteSession, t }: {
+  deleteSession: WorkspaceBrowserProps['deleteSession'] | undefined
+  t: WorkspaceBrowserProps['t']
+}) {
   const [target, setTarget] = useState<{ sessionId: SessionId, title: string } | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [error, setError] = useState<string | null>(null)

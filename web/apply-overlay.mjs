@@ -2667,4 +2667,33 @@ edit('packages/client/ui-sidebar-files/src/client/index.ts', [
   ],
 ])
 
+// dsh 0.2.2 types its six added languages to hold every key, in the files where
+// this overlay adds keys to English and Chinese. Those languages are held back
+// (see the locale edit above), so each simply starts from English: whatever this
+// overlay adds is there, and a language that returns falls back as it would at
+// runtime.
+for (const rel of [
+  'packages/client/ui-chat/src/client/locale.ts',
+  'packages/client/ui-commands/src/client/locales.ts',
+  'packages/client/ui-trajectory/src/client/locales.ts',
+  'packages/client/ui-workspace/src/client/locales.ts',
+]) {
+  edit(rel, ['ja', 'es', 'fr', 'de', 'ru', 'pt'].map(id => [
+    `added language starts from English: ${id}`,
+    `export const ${id} = {\n`,
+    `export const ${id} = {\n  ...en,\n`,
+  ]))
+}
+
+// A new Remote endpoint needs a viewer class even in a package this build never
+// mounts, since the client compile proves the table complete. Deleting a Session
+// is its owner's act alone.
+edit('packages/experimental/liveshare/src/endpoint-classification.ts', [
+  [
+    'liveshare: session/delete is owner-only',
+    `  'session/rename': 'reader-child-rename',`,
+    `  'session/delete': 'owner-only',\n  'session/rename': 'reader-child-rename',`,
+  ],
+])
+
 console.log('[overlay] done')
