@@ -55,6 +55,11 @@ case "${BRAND_PLATFORM}:${PRIVASYS_APP_ID:-}" in
     PV_ATTEST_BASE="https://api.developer.privasys.org"
     PV_API_BASE="https://api.privasys.org"
     ;;
+  *:205429bb-e5ed-499c-8f32-9f38bce4202a)  # privasystant (production)
+    export HARNESS_PUBLIC_HOST="privasystant.apps.privasys.org"
+    PV_ATTEST_BASE="https://api.developer.privasys.org"
+    PV_API_BASE="https://api.privasys.org"
+    ;;
   *)                                     # dev harness apps, and the default
     # The public host is THIS app's own name on the dev apps domain, derived
     # from the launcher-injected container name (which is the app name). A
