@@ -43,6 +43,14 @@
     provider: deepseek-official
     model: qwen36-35b-a3b-fp8
 
+# dsh 0.2.2 compresses WebSocket frames by default, to save bytes on a long
+# history. Frames here end inside the enclave and cross the network inside the
+# sealed session, whose lengths the host can see: compressing a user's text
+# beside anything an attacker can influence makes those lengths informative.
+- id: typert-gateway
+  config:
+    websocketCompression: none
+
 # Bind the container interface: the enclave ingress proxies to it. dsh's
 # webserver schema accepts only 127.0.0.1 or 0.0.0.0, and the CLI --host
 # guard rejects 0.0.0.0 (a laptop-safety guard) — so set it in config, not

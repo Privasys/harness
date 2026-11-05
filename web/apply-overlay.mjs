@@ -710,6 +710,8 @@ put('packages/client/ui-brand-official/src/client/PrivasysPolicy.tsx', 'overlay/
 // "What this deployment runs": the composition the build dumped into the
 // image, listed beside the evidence that it is measured (composition.go).
 put('packages/client/ui-brand-official/src/client/PrivasysComposition.tsx', 'overlay/brand/PrivasysComposition.tsx')
+// Every enclave the harness depends on, each attested live beside the harness.
+put('packages/client/ui-brand-official/src/client/PrivasysDependencies.tsx', 'overlay/brand/PrivasysDependencies.tsx')
 put('apps/web/public/privasys/privasys-attestation.css', 'vendor/privasys-attestation.css')
 
 // --- 2g. greenfield content: no DeepSeek-authored text reaches user or model
@@ -883,6 +885,42 @@ edit('packages/bundle/web-app/presets/cordis.patch.yml', [
       `          - id: tool-plugin-market\n` +
       `            name: '@deepseek-ai/dsh-plugin-market/tools'\n` +
       `            disabled: true\n`,
+  ],
+])
+
+edit('packages/bundle/web-app/presets/standard.patch.yml', [
+  [
+    'standard preset: plugin install tool off',
+    // dsh 0.2.2 enables the installer tool in this preset whenever a profile
+    // context exists, as Cordis already did. The same reasoning applies.
+    `          - id: tool-plugin-manager\n` +
+      `            name: '@deepseek-ai/dsh-plugin-manager/tools'\n` +
+      `            disabled: !!js "!ctx.get('profileContext')"\n`,
+    `          # Privasys: nothing installs into this composition after the build;\n` +
+      `          # it is the measured identity. Upstream enables this whenever a\n` +
+      `          # profile context exists, which this deployment always has.\n` +
+      `          - id: tool-plugin-manager\n` +
+      `            name: '@deepseek-ai/dsh-plugin-manager/tools'\n` +
+      `            disabled: true\n`,
+  ],
+])
+
+// dsh 0.2.2 ships six more interface languages and picks one from the browser.
+// Their packs carry DeepSeek's own wording, and nothing here rewrites them: this
+// overlay's text and its product naming exist in English and Chinese only. A
+// language joins this set once its wording has been reviewed.
+edit('packages/client/locale/src/client/index.ts', [
+  [
+    'locale: reviewed languages',
+    `/** Shared namespace for shell-level texts. */\n`,
+    `/** Privasys: added languages whose wording has been reviewed for this product. */\n` +
+      `const PRIVASYS_LANGUAGES: ReadonlySet<string> = new Set<string>()\n\n` +
+      `/** Shared namespace for shell-level texts. */\n`,
+  ],
+  [
+    'locale: only the reviewed languages',
+    `    ctx.effect(() => locale.addLanguage({ id, label, fallback: 'en' }),`,
+    `    if (PRIVASYS_LANGUAGES.has(id)) ctx.effect(() => locale.addLanguage({ id, label, fallback: 'en' }),`,
   ],
 ])
 
@@ -1098,8 +1136,8 @@ edit('packages/client/ui-chat/src/client/apply.ts', [
     // Workspace, and without this line the read throws "cannot get property
     // workspaces without inject" (seen on prod v21, replay dead).
     'ui-chat: privasys inject workspaces',
-    `  'configForms', 'remote', 'remote.session', 'sidebarRight',\n]`,
-    `  'configForms', 'remote', 'remote.session', 'sidebarRight',\n  'workspaces',\n]`,
+    `  'configForms', 'connection', 'remote', 'remote.session', 'sidebarRight', 'fileDrag',\n]`,
+    `  'configForms', 'connection', 'remote', 'remote.session', 'sidebarRight', 'fileDrag',\n  'workspaces',\n]`,
   ],
   [
     'ui-chat: privasys imports',
@@ -1512,7 +1550,7 @@ edit('packages/api/session-controller/src/commands.ts', [
     'session working directory contained: helpers',
     // Module-level helpers right after the imports, used by session.create below.
     `\n` +
-      `interface SessionReadState {\n`,
+      `type PromptContentCandidate =\n`,
     `\n` +
       `// Privasys: a session's working directory is its sandbox's writable root, so\n` +
       `// it must stay inside this worker's own workspace (HOME). Opened above it, a\n` +
@@ -1540,7 +1578,7 @@ edit('packages/api/session-controller/src/commands.ts', [
       `  throw new RemoteError('gateway/bad-request', 'the working directory must be inside your workspace', {})\n` +
       `}\n` +
       `\n` +
-      `interface SessionReadState {\n`,
+      `type PromptContentCandidate =\n`,
   ],
   [
     'session working directory contained: imports',
@@ -1722,26 +1760,54 @@ edit('packages/api/session-controller/src/client/contract/sessions.ts', [
 
 // (f) workspace browser: the row action, the dialog, the wiring.
 put('packages/client/ui-workspace/src/client/rows/PrivasysSessionDelete.ts', 'overlay/workspace/PrivasysSessionDelete.ts')
-// dsh 0.1.7: the row menu is the 'sidebar.workspaces.session.menu.item' slot
-// and its entries are components, so Delete joins the shipped ones by
-// registration rather than by a patched menu array and switch.
-put('packages/client/ui-workspace/src/client/session-actions/PrivasysDeleteSession.tsx', 'overlay/workspace/PrivasysDeleteSession.tsx')
+// dsh 0.2.2: the Session and workspace menus are structured contributions to
+// the context-menu service, so Delete and the Drive knowledge entry register
+// beside the shipped ones. Each publishes on a module-level bus and returns:
+// the confirmation lives at the browser root, where a dialog survives the menu
+// closing under it.
+put('packages/client/ui-workspace/src/client/rows/PrivasysSessionDeleteDialog.tsx', 'overlay/workspace/PrivasysSessionDeleteDialog.tsx')
 edit('packages/client/ui-workspace/src/client/index.ts', [
   [
-    'delete menu entry import',
-    `import { ForkSessionMenuItem } from './session-actions/ForkSession.tsx'\n`,
-    `import { ForkSessionMenuItem } from './session-actions/ForkSession.tsx'\n` +
-      `import { PrivasysDeleteSessionMenuItem } from './session-actions/PrivasysDeleteSession.tsx'\n`,
+    'menu entries: bus imports',
+    `import { SessionMenu } from './session-actions/SessionMenu.tsx'\n`,
+    `import { SessionMenu } from './session-actions/SessionMenu.tsx'\n` +
+      `import { requestSessionDelete } from './rows/PrivasysSessionDelete.ts'\n` +
+      `import { requestDriveKnowledge } from './rows/PrivasysDriveKnowledge.tsx'\n`,
   ],
   [
-    'delete menu entry registration',
-    `  })\n` +
-      `  ctx.slots.inject('sidebar.workspaces.session.row.action', function* () {`,
-    `    // Privasys: deleting a session removes it here and from the holder's\n` +
-      `    // Drive, so it sits after archive and confirms at the browser root.\n` +
-      `    yield ctx.slots.register({ name: 'sidebar.workspaces.session.menu.item', id: 'privasys-delete', order: 500, locale: NS }, PrivasysDeleteSessionMenuItem)\n` +
-      `  })\n` +
-      `  ctx.slots.inject('sidebar.workspaces.session.row.action', function* () {`,
+    'menu entries: icon import',
+    `import { IconEditOutlineRegular, IconTrashOutlineRegular,`,
+    `import { IconFolderOpenOutlineRegular, IconEditOutlineRegular, IconTrashOutlineRegular,`,
+  ],
+  [
+    'menu entries: knowledge icon',
+    `      'workspace.fork': IconBranchOutlineRegular, 'workspace.copy': IconCopyOutlineRegular,\n`,
+    `      'workspace.fork': IconBranchOutlineRegular, 'workspace.copy': IconCopyOutlineRegular,\n` +
+      `      'privasys.driveKnowledge': IconFolderOpenOutlineRegular,\n`,
+  ],
+  [
+    'menu entries: registrations',
+    `  ctx.effect(() => ctx.contextMenus.register({\n` +
+      `    id: 'workspace.rename', target: 'workspace', order: 100,`,
+    `  // Privasys: what this workspace's sessions may read from the user's Drive.\n` +
+      `  ctx.effect(() => ctx.contextMenus.register({\n` +
+      `    id: 'workspace.privasys-drive-knowledge', target: 'workspace', order: 200,\n` +
+      `    resolve: ({ workspaceId, displayTitle }) => [{\n` +
+      `      id: 'drive-knowledge', label: ctx.locale.bind(NS)('menu.driveKnowledge'), icon: { key: 'privasys.driveKnowledge' },\n` +
+      `      run: () => { requestDriveKnowledge(workspaceId, displayTitle) },\n` +
+      `    }],\n` +
+      `  }), 'workspace: Privasys Drive knowledge menu action')\n` +
+      `  // Privasys: deleting a session removes it here and from the holder's Drive,\n` +
+      `  // so it sits after archive and confirms at the browser root.\n` +
+      `  ctx.effect(() => ctx.contextMenus.register({\n` +
+      `    id: 'session.privasys-delete', target: 'session', order: 650,\n` +
+      `    resolve: ({ sessionId, displayTitle }) => [{\n` +
+      `      id: 'delete', label: ctx.locale.bind(NS)('menu.deleteSession'), icon: { key: 'workspace.delete' }, danger: true, afterContent: true,\n` +
+      `      run: () => { requestSessionDelete(sessionId, displayTitle) },\n` +
+      `    }],\n` +
+      `  }), 'workspace: Privasys delete session menu action')\n` +
+      `  ctx.effect(() => ctx.contextMenus.register({\n` +
+      `    id: 'workspace.rename', target: 'workspace', order: 100,`,
   ],
 ])
 // The client-runtime fake of the session Remote namespace must implement
@@ -1806,14 +1872,12 @@ edit('packages/client/ui-workspace/src/client/navigation.ts', [
       `  }`,
   ],
 ])
-// The delete entry is its own component now (session-actions/), and it
-// imports the bus itself, so Rows needs nothing.
 edit('packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx', [
   [
-    'browser: bus import',
+    'browser: delete dialog import',
     `import css from './WorkspaceBrowser.module.css'`,
     `import css from './WorkspaceBrowser.module.css'\n` +
-      `import { onSessionDeleteRequest } from './PrivasysSessionDelete.ts'`,
+      `import { PrivasysSessionDeleteDialog } from './PrivasysSessionDeleteDialog.tsx'`,
   ],
   [
     'browser: deleteSession prop',
@@ -1821,70 +1885,10 @@ edit('packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx', [
     `  unarchiveSession,\n  deleteSession,\n  createWorkspace,\n  searchSessions,`,
   ],
   [
-    'browser: session delete state',
-    `  const [deleteError, setDeleteError] = useState<string | null>(null)`,
-    `  const [deleteError, setDeleteError] = useState<string | null>(null)\n` +
-      `\n` +
-      `  // Privasys: session deletion — the row publishes a request, the root\n` +
-      `  // confirms it, the Host deletes, and the removal event drops the row.\n` +
-      `  const [sessionDeleteTarget, setSessionDeleteTarget] = useState<{ sessionId: SessionNode['id']; title: string } | null>(null)\n` +
-      `  const [sessionDeleting, setSessionDeleting] = useState(false)\n` +
-      `  const [sessionDeleteError, setSessionDeleteError] = useState<string | null>(null)\n` +
-      `  useEffect(() => onSessionDeleteRequest((request) => {\n` +
-      `    setSessionDeleteTarget({ sessionId: request.sessionId as SessionNode['id'], title: request.title })\n` +
-      `    setSessionDeleteError(null)\n` +
-      `  }), [])\n` +
-      `  const closeSessionDelete = () => {\n` +
-      `    if (sessionDeleting) return\n` +
-      `    setSessionDeleteTarget(null)\n` +
-      `    setSessionDeleteError(null)\n` +
-      `  }\n` +
-      `  const confirmSessionDelete = () => {\n` +
-      `    if (sessionDeleting || sessionDeleteTarget === null || deleteSession === undefined) return\n` +
-      `    setSessionDeleting(true)\n` +
-      `    setSessionDeleteError(null)\n` +
-      `    deleteSession(sessionDeleteTarget.sessionId).then(() => {\n` +
-      `      setSessionDeleting(false)\n` +
-      `      setSessionDeleteTarget(null)\n` +
-      `    }).catch((reason: unknown) => {\n` +
-      `      setSessionDeleting(false)\n` +
-      `      setSessionDeleteError(reason instanceof Error ? reason.message : String(reason))\n` +
-      `    })\n` +
-      `  }`,
-  ],
-  [
-    'browser: session delete dialog',
-    `      <Modal\n` +
-      `        open={deleteTarget !== null}\n` +
-      `        onClose={closeDelete}`,
-    `      <Modal\n` +
-      `        open={sessionDeleteTarget !== null}\n` +
-      `        onClose={closeSessionDelete}\n` +
-      `        closeLabel={t('close')}\n` +
-      `        title={t('delete.session')}\n` +
-      `        {...sessionDeleteTarget === null\n` +
-      `          ? {}\n` +
-      `          : { description: t('delete.session.desc', { name: sessionDeleteTarget.title }) }}\n` +
-      `        footer={(\n` +
-      `          <>\n` +
-      `            <Button variant="outline" disabled={sessionDeleting} onClick={closeSessionDelete}>{t('cancel')}</Button>\n` +
-      `            <Button\n` +
-      `              variant="outline"\n` +
-      `              className={css.deleteAction}\n` +
-      `              disabled={sessionDeleting}\n` +
-      `              onClick={confirmSessionDelete}\n` +
-      `            >\n` +
-      `              {t('delete.session')}\n` +
-      `            </Button>\n` +
-      `          </>\n` +
-      `        )}\n` +
-      `      >\n` +
-      `        {sessionDeleting && <div className={css.deleteStatus} role="status">{t('delete.session.pending')}</div>}\n` +
-      `        {sessionDeleteError !== null && <div className={css.renameError} role="alert">{sessionDeleteError}</div>}\n` +
-      `      </Modal>\n` +
-      `      <Modal\n` +
-      `        open={deleteTarget !== null}\n` +
-      `        onClose={closeDelete}`,
+    'browser: mount the delete dialog',
+    `      {workspaceActionRequest !== null && <WorkspaceDialogs `,
+    `      <PrivasysSessionDeleteDialog deleteSession={deleteSession} t={t} />\n` +
+      `      {workspaceActionRequest !== null && <WorkspaceDialogs `,
   ],
 ])
 edit('packages/client/ui-workspace/src/client/locales.ts', [
@@ -1943,64 +1947,25 @@ edit('packages/mcp/mcp-client/src/tools.ts', [
   ],
 ])
 put('packages/client/ui-workspace/src/client/rows/PrivasysDriveKnowledge.tsx', 'overlay/workspace/PrivasysDriveKnowledge.tsx')
-edit('packages/client/ui-workspace/src/client/rows/Rows.tsx', [
-  [
-    'rows: knowledge bus import',
-    `import css from './Rows.module.css'`,
-    `import css from './Rows.module.css'\n` +
-      `import { requestDriveKnowledge } from './PrivasysDriveKnowledge.tsx'`,
-  ],
-  [
-    // The workspace menu's Drive row needs a folder icon Rows does not import.
-    'rows: knowledge icon import',
-    `  IconTriangleRightFillRegular, IconUnarchiveOutlineRegular, Menu, relativeTime, StateDot, Tooltip,`,
-    `  IconFolderOpenOutlineRegular,\n` +
-      `  IconTriangleRightFillRegular, IconUnarchiveOutlineRegular, Menu, relativeTime, StateDot, Tooltip,`,
-  ],
-  [
-    'rows: workspace menu item',
-    `  const workspaceMenuItems = [\n` +
-      `    { id: 'rename', label: t('rename'), icon: <IconEditOutlineRegular /> },`,
-    `  const workspaceMenuItems = [\n` +
-      `    { id: 'rename', label: t('rename'), icon: <IconEditOutlineRegular /> },\n` +
-      `    // Privasys: what this workspace's sessions may read from the user's Drive.\n` +
-      `    { id: 'drive-knowledge', label: t('menu.driveKnowledge'), icon: <IconFolderOpenOutlineRegular /> },`,
-  ],
-  [
-    'rows: workspace menu dispatch',
-    `              /* v8 ignore next -- Menu can emit only the rename and delete rows supplied above. */\n` +
-      `              if (id !== 'rename' && id !== 'delete') return`,
-    `              if (id === 'drive-knowledge') {\n` +
-      `                if (row.workspaceId !== undefined) requestDriveKnowledge(row.workspaceId, label)\n` +
-      `                return\n` +
-      `              }\n` +
-      `              /* v8 ignore next -- Menu can emit only the rename and delete rows supplied above. */\n` +
-      `              if (id !== 'rename' && id !== 'delete') return`,
-  ],
-])
 edit('packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx', [
   [
     'browser: knowledge dialog import',
-    `import { onSessionDeleteRequest } from './PrivasysSessionDelete.ts'`,
-    `import { onSessionDeleteRequest } from './PrivasysSessionDelete.ts'\n` +
+    `import { PrivasysSessionDeleteDialog } from './PrivasysSessionDeleteDialog.tsx'`,
+    `import { PrivasysSessionDeleteDialog } from './PrivasysSessionDeleteDialog.tsx'\n` +
       `import { PrivasysDriveKnowledgeDialog } from './PrivasysDriveKnowledge.tsx'`,
   ],
   [
     'browser: mount the knowledge dialog',
-    `      <Modal\n` +
-      `        open={sessionDeleteTarget !== null}\n` +
-      `        onClose={closeSessionDelete}`,
+    `      <PrivasysSessionDeleteDialog `,
     `      <PrivasysDriveKnowledgeDialog />\n` +
-      `      <Modal\n` +
-      `        open={sessionDeleteTarget !== null}\n` +
-      `        onClose={closeSessionDelete}`,
+      `      <PrivasysSessionDeleteDialog `,
   ],
 ])
 edit('packages/client/ui-workspace/src/client/WorkspacePicker.tsx', [
   [
     'picker: bus import',
-    `import { useCallback, useEffect, useState } from 'react'`,
-    `import { useCallback, useEffect, useState } from 'react'\n` +
+    `import { useCallback, useEffect, useMemo, useState } from 'react'`,
+    `import { useCallback, useEffect, useMemo, useState } from 'react'\n` +
       `import { requestDriveKnowledge } from './rows/PrivasysDriveKnowledge.tsx'`,
   ],
   [
@@ -2171,7 +2136,7 @@ edit('packages/interaction/user-questions/src/types.ts', [
     'user-questions: form intent',
     `  /** Logged tool invocation whose arguments contain the reviewed plan. */\n` +
       `  callId?: ToolCallId\n` +
-      `}\n`,
+      `} | {\n`,
     `  /** Logged tool invocation whose arguments contain the reviewed plan. */\n` +
       `  callId?: ToolCallId\n` +
       `} | {\n` +
@@ -2181,7 +2146,7 @@ edit('packages/interaction/user-questions/src/types.ts', [
       `  notice?: string\n` +
       `  /** Never set: keeps \`intent.approve\` readable on the union for the plan-review readers. */\n` +
       `  approve?: undefined\n` +
-      `}\n`,
+      `} | {\n`,
   ],
   [
     'user-questions: required question field',
@@ -2478,9 +2443,9 @@ edit('packages/client/ui-settings-general/src/client/SettingsRoot.tsx', [
   ],
   [
     'settings: storage nav icon',
-    `  if (id === 'archived-sessions') return <IconArchiveOutlineMedium className={css.navIcon} size={16} />\n`,
-    `  if (id === 'archived-sessions') return <IconArchiveOutlineMedium className={css.navIcon} size={16} />\n` +
-      `  if (id === 'storage') return <IconFolderOpenOutlineMedium className={css.navIcon} size={16} />\n`,
+    `  if (id === 'archived-sessions') return <IconArchiveOutlineMedium size={16} />\n`,
+    `  if (id === 'archived-sessions') return <IconArchiveOutlineMedium size={16} />\n` +
+      `  if (id === 'storage') return <IconFolderOpenOutlineMedium size={16} />\n`,
   ],
 ])
 for (const file of [
@@ -2494,12 +2459,22 @@ put('packages/client/ui-settings-general/src/client/PrivasysFoot.module.css', 'o
 // The /connectors command is the deployment's (app/privasys-connectors.mjs,
 // definitionId "privasys-connectors"); dsh gives a menu row its title, icon
 // and description only for commands it knows, so it learns this one here.
-edit('packages/client/ui-commands/src/client/resolution.ts', [
+edit('packages/interaction/commands/src/builtin.ts', [
   [
     'commands: connectors identity',
     `  export: '@deepseek-ai/dsh-session-log-export',\n`,
     `  export: '@deepseek-ai/dsh-session-log-export',\n` +
       `  connectors: 'privasys-connectors',\n`,
+  ],
+  [
+    'commands: connectors en spelling',
+    `permission: 'permission', export: 'export' },`,
+    `permission: 'permission', export: 'export', connectors: 'connectors' },`,
+  ],
+  [
+    'commands: connectors zh spelling',
+    `export: '导出' },`,
+    `export: '导出', connectors: 'connectors' },`,
   ],
 ])
 edit('packages/client/ui-commands/src/client/presentation.ts', [
@@ -2533,8 +2508,8 @@ edit('packages/client/ui-commands/src/client/locales.ts', [
   ],
   [
     'commands: connectors zh token',
-    `  'token.export': '导出',\n`,
-    `  'token.export': '导出',\n  'token.connectors': 'connectors',\n`,
+    `  'token.export': builtinCommandTokens.zh.export,\n`,
+    `  'token.export': builtinCommandTokens.zh.export,\n  'token.connectors': builtinCommandTokens.zh.connectors,\n`,
   ],
   [
     'commands: connectors en label',
@@ -2548,8 +2523,8 @@ edit('packages/client/ui-commands/src/client/locales.ts', [
   ],
   [
     'commands: connectors en token',
-    `  'token.export': 'export',\n`,
-    `  'token.export': 'export',\n  'token.connectors': 'connectors',\n`,
+    `  'token.export': builtinCommandTokens.en.export,\n`,
+    `  'token.export': builtinCommandTokens.en.export,\n  'token.connectors': builtinCommandTokens.en.connectors,\n`,
   ],
 ])
 
@@ -2635,8 +2610,8 @@ edit('packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx', [
   ],
   [
     'browser: new agent session',
-    `  const closeSessionDelete = () => {\n` +
-      `    if (sessionDeleting) return`,
+    `  useEffect(() => {\n` +
+      `    if (shortcutState.searchRequest === 0) return\n`,
     `  // Privasys: "New agent…" starts a session in the current (else most\n` +
       `  // recent) workspace with the agent-builder draft; the holder completes\n` +
       `  // the line with what the agent should do, and sends.\n` +
@@ -2644,8 +2619,8 @@ edit('packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx', [
       `    closeAddWorkspace()\n` +
       `    startSession(undefined, { prompt: NEW_AGENT_DRAFT, whenDraftExists: 'replace' })\n` +
       `  }), [closeAddWorkspace, startSession])\n` +
-      `  const closeSessionDelete = () => {\n` +
-      `    if (sessionDeleting) return`,
+      `  useEffect(() => {\n` +
+      `    if (shortcutState.searchRequest === 0) return\n`,
   ],
 ])
 edit('packages/client/ui-workspace/src/client/locales.ts', [

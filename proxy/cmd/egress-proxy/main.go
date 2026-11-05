@@ -674,6 +674,14 @@ func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp 
 			"dependency_fold": deps.Fold(),
 			"dependencies":    deps.Pinned(),
 			"model_host":      cfg.modelHost,
+			// The app the model host proved to be, so the panel can name the
+			// model among the pinned dependencies.
+			"model_app_id": func() string {
+				if peerAppIDOf == nil {
+					return ""
+				}
+				return peerAppIDOf(cfg.modelHost)
+			}(),
 			"tool_hosts":      cfg.toolHosts,
 			// Each tool, the app its host proved to be on the last verified
 			// connection, and what the deployment calls it: what the page

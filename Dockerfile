@@ -18,7 +18,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
       -o /egress-proxy ./cmd/egress-proxy
 
 # ---- dsh at the pin -------------------------------------------------------
-FROM node:22-bookworm AS dsh-builder
+FROM node:24-bookworm AS dsh-builder
 # dsh-v0.1.7-alpha.1 (2026-09-22). Release audit: 1299 commits past
 # 0.1.6-alpha.2, and two restructures under the overlay. (1) The agent
 # presets left the preset package for the web-app bundle, where each is one
@@ -115,7 +115,21 @@ FROM node:22-bookworm AS dsh-builder
 # of the user layer at start, and a session cannot open outside its
 # workspace. Creator mode and the Cordis runners are off. The profile
 # manifests lose patchReload, which no dsh code reads.
-ARG DSH_PIN=1f81c047fc48fa190a683e469daa699857e9afe8
+#
+# dsh-v0.2.2-rc.1 (2026-11-04), through rc.4 and rc.5. Needs Node 24.9, hence
+# node:24. Fifteen anchors moved. The Session and workspace menus became
+# context-menu contributions, so Delete and Drive knowledge register there and
+# the patches into Rows and the browser's dialogs are gone; command identities
+# moved to dsh-commands. New rows admitted after review: ui-context-menu,
+# ui-file-actions, ui-file-drag, message-quotes, deliverable-file-references
+# (no egress of their own) and tool-executor-native; tool-executor-ptc and
+# fs-observation-policy ship disabled. The standard preset now enables
+# tool-plugin-manager under a profile context, as Cordis did: off. Six interface
+# languages arrive with DeepSeek's wording and no Privasys text: held back until
+# reviewed. WebSocket compression, on by default, is off in the deployment
+# patch. Schedule storage is v2 and reads v1; the reminder wake reads the same
+# fields.
+ARG DSH_PIN=66491b05e3f05ad35bcdd4f6cd7ed26041d9e3db
 RUN corepack enable \
  && git clone https://github.com/deepseek-ai/deepseek-harness /dsh \
  && git -C /dsh checkout "${DSH_PIN}"
@@ -223,14 +237,14 @@ RUN DSH_CLIENT_TITLE="$(node -p 'require(process.argv[1]).title' "/build/brands/
 # theirs to edit from then on (proxy capability/sync.go). Pinned and cloned
 # rather than vendored, so the public repo stays the one place they live, and
 # so the image's identity commits to exactly this text.
-FROM node:22-bookworm AS skills-builder
+FROM node:24-bookworm AS skills-builder
 ARG SKILLS_PIN=1f341fa62ab336814e00a72800fda3cc0cdf3448
 RUN git clone https://github.com/Privasys/agent-skills /skills \
  && git -C /skills checkout "${SKILLS_PIN}" \
  && rm -rf /skills/.git
 
 # ---- runtime --------------------------------------------------------------
-FROM node:22-bookworm-slim
+FROM node:24-bookworm-slim
 # corepack prepare pins pnpm INSIDE the image: an enclave has no free
 # egress for a boot-time registry fetch.
 RUN corepack enable && corepack prepare pnpm@11.7.0 --activate \

@@ -30,6 +30,7 @@ import {
   useAttestation,
 } from './attestation-view/index.ts'
 import { FootRow, ShieldIcon } from './PrivasysFootRow.tsx'
+import { PrivasysDependenciesSection } from './PrivasysDependencies.tsx'
 import { PrivasysPolicySection } from './PrivasysPolicy.tsx'
 import { PrivasysCompositionSection } from './PrivasysComposition.tsx'
 import css from './PrivasysFoot.module.css'
@@ -141,6 +142,14 @@ export function PrivasysAttestationRow({ wide }: SidebarFooterActionOwnerProps) 
                     verifyQuoteUrl={verifyQuoteUrl}
                   />
                 )}
+          {/* The enclaves the agent also runs on, each attested live. */}
+          {open && (
+            <PrivasysDependenciesSection
+              verifyQuoteAuth={stableAttestationToken}
+              verifyQuoteUrl={verifyQuoteUrl}
+              attestBase={attestUrl.split('/api/v1/')[0]}
+            />
+          )}
           {/* Posture AND behaviour, always together. */}
           <PrivasysPolicySection />
           {/* What the measured image runs, beside the proof that it is measured. */}

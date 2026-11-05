@@ -144,6 +144,11 @@ for row in desktop-product-telemetry product-analytics session-telemetry-otel ot
 	fail "row '${row}' is enabled in the composition that boots"
 done
 
+# WebSocket compression is off in the deployment patch: lengths in the sealed
+# session must say nothing about what compressed well.
+grep -q 'websocketCompression: none' "$DEPLOY_DUMP" \
+	|| fail "websocketCompression is not off in the composition that boots"
+
 # The model leg is the api-key adapter face, pointed at the in-TCB proxy. dsh
 # 0.1.7-rc.2 turned '@deepseek-ai/dsh-llm-deepseek' into a library with no
 # plugin entry, so the old name would mount nothing at all; and the account
