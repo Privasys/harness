@@ -267,6 +267,9 @@ COPY --from=dsh-builder /dsh-home /dsh-home
 COPY --from=proxy-builder /egress-proxy /usr/local/bin/egress-proxy
 # Branded in the build stage (the persona names the product).
 COPY --from=dsh-builder /app/profile.cordis.yml /app/profile.cordis.yml
+# What the attestation panel lists as this deployment's composition: the dump the
+# build asserted on, so the list is the one that was checked (composition.go).
+COPY --from=dsh-builder /app/composition.yml /app/composition.yml
 # Which platform a branded build serves (brands/<name>/brand.json "platform";
 # entrypoint.sh reads it). Absent for the Privasys brand, whose one image
 # serves both control planes and is told apart by app id.

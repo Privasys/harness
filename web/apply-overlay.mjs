@@ -127,6 +127,20 @@ put('apps/web/public/privasys/privasys-auth-client.iife.js', 'vendor/privasys-au
 brandPut('apps/web/public/privasys/privasys-logo.mini.svg', 'vendor/privasys-logo.mini.svg', 'favicon.svg')
 brandPut('apps/web/public/privasys/privasys-harness-logo.svg', 'vendor/privasys-harness-logo.svg', 'lockup.svg')
 brandText('apps/web/index.html')
+// The web app manifest is what an installed copy calls itself. Upstream's names
+// DeepSeek and points at DeepSeek's artwork, so it takes the product name and
+// the brand's mark, which is already served unsealed.
+{
+  const path = join(dsh, 'apps/web/public/manifest.webmanifest')
+  const manifest = JSON.parse(readFileSync(path, 'utf8'))
+  writeFileSync(path, JSON.stringify({
+    ...manifest,
+    name: BRAND_TITLE,
+    short_name: BRAND_TITLE,
+    icons: [{ src: 'favicon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' }],
+  }, null, 2) + '\n')
+  console.log('[overlay] branded apps/web/public/manifest.webmanifest')
+}
 brandText('apps/web/public/privasys/privasys-shell.js')
 // Rebrand at the SOURCE: FishLogo/BrandWordmark in ui-primitives carry every
 // brand surface (the sidebar mark, the wordmark, and the conversation hero's
