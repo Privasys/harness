@@ -545,9 +545,13 @@ func (m *WorkerManager) prepare(w *Worker) error {
 	// route on the worker's own server (app/privasys-routines.mjs). The
 	// presets a run gets ride the dispatch body (routines.go); the config
 	// names the same ones as the door's fallback.
+	// Both by absolute path: this patch lives in the worker's directory, and dsh
+	// resolves a bare package name from the file naming it, where there is no
+	// node_modules. The image build checks the webhook path exists.
 	patch += fmt.Sprintf("- insert:\n"+
-		"    - id: webhook-runtime\n      name: \"@deepseek-ai/dsh-webhook\"\n"+
+		"    - id: webhook-runtime\n      name: %q\n"+
 		"    - id: privasys-routines\n      name: %q\n      config: { path: %q, agentPreset: %s, permissionPreset: %s }\n",
+		envOr("HARNESS_WEBHOOK_PLUGIN", "/dsh/apps/cli/node_modules/@deepseek-ai/dsh-webhook/lib/index.js"),
 		envOr("HARNESS_ROUTINES_PLUGIN", "/dsh/apps/cli/config/privasys/privasys-routines.mjs"), routineDoorPath,
 		routineAgentPreset, routinePermissionPreset)
 	// The connectors switch: which of the attested connectors a conversation

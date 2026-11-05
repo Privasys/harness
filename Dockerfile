@@ -275,6 +275,9 @@ COPY brands/${HARNESS_BRAND}/brand.json /app/brand.json
 # The routines door (a dsh plugin the proxy composes per worker) lives INSIDE
 # the CLI's tree so its bare imports of dsh packages resolve from there.
 COPY app/privasys-routines.mjs /dsh/apps/cli/config/privasys/privasys-routines.mjs
+# The proxy names the webhook runtime by this path (workers.go): a bare name in a
+# worker patch resolves from the worker directory, where nothing is installed.
+RUN test -f /dsh/apps/cli/node_modules/@deepseek-ai/dsh-webhook/lib/index.js
 # The connectors switch (which attested connectors a conversation may use),
 # composed per worker next to the routines door.
 COPY app/privasys-connectors.mjs /dsh/apps/cli/config/privasys/privasys-connectors.mjs
