@@ -2160,11 +2160,11 @@ edit('packages/interaction/user-questions/src/types.ts', [
 ])
 edit('packages/interaction/user-questions/src/index.ts', [
   [
-    'user-questions: validate only the plan-review intent',
+    'user-questions: the form intent carries no labels to validate',
     `      const intent = question.intent\n` +
       `      if (intent === undefined) continue\n`,
     `      const intent = question.intent\n` +
-      `      if (intent === undefined || intent.kind !== 'plan-review') continue\n`,
+      `      if (intent === undefined || intent.kind === 'form') continue\n`,
   ],
 ])
 edit('packages/client/ui-user-questions/src/client/QuestionComposer.tsx', [

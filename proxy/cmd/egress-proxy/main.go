@@ -682,7 +682,7 @@ func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp 
 				}
 				return peerAppIDOf(cfg.modelHost)
 			}(),
-			"tool_hosts":      cfg.toolHosts,
+			"tool_hosts": cfg.toolHosts,
 			// Each tool, the app its host proved to be on the last verified
 			// connection, and what the deployment calls it: what the page
 			// attests a tool call against (the trajectory Attestation tab).
