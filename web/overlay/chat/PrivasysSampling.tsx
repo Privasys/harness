@@ -16,7 +16,7 @@ import { createPortal } from 'react-dom'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { Button, Input } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
-import { MEASURE_STYLE, useStatDialog } from './stat-dialog.ts'
+import { useStatDialog } from './stat-dialog.ts'
 import { pvGetJson, pvSendJson } from './privasys-fetch.ts'
 import type { SamplingPins } from './PrivasysReproducibility.tsx'
 import dialogCss from './stat-dialog.module.css'
@@ -84,7 +84,7 @@ export function PrivasysSamplingChip({ sessionId, t }: Props) {
   const [draft, setDraft] = useState<Draft>(draftOf(undefined))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | undefined>(undefined)
-  const { open, setOpen, rootRef, panelRef, pos } = useStatDialog()
+  const { open, setOpen, rootRef, panelRef, anchorName } = useStatDialog()
   const path = `/privasys/sampling?session=${encodeURIComponent(sessionId)}`
 
   const refresh = useCallback(async (): Promise<void> => {
@@ -138,7 +138,7 @@ export function PrivasysSamplingChip({ sessionId, t }: Props) {
     : chipLabel(entry?.pins, t('input.sampling'))
 
   return (
-    <span ref={rootRef} className={css.root}>
+    <span ref={rootRef} style={{ anchorName }} className={css.root}>
       <button
         type="button"
         className={`${css.chip}${pinned || armed ? ` ${css.active}` : ''}`}
@@ -156,7 +156,7 @@ export function PrivasysSamplingChip({ sessionId, t }: Props) {
           className={`${dialogCss.panel} ${css.panel}`}
           role="dialog"
           aria-label={t('input.sampling.title')}
-          style={pos ?? MEASURE_STYLE}
+          style={{ positionAnchor: anchorName }}
         >
           <div className={dialogCss.title}>
             <span className={dialogCss.titleLabel}>

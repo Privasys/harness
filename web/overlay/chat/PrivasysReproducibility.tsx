@@ -28,7 +28,7 @@ import type {} from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { AssistantMessageNode, ConversationNode, ToolResultNode } from '../contract/snapshot.ts'
 import type { ChatViewSlotProps } from '../contract/slots.ts'
-import { MEASURE_STYLE, useStatDialog } from './stat-dialog.ts'
+import { useStatDialog } from './stat-dialog.ts'
 import { pvSendJson } from './privasys-fetch.ts'
 import pillCss from './TurnUsagePanel.module.css'
 import dialogCss from './stat-dialog.module.css'
@@ -299,7 +299,7 @@ export function PrivasysReproducibilityAction({ messageId, sessionId, useChat, r
   // on every publish of the chat, so a streaming turn cost replies x nodes per
   // frame. Selecting the one node re-renders a pill only when its reply moves.
   const node = useChat(s => assistantNodeOf(s.legacy.nodes, messageId))
-  const { open, setOpen, rootRef, panelRef, pos } = useStatDialog()
+  const { open, setOpen, rootRef, panelRef, anchorName } = useStatDialog()
   // The whole turn (its steps, tool results and prompt) is for the dialog and
   // the replay alone, so the node list is read only while the dialog is open.
   const nodes = useChat(s => (open ? s.legacy.nodes : NO_NODES))
@@ -398,7 +398,7 @@ export function PrivasysReproducibilityAction({ messageId, sessionId, useChat, r
     : t('message.repro.pill', { seed: String(repro.seed) })
 
   return (
-    <span ref={rootRef} className={pillCss.root}>
+    <span ref={rootRef} style={{ anchorName }} className={pillCss.root}>
       <button
         type="button"
         className={pillCss.trigger}
@@ -415,7 +415,7 @@ export function PrivasysReproducibilityAction({ messageId, sessionId, useChat, r
           className={`${dialogCss.panel} ${css.panel}`}
           role="dialog"
           aria-label={t('message.repro.title')}
-          style={pos ?? MEASURE_STYLE}
+          style={{ positionAnchor: anchorName }}
         >
           <div className={dialogCss.title}>
             <span className={dialogCss.titleLabel}>
