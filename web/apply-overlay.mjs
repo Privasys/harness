@@ -817,11 +817,19 @@ edit('packages/llm/llm-deepseek-api-key/src/index.ts', [
     `    providerName: 'Privasys',`,
   ],
   [
+    // rc.2 dropped this import when the resolution moved into
+    // resolveDeepSeekApiKey; the environment-first branch below needs it.
+    'worker key: validator import',
+    `import { APP_IDENTITY, LlmError } from '@deepseek-ai/dsh-llm'\n`,
+    `import { APP_IDENTITY, assertUsableApiKey, LlmError } from '@deepseek-ai/dsh-llm'\n`,
+  ],
+  [
     'worker key wins over a saved key',
-    `    const ref = connection.apiKeyEnv\n` +
-      `    const credentials = ctx.get('credentials')\n`,
-    `    const ref = connection.apiKeyEnv\n` +
-      `    // Privasys: the launch environment carries the worker's own token, which\n` +
+    // rc.2 moved the lookup into the shared resolveDeepSeekApiKey (store
+    // authoritative, environment only without a store); anchored on the
+    // single line that calls it.
+    `    const key = await resolveDeepSeekApiKey(ctx, ref)\n`,
+    `    // Privasys: the launch environment carries the worker's own token, which\n` +
       `    // is how the egress proxy knows whose call this is (it strips the token\n` +
       `    // before the call leaves). dsh 0.2.1-alpha.3 lets a key saved in\n` +
       `    // $DSH_HOME/.credentials.yaml win over the environment, so a key a user\n` +
@@ -829,7 +837,7 @@ edit('packages/llm/llm-deepseek-api-key/src/index.ts', [
       `    // model turn would go out naming nobody. Here the environment wins.\n` +
       `    const launched = launchEnvironmentOf(ctx).get(ref)\n` +
       `    if (launched !== undefined && launched.value.length > 0) return assertUsableApiKey(launched.value, 'llm-deepseek', ref)\n` +
-      `    const credentials = ctx.get('credentials')\n`,
+      `    const key = await resolveDeepSeekApiKey(ctx, ref)\n`,
   ],
 ])
 
@@ -859,9 +867,19 @@ const SKILL_ROW_PRIVASYS =
   `    customSkillDirs: !!js "(process.env.PRIVASYS_SKILL_DIRS || '/run/privasys-skills').split(':').filter(Boolean)"\n` +
   `    watch: false\n` +
   `- id: tool-skill\n`
-for (const preset of ['standard', 'ptc']) {
+// rc.2 gave the standard preset the agent preset's own skills directory
+// (dsh-doc: how to customise DeepSeek Harness itself), as Cordis has; it is
+// replaced here like every other root, so it reads the stock row with it.
+const SKILL_ROW_STOCK_STANDARD =
+  `- id: skill-filesystem\n` +
+  `  name: '@deepseek-ai/dsh-skill-filesystem'\n` +
+  `  config:\n` +
+  `    customSkillDirs:\n` +
+  `      - !!js process.getBuiltinModule('node:path').join(process.getBuiltinModule('node:path').dirname(process.getBuiltinModule('node:module').createRequire(baseUrl).resolve('@deepseek-ai/dsh-agent-preset/package.json')), 'skills')\n` +
+  `- id: tool-skill\n`
+for (const [preset, stock] of [['standard', SKILL_ROW_STOCK_STANDARD], ['ptc', SKILL_ROW_STOCK]]) {
   edit(`packages/bundle/web-app/presets/${preset}.patch.yml`, [
-    [`preset ${preset} skill scoping`, indent(SKILL_ROW_STOCK), indent(SKILL_ROW_PRIVASYS)],
+    [`preset ${preset} skill scoping`, indent(stock), indent(SKILL_ROW_PRIVASYS)],
   ])
 }
 edit('packages/bundle/web-app/presets/cordis.patch.yml', [
@@ -1675,16 +1693,14 @@ edit('packages/session/session-persistence-jsonl/src/index.ts', [
 edit('packages/workspace/workspace/src/index.ts', [
   [
     'registry forgetSession',
-    `      if (options.stopActivity === true) await this.stopSessionActivity(sessionId)\n` +
-      `    })\n` +
-      `  }`,
-    `      if (options.stopActivity === true) await this.stopSessionActivity(sessionId)\n` +
-      `    })\n` +
-      `  }\n` +
-      `\n` +
-      `  /**\n` +
+    // rc.2 put an archive follow-up after archiveSession's last line and
+    // added a pin set; anchored on the pin set's doc comment instead, and
+    // the deleted id leaves the pin set too.
+    `  /**\n` +
+      `   * The registry-global pin set: sessions surfaced ahead of every unpinned\n`,
+    `  /**\n` +
       `   * Privasys: drop one deleted session from every workspace's membership,\n` +
-      `   * from the archive set, and from the header index. Unknown ids are a\n` +
+      `   * from the archive and pin sets, and from the header index. Unknown ids are a\n` +
       `   * no-op: the caller has already removed the log.\n` +
       `   * @param sessionId - The deleted session.\n` +
       `   * @returns resolution after durability.\n` +
@@ -1704,13 +1720,17 @@ edit('packages/workspace/workspace/src/index.ts', [
       `        }))\n` +
       `      }\n` +
       `      const state = this.requireState()\n` +
-      `      if (!state.archivedSessionIds.includes(sessionId)) return\n` +
+      `      if (!state.archivedSessionIds.includes(sessionId) && !state.pinnedSessionIds.includes(sessionId)) return\n` +
       `      await this.setState({\n` +
       `        ...state,\n` +
       `        archivedSessionIds: state.archivedSessionIds.filter(candidate => candidate !== sessionId),\n` +
+      `        pinnedSessionIds: state.pinnedSessionIds.filter(candidate => candidate !== sessionId),\n` +
       `      })\n` +
       `    })\n` +
-      `  }`,
+      `  }\n` +
+      `\n` +
+      `  /**\n` +
+      `   * The registry-global pin set: sessions surfaced ahead of every unpinned\n`,
   ],
 ])
 
@@ -1951,13 +1971,15 @@ edit('packages/client/ui-workspace/src/client/locales.ts', [
 edit('packages/mcp/mcp-client/src/tools.ts', [
   [
     'session in _meta',
-    `      call: (args, execution) => client.callTool(\n` +
-      `        { name: tool.name, arguments: args },`,
-    `      // Privasys: the calling session rides the request's _meta so the egress\n` +
-      `      // proxy can apply the workspace's Drive-knowledge setting. Never part of\n` +
-      `      // the arguments, so the model's view and the replay digest are untouched.\n` +
-      `      call: (args, execution) => client.callTool(\n` +
-      `        { name: tool.name, arguments: args, ...(execution.agent === undefined ? {} : { _meta: { privasysSession: execution.agent.session.id } }) },`,
+    // rc.2 wrapped the call in a try (error redaction); anchored on the
+    // call and its first argument only.
+    `          const result = await client.callTool(\n` +
+      `            { name: tool.name, arguments: args },\n`,
+    `          // Privasys: the calling session rides the request's _meta so the egress\n` +
+      `          // proxy can apply the workspace's Drive-knowledge setting. Never part of\n` +
+      `          // the arguments, so the model's view and the replay digest are untouched.\n` +
+      `          const result = await client.callTool(\n` +
+      `            { name: tool.name, arguments: args, ...(execution.agent === undefined ? {} : { _meta: { privasysSession: execution.agent.session.id } }) },\n`,
   ],
 ])
 put('packages/client/ui-workspace/src/client/rows/PrivasysDriveKnowledge.tsx', 'overlay/workspace/PrivasysDriveKnowledge.tsx')
@@ -1978,8 +2000,8 @@ edit('packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx', [
 edit('packages/client/ui-workspace/src/client/WorkspacePicker.tsx', [
   [
     'picker: bus import',
-    `import { useCallback, useEffect, useMemo, useState } from 'react'`,
-    `import { useCallback, useEffect, useMemo, useState } from 'react'\n` +
+    `import { useCallback, useEffect, useMemo, useRef, useState } from 'react'`,
+    `import { useCallback, useEffect, useMemo, useRef, useState } from 'react'\n` +
       `import { requestDriveKnowledge } from './rows/PrivasysDriveKnowledge.tsx'`,
   ],
   [
@@ -2033,27 +2055,27 @@ edit('packages/client/ui-workspace/src/client/locales.ts', [
 put('packages/mcp/mcp-client/src/privasys-elicit.ts', 'overlay/mcp/privasys-elicit.ts')
 edit('packages/mcp/mcp-client/src/connection.ts', [
   [
+    // rc.2 rewrote the connection supervisor (one Client per generation,
+    // built in connectGeneration); the three anchors follow it.
     'mcp-client: elicitation import',
-    `import { Client, type Transport } from '@modelcontextprotocol/client'\n`,
-    `import { Client, type Transport } from '@modelcontextprotocol/client'\n` +
+    `import { Client } from '@modelcontextprotocol/client'\n`,
+    `import { Client } from '@modelcontextprotocol/client'\n` +
       `import { privasysElicit } from './privasys-elicit.ts'\n`,
   ],
   [
     'mcp-client: elicitation capability',
-    `        capabilities: {},\n` +
-      `        versionNegotiation: { mode: 'auto' },\n`,
-    `        // Privasys: a server may ask the person a structured question in the\n` +
-      `        // middle of a call (form-mode elicitation); the answer never enters\n` +
-      `        // the model's context (privasys-elicit.ts).\n` +
-      `        capabilities: { elicitation: { form: {} } },\n` +
-      `        versionNegotiation: { mode: 'auto' },\n`,
+    `      capabilities: {}, versionNegotiation: { mode: 'auto' },\n`,
+    `      // Privasys: a server may ask the person a structured question in the\n` +
+      `      // middle of a call (form-mode elicitation); the answer never enters\n` +
+      `      // the model's context (privasys-elicit.ts).\n` +
+      `      capabilities: { elicitation: { form: {} } }, versionNegotiation: { mode: 'auto' },\n`,
   ],
   [
     'mcp-client: elicitation handler',
-    `    const closed: PromiseWithResolvers<void> = Promise.withResolvers()\n`,
-    `    generation.setRequestHandler('elicitation/create', (request, call) =>\n` +
+    `    const record: Generation = { wire: new McpGeneration(client, `,
+    `    client.setRequestHandler('elicitation/create', (request, call) =>\n` +
       `      privasysElicit(ctx, config.serverName, request, call))\n` +
-      `    const closed: PromiseWithResolvers<void> = Promise.withResolvers()\n`,
+      `    const record: Generation = { wire: new McpGeneration(client, `,
   ],
 ])
 edit('packages/interaction/user-questions/src/types.ts', [
@@ -2237,13 +2259,14 @@ edit('packages/client/ui-conversation/src/client/conversation/assembly.ts', [
   ],
   [
     'assembly: retain and release a target',
+    // rc.2 routes every assembler result through publishing(), which also
+    // republishes a rebuild that finished before a failure; the release
+    // below goes through it too.
     `  activate(target: string): void {\n` +
-      `    if (this.assembler.activateTarget(target)) this.snapshot.set(this.currentSnapshot())\n` +
-      `    this.openTurn.set(this.assembler.openTurn())\n` +
+      `    this.publishing(() => this.assembler.activateTarget(target))\n` +
       `  }\n`,
     `  activate(target: string): void {\n` +
-      `    if (this.assembler.activateTarget(target)) this.snapshot.set(this.currentSnapshot())\n` +
-      `    this.openTurn.set(this.assembler.openTurn())\n` +
+      `    this.publishing(() => this.assembler.activateTarget(target))\n` +
       `  }\n` +
       `\n` +
       `  // Privasys: subscribers per target, and the pending release of a target\n` +
@@ -2272,7 +2295,7 @@ edit('packages/client/ui-conversation/src/client/conversation/assembly.ts', [
       `    this.targetReleases.set(target, setTimeout(() => {\n` +
       `      this.targetReleases.delete(target)\n` +
       `      if (this.targetSubscribers.has(target)) return\n` +
-      `      if (this.assembler.deactivateTarget(target)) this.snapshot.set(this.currentSnapshot())\n` +
+      `      this.publishing(() => this.assembler.deactivateTarget(target))\n` +
       `    }, 60_000))\n` +
       `  }\n`,
   ],

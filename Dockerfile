@@ -129,7 +129,24 @@ FROM node:24-bookworm AS dsh-builder
 # reviewed. WebSocket compression, on by default, is off in the deployment
 # patch. Schedule storage is v2 and reads v1; the reminder wake reads the same
 # fields.
-ARG DSH_PIN=66491b05e3f05ad35bcdd4f6cd7ed26041d9e3db
+#
+# dsh-v0.2.2-rc.2 (2026-11-11), 1568 commits on. Nine anchors moved: the
+# model key resolution became a shared resolveDeepSeekApiKey (the worker
+# token still wins), the MCP connection supervisor was rewritten (the
+# elicitation capability and handler follow the new Client construction),
+# the tool call gained error redaction (_meta rides the same call), the
+# conversation binding publishes through publishing(), the registry gained a
+# pin set (a deleted session leaves it too), and the standard preset now
+# ships the agent preset's dsh-doc skills (replaced like every other root).
+# Web search now defaults to DeepSeek's Search API: those rows stay out of the
+# bundle, so search is the attested connector's alone. Admitted after review:
+# agent-team and its tool and panel (no egress), the Office tools (render,
+# convert, recalculate through the WASM LibreOffice kit installed at build;
+# Python authoring falls back to the user's environment). Off in the
+# deployment patch: mcp-manager, a browser-configurable MCP fleet with stdio
+# servers, and ui-account-notifications. deepseek-account-platform is now
+# deepseek-account, same service and still without egress here.
+ARG DSH_PIN=ddac96760b6edf8fa0fe17cbdcf0b512f4c12b2c
 RUN corepack enable \
  && git clone https://github.com/deepseek-ai/deepseek-harness /dsh \
  && git -C /dsh checkout "${DSH_PIN}"

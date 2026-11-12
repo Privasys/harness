@@ -126,9 +126,12 @@ done
 # every preset; this holds it there.
 # tool-plugin-manager, the installer itself, is held to the same: the bundle
 # drops the host plugin manager, but every preset carries the tool row.
+# mcp-manager (dsh 0.2.2-rc.2) is the browser-configurable MCP fleet, stdio
+# servers included: the deployment's connectors are the attested ones only.
 for row in desktop-product-telemetry product-analytics session-telemetry-otel otel harness-dev-context \
            tool-plugin-market tool-plugin-manager preset-cordis entry-customization \
-           cordis-host-runner cordis-inspect-providers cordis-client-runner ui-cordis; do
+           cordis-host-runner cordis-inspect-providers cordis-client-runner ui-cordis \
+           mcp-manager ui-account-notifications; do
 	# Print each enabled declaration whole, so a failure says what composed.
 	enabled=$(awk -v row="$row" '
 		function indent(s) { match(s, /^ */); return RLENGTH }

@@ -131,7 +131,7 @@
 
 
     - id: deepseek-account
-      name: '@deepseek-ai/dsh-deepseek-account-platform'
+      name: '@deepseek-ai/dsh-deepseek-account'
       config:
         desktopPlatform: !!js "ctx.get('profileContext')?.name === 'desktop' && ['darwin', 'win32'].includes(process.platform) ? process.platform : null"
 
@@ -372,6 +372,16 @@
       name: '@deepseek-ai/dsh-subagent'
 
 
+    - id: agent-team
+      name: '@deepseek-ai/dsh-agent-team'
+      config:
+        maxTasks: 256
+
+
+    - id: tool-agent-team
+      name: '@deepseek-ai/dsh-tool-agent-team'
+
+
     - id: subagent-spawn-in-process
       name: '@deepseek-ai/dsh-subagent-spawn-in-process'
       config:
@@ -388,6 +398,8 @@
     # separately loaded follow-up tool registers the one global `send_message`.
     - id: tool-subagent-control
       name: '@deepseek-ai/dsh-tool-subagent-control'
+      config:
+        interrupt: false
 
 
     - id: tool-subagent

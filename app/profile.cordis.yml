@@ -130,6 +130,19 @@
   disabled: true
 - id: ui-settings-plugins
   disabled: true
+# dsh 0.2.2-rc.2 mounts a host-wide MCP server fleet whose servers are added
+# from Settings or by installed plugins, stdio ones included (a command the
+# host runs). The connectors this deployment offers are the attested ones,
+# composed per worker by the proxy and reached through the egress proxy
+# (privasys-connectors.mjs); a server the browser could add would sit outside
+# the measured composition. Off.
+- id: mcp-manager
+  disabled: true
+# Notices authored by DeepSeek's account service, shown beside an account
+# menu this deployment has no use for: the model route is the attested one
+# and the account service has no egress here.
+- id: ui-account-notifications
+  disabled: true
 
 # dsh 0.2.0-rc.1 mounts product analytics in the web-app bundle, exporting to
 # DeepSeek's collector (dsh-otel-collector.deepseeksvc.com). Both rows are
