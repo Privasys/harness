@@ -1546,7 +1546,7 @@ edit('packages/api/session-controller/src/commands.ts', [
       `    const { sessionId } = request\n` +
       `    const live = this.ctx.agents.get(sessionId)\n` +
       `    if (live !== undefined) {\n` +
-      `      if (hasApiSessionSubagentOwner(this.ctx, live.session, live)) {\n` +
+      `      if (hasApiSessionSubagentOwner(live.session)) {\n` +
       `        throw apiSessionSubagentOwnershipError(sessionId)\n` +
       `      }\n` +
       `      if (live.status === 'running') {\n` +
