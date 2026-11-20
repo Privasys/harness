@@ -4,11 +4,12 @@
 // same markup and class names as the shared Navbar and Footer components, so
 // a change to the shared styles reaches it by running this script and
 // committing the result: an update is always a reviewed diff, never a fetch
-// at build time.
+// at build time. When the styles are the same as the last sync, the file and
+// its stamp are left alone, so a sync that changes nothing triggers no build.
 //
 //   node web/sync-privasys-ui.mjs <path to a Privasys/websites checkout>
 import { execFileSync } from 'node:child_process'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -25,8 +26,17 @@ if (git('status', '--porcelain', '--', rel)) {
   process.exit(1)
 }
 const commit = git('rev-parse', 'HEAD')
-const css = readFileSync(join(websites, rel), 'utf8')
+const lf = (text) => text.replace(/\r\n/g, '\n')
+const css = lf(readFileSync(join(websites, rel), 'utf8'))
 const out = join(here, 'vendor', 'privasys-ui.css')
+const STAMP_LINES = 2
+if (existsSync(out)) {
+  const synced = lf(readFileSync(out, 'utf8')).split('\n').slice(STAMP_LINES).join('\n')
+  if (synced === css) {
+    console.log(`[sync] vendor/privasys-ui.css unchanged (websites ${commit.slice(0, 8)} has the same styles)`)
+    process.exit(0)
+  }
+}
 writeFileSync(out,
   `/* Synced from Privasys/websites ${rel} at ${commit}.\n` +
   `   Do not edit here: change the shared file, then run web/sync-privasys-ui.mjs. */\n` +
