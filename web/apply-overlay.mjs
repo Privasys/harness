@@ -127,6 +127,9 @@ put('apps/web/public/privasys/privasys-auth-client.iife.js', 'vendor/privasys-au
 // The landing page's typeface (Inter, SIL Open Font License; the licence rides along).
 put('apps/web/public/privasys/InterVariable.woff2', 'vendor/InterVariable.woff2')
 put('apps/web/public/privasys/InterVariable-LICENSE.txt', 'vendor/InterVariable-LICENSE.txt')
+// The shared Privasys header and footer styles (@privasys/ui), synced by
+// sync-privasys-ui.mjs; the home page attaches them while it shows.
+put('apps/web/public/privasys/privasys-ui.css', 'vendor/privasys-ui.css')
 brandPut('apps/web/public/privasys/privasys-logo.mini.svg', 'vendor/privasys-logo.mini.svg', 'favicon.svg')
 brandPut('apps/web/public/privasys/privasys-harness-logo.svg', 'vendor/privasys-harness-logo.svg', 'lockup.svg')
 brandText('apps/web/index.html')

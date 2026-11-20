@@ -261,44 +261,29 @@
         --pl-solid-fg: #000000;
     }
 }
-.pv-landing a { color: inherit; }
+.pv-landing-main a { color: inherit; }
 .pv-landing h1, .pv-landing h2, .pv-landing h3 { color: var(--pl-text); font-weight: 600; margin: 0; }
 
-.pv-landing-nav {
-    position: sticky;
-    top: 0;
-    z-index: 2;
-    height: 3.5rem;
-    border-bottom: 1px solid var(--pl-line);
-    background: var(--pl-nav);
-    -webkit-backdrop-filter: saturate(180%) blur(20px);
-    backdrop-filter: saturate(180%) blur(20px);
-}
-.pv-landing-nav-inner,
-.pv-landing-main,
-.pv-landing-foot-inner {
+/* The shared header (pui-navbar) is fixed, so the page starts below it. The
+   sides follow the shared components: 1.5rem, none from 64rem up. */
+.pv-landing-main {
     max-width: 60rem;
     margin: 0 auto;
-    padding: 0 16px;
+    padding: 3.5rem 1.5rem 0;
 }
-.pv-landing-nav-inner {
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
+@media (min-width: 64rem) {
+    .pv-landing-main { padding-left: 0; padding-right: 0; }
 }
-.pv-landing-brand {
-    display: inline-flex;
-    align-items: center;
-    gap: 10px;
-    font-size: 1.125rem;
-    font-weight: 600;
-    letter-spacing: 0.011em;
+/* privasys.org sizes every box by its border; the shared footer relies on it. */
+.pv-landing, .pv-landing * { box-sizing: border-box; }
+/* The two Tailwind utilities the shared markup carries, for this page only.
+   On privasys.org they sit in a lower cascade layer, so the shared classes'
+   own padding wins over them; :where() keeps them as weak here. */
+:where(.pv-landing) .px-6 { padding-left: 1.5rem; padding-right: 1.5rem; }
+@media (min-width: 64rem) {
+    :where(.pv-landing) .lg\:px-0 { padding-left: 0; padding-right: 0; }
 }
-.pv-landing-links { display: flex; align-items: center; gap: 24px; font-size: 14px; }
-.pv-landing-links a { text-decoration: none; color: var(--pl-muted); }
-.pv-landing-links a:hover { color: var(--pl-text); }
+.pv-landing .pui-navbar-cta { border: none; font-family: inherit; line-height: inherit; cursor: pointer; }
 
 .pv-pill {
     display: inline-block;
@@ -317,8 +302,6 @@
 .pv-pill-solid:hover { opacity: 0.8; }
 .pv-pill-outline { background: transparent; color: var(--pl-text); }
 .pv-pill-outline:hover { background: var(--pl-solid-bg); color: var(--pl-solid-fg); }
-.pv-pill-sm { padding: 5px 14px; font-size: 14px; background: var(--pl-solid-bg); color: var(--pl-solid-fg); }
-.pv-pill-sm:hover { opacity: 0.8; }
 
 .pv-landing-hero { padding: 7rem 0 5rem; }
 .pv-landing-eyebrow {
@@ -373,18 +356,3 @@
     font-weight: 600;
     color: var(--pl-muted);
 }
-
-.pv-landing-foot { margin-top: 4rem; border-top: 1px solid var(--pl-line); }
-.pv-landing-foot-inner {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: space-between;
-    gap: 16px;
-    padding-top: 24px;
-    padding-bottom: 32px;
-    font-size: 13px;
-    color: var(--pl-muted);
-}
-.pv-landing-foot nav { display: flex; flex-wrap: wrap; gap: 20px; }
-.pv-landing-foot a { text-decoration: none; }
-.pv-landing-foot a:hover { color: var(--pl-text); }

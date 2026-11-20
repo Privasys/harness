@@ -160,6 +160,7 @@ async function run() {
         return;
     }
     gate.classList.remove('pv-gate-landing');
+    useSharedStyles(false);
 
     // One container; the SDK's `page` presentation fills it with the ENTIRE
     // branded surface when an interactive ceremony is needed. But during
@@ -253,25 +254,43 @@ const LANDING_STEPS = [
     ['Start a conversation', 'Ask a question, connect your tools or set up an agent.']
 ];
 
+// The shared header and footer stylesheet is attached only while the home
+// page shows: it carries page-wide rules (an svg transition among them) that
+// must not reach the app after sign-in.
+function useSharedStyles(on) {
+    const id = 'privasys-ui-css';
+    const link = document.getElementById(id);
+    if (on && !link) {
+        document.head.appendChild(el('link', { id, rel: 'stylesheet', href: '/privasys/privasys-ui.css' }));
+    } else if (!on && link) {
+        link.remove();
+    }
+}
+
 function showLanding() {
     const signIn = (label, cls) =>
         el('button', { class: 'pv-pill ' + cls, onclick: () => void run() }, label);
     const ext = (href, label, cls) =>
         el('a', { class: cls || null, href, target: '_blank', rel: 'noopener noreferrer' }, label);
     const page = el('div', { class: 'pv-landing' },
-        el('header', { class: 'pv-landing-nav' },
-            el('div', { class: 'pv-landing-nav-inner' },
-                el('span', { class: 'pv-landing-brand' },
+        // The shared Privasys header (@privasys/ui Navbar): its markup and
+        // class names, styled by the synced shared stylesheet. Sign in sits
+        // in the slot the component keeps visible at every width.
+        el('nav', { class: 'pui-navbar px-6 lg:px-0' },
+            el('div', { class: 'px-6 lg:px-0 pui-navbar-inner' },
+                el('span', { class: 'pui-navbar-brand' },
                     el('img', {
                         src: location.origin + '/privasys/privasys-logo.mini.svg',
                         alt: '',
-                        width: '22',
-                        height: '22'
+                        width: '20',
+                        height: '20',
+                        'aria-hidden': 'true'
                     }),
-                    PRODUCT_NAME),
-                el('nav', { class: 'pv-landing-links' },
-                    ext('https://docs.privasys.org/solutions/ai/chat-and-agents', 'Docs'),
-                    signIn('Sign in', 'pv-pill-sm')))),
+                    el('span', null, PRODUCT_NAME)),
+                el('div', { class: 'pui-navbar-right' },
+                    el('div', { class: 'pui-navbar-desktop' },
+                        ext('https://docs.privasys.org/solutions/ai/chat-and-agents', 'Docs', 'pui-navbar-link')),
+                    el('button', { class: 'pui-navbar-cta', onclick: () => void run() }, 'Sign in')))),
         el('main', { class: 'pv-landing-main' },
             el('section', { class: 'pv-landing-hero' },
                 el('p', { class: 'pv-landing-eyebrow' }, 'Confidential AI assistant'),
@@ -296,14 +315,18 @@ function showLanding() {
                 el('div', { class: 'pv-landing-cta' },
                     ...WALLET_STORES.map(([name, href]) =>
                         ext(href, 'Get the wallet on ' + name, 'pv-pill pv-pill-outline'))))),
-        el('footer', { class: 'pv-landing-foot' },
-            el('div', { class: 'pv-landing-foot-inner' },
-                el('span', null, '© Privasys'),
-                el('nav', null,
-                    ext('https://docs.privasys.org/solutions/ai/chat-and-agents', 'Documentation'),
-                    ext(LANDING_LEGAL.privacy, 'Privacy'),
-                    ext(LANDING_LEGAL.terms, 'Terms'),
-                    ext('https://privasys.org', 'privasys.org')))));
+        // The shared Privasys footer (@privasys/ui Footer).
+        el('footer', { class: 'pui-footer px-6 lg:px-0' },
+            el('div', { class: 'pui-footer-inner' },
+                el('div', { class: 'pui-footer-company' },
+                    el('span', { class: 'pui-footer-copyright' },
+                        '© ' + new Date().getFullYear() + ' Privasys Ltd. All rights reserved.')),
+                el('div', { class: 'pui-footer-links' },
+                    ext('https://docs.privasys.org/solutions/ai/chat-and-agents', 'Documentation', 'pui-footer-link'),
+                    ext(LANDING_LEGAL.privacy, 'Privacy', 'pui-footer-link'),
+                    ext(LANDING_LEGAL.terms, 'Terms', 'pui-footer-link'),
+                    ext('https://privasys.org', 'privasys.org', 'pui-footer-link')))));
+    useSharedStyles(true);
     gate.classList.add('pv-gate-landing');
     setGate(page);
 }
