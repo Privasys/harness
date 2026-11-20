@@ -117,18 +117,39 @@ const HARNESS_PITCH = {
     // default brand panel (logo + wordmark + ceremony status), so the pitch
     // must carry its own logo or the gate loses all branding on the left.
     logoUrl: location.origin + '/privasys/privasys-harness-logo.svg',
-    title: 'A coding agent you can verify.',
+    title: 'Your AI assistant, private by design.',
     description:
-        'The Privasys Harness runs its agent and model inside hardware-protected ' +
-        'enclaves. The operator can never read your prompts or the agent’s work, ' +
-        'and you can verify it yourself by remote attestation.',
+        'Privasys Harness runs the assistant, the model and every tool inside ' +
+        'hardware-protected enclaves. Your conversations stay sealed, and you ' +
+        'can check that for yourself with remote attestation.',
     bullets: [
-        'Sealed browser-to-enclave transport. The gateway only sees ciphertext.',
-        'Every model call is attested Confidential AI. No bearer keys.',
-        'Each tool the agent uses is a separately verified enclave.',
+        'Sealed browser-to-enclave transport. The network carries only ciphertext.',
+        'Every model call goes to attested Confidential AI.',
+        'Each tool the assistant uses is a separately verified enclave.',
         'No passwords. Sign in with the Privasys Wallet on your phone.'
     ]
 };
+
+// The visitor's first view. Someone with a Privasys ID session goes straight
+// to connect(), which restores it silently. Anyone else sees the product page
+// (showLanding) and starts the sign-in when they choose to, so a first visit
+// opens on what the product is rather than on a ceremony.
+async function start() {
+    if (!AuthFrame) {
+        showAuthFallback(
+            'The Privasys authentication script did not load. Reload the page.',
+            false
+        );
+        return;
+    }
+    setGate(el('div', { class: 'pv-connecting' }, spinnerCard('Loading…', null)));
+    const existing = await ensureFrame().getSession().catch(() => null);
+    if (!existing || !existing.token) {
+        showLanding();
+        return;
+    }
+    await run();
+}
 
 async function run() {
     if (!AuthFrame) {
@@ -138,6 +159,7 @@ async function run() {
         );
         return;
     }
+    gate.classList.remove('pv-gate-landing');
 
     // One container; the SDK's `page` presentation fills it with the ENTIRE
     // branded surface when an interactive ceremony is needed. But during
@@ -156,6 +178,128 @@ async function run() {
     gate.appendChild(connecting);
     const clearConnecting = () => { connecting.remove(); };
 
+    ensureFrame();
+
+    try {
+        // connect(): silent restore -> one-tap re-approval -> full ceremony,
+        // all rendered by the SDK. Resolves with the sealed session once the
+        // enclave is attested and the transport is live.
+        const res = await frame.connect();
+        clearConnecting();
+        // The user's Display Name (`name` claim, granted under the `profile`
+        // scope) rides the session access token — decode it for the sidebar
+        // User row. Presentation only: authorisation stays claim-blind.
+        userDisplayName = claimFromJwt(res.accessToken, 'name');
+        if (!res.session) {
+            showAuthFallback(
+                'Signed in, but the enclave returned no sealed session. The harness ' +
+                'requires end-to-end encryption. Please try again.',
+                false
+            );
+            return;
+        }
+        sealed = res.session;
+        followSession(sealed);
+        onAuthenticated();
+    } catch (err) {
+        clearConnecting();
+        const code = /** @type {any} */ (err)?.code;
+        if (code === 'cancelled') {
+            // Closing the sign-in returns to the product page.
+            showLanding();
+            return;
+        }
+        showAuthFallback(
+            String(/** @type {any} */ (err)?.message || err || 'Sign-in failed') + '.',
+            false
+        );
+    }
+}
+
+// The product page a signed-out visitor sees. Static copy only, built from
+// this measured file: nothing on it is fetched, and nothing on it needs a
+// session. Its sign-in buttons start the same wallet ceremony as before.
+const PRODUCT_NAME = 'Privasys Harness';
+const WALLET_STORES = [
+    ['App Store', 'https://apps.apple.com/app/privasys-wallet/id6761209489'],
+    ['Google Play', 'https://play.google.com/store/apps/details?id=org.privasys.wallet']
+];
+const LANDING_FEATURES = [
+    ['Sealed from end to end',
+        'Your browser talks to the enclave over an encrypted channel. The network ' +
+        'and the people who run it carry only ciphertext.'],
+    ['Proof you can check',
+        'Every part publishes its hardware attestation. The Attestation panel shows ' +
+        'the exact code serving you, the model it calls and each tool it uses.'],
+    ['Works with your tools',
+        'Connect your mail, calendar, files, meetings, Privasys Drive and the web. ' +
+        'Each connector runs in its own verified enclave, and its credentials stay ' +
+        'in your wallet.'],
+    ['Agents that keep working',
+        'Give an assistant its own instructions and skills, and let it run tasks on ' +
+        'a schedule. Its memory lives in your own sealed folder.'],
+    ['Pay for what you use',
+        'The model and priced tools draw on your Privasys credits, under a monthly ' +
+        'limit you approve in the wallet.'],
+    ['No passwords',
+        'You sign in by scanning a code with the Privasys Wallet on your phone. ' +
+        'Nobody can sign in as you without it.']
+];
+// The brand's legal pages: the overlay writes brand.json "legal" here.
+const LANDING_LEGAL = /* privasys-legal */ {"privacy":"https://privasys.org/legal/privacy","terms":"https://privasys.org/legal/terms"};
+const LANDING_STEPS = [
+    ['Install the Privasys Wallet', 'It is free on the App Store and Google Play.'],
+    ['Scan to sign in', 'Choose Sign in, then scan the code with the wallet.'],
+    ['Start a conversation', 'Ask a question, connect your tools or set up an agent.']
+];
+
+function showLanding() {
+    const signIn = (label, cls) =>
+        el('button', { class: 'pv-btn ' + cls, onclick: () => void run() }, label);
+    const page = el('div', { class: 'pv-landing' },
+        el('header', { class: 'pv-landing-bar' },
+            el('img', {
+                class: 'pv-landing-logo',
+                src: location.origin + '/privasys/privasys-harness-logo.svg',
+                alt: PRODUCT_NAME
+            }),
+            signIn('Sign in', 'pv-btn-primary')),
+        el('section', { class: 'pv-landing-hero' },
+            el('h1', null, 'Your AI assistant, private by design.'),
+            el('p', { class: 'pv-landing-lead' },
+                PRODUCT_NAME + ' runs the assistant, the model and every tool inside ' +
+                'hardware-protected enclaves. Your conversations, mail and files stay ' +
+                'sealed, and you can check that for yourself.'),
+            el('div', { class: 'pv-landing-cta' },
+                signIn('Sign in with the Privasys Wallet', 'pv-btn-primary pv-btn-lg'),
+                el('a', { class: 'pv-btn pv-btn-lg', href: '#how' }, 'How it works'))),
+        el('section', { class: 'pv-landing-grid' },
+            ...LANDING_FEATURES.map(([title, body]) =>
+                el('div', { class: 'pv-landing-card' },
+                    el('h2', null, title),
+                    el('p', null, body)))),
+        el('section', { class: 'pv-landing-how', id: 'how' },
+            el('h2', null, 'How it works'),
+            el('ol', null,
+                ...LANDING_STEPS.map(([title, body]) =>
+                    el('li', null, el('strong', null, title), el('span', null, body)))),
+            el('div', { class: 'pv-landing-stores' },
+                ...WALLET_STORES.map(([name, href]) =>
+                    el('a', { class: 'pv-btn', href, target: '_blank', rel: 'noopener noreferrer' },
+                        'Get the wallet on ' + name)))),
+        el('footer', { class: 'pv-landing-foot' },
+            el('a', { href: 'https://docs.privasys.org/solutions/ai/chat-and-agents', target: '_blank', rel: 'noopener noreferrer' }, 'Documentation'),
+            el('a', { href: LANDING_LEGAL.privacy, target: '_blank', rel: 'noopener noreferrer' }, 'Privacy'),
+            el('a', { href: LANDING_LEGAL.terms, target: '_blank', rel: 'noopener noreferrer' }, 'Terms'),
+            el('a', { href: 'https://privasys.org', target: '_blank', rel: 'noopener noreferrer' }, 'Privasys')));
+    gate.classList.add('pv-gate-landing');
+    setGate(page);
+}
+
+// One AuthFrame for the page, created on first use: the landing page asks it
+// for an existing session, and the sign-in reuses the same instance.
+function ensureFrame() {
+    if (frame) return frame;
     frame = new AuthFrame({
         apiBase: CFG.apiBase,
         authOrigin: CFG.authOrigin,
@@ -188,40 +332,7 @@ async function run() {
         // Establish the sealed transport against the harness enclave.
         sessionRelay: { appHost: CFG.appHost }
     });
-
-    try {
-        // connect(): silent restore -> one-tap re-approval -> full ceremony,
-        // all rendered by the SDK. Resolves with the sealed session once the
-        // enclave is attested and the transport is live.
-        const res = await frame.connect();
-        clearConnecting();
-        // The user's Display Name (`name` claim, granted under the `profile`
-        // scope) rides the session access token — decode it for the sidebar
-        // User row. Presentation only: authorisation stays claim-blind.
-        userDisplayName = claimFromJwt(res.accessToken, 'name');
-        if (!res.session) {
-            showAuthFallback(
-                'Signed in, but the enclave returned no sealed session. The harness ' +
-                'requires end-to-end encryption. Please try again.',
-                false
-            );
-            return;
-        }
-        sealed = res.session;
-        followSession(sealed);
-        onAuthenticated();
-    } catch (err) {
-        clearConnecting();
-        const code = /** @type {any} */ (err)?.code;
-        if (code === 'cancelled') {
-            showAuthFallback('Sign-in was closed.', true);
-            return;
-        }
-        showAuthFallback(
-            String(/** @type {any} */ (err)?.message || err || 'Sign-in failed') + '.',
-            false
-        );
-    }
+    return frame;
 }
 
 // Minimal fallback shown ONLY on error/cancel (never during the normal SDK
@@ -677,4 +788,4 @@ function claimFromJwt(jwt, claim) {
 };
 
 // --- go --------------------------------------------------------------------
-run();
+start();

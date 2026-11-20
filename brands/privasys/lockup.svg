@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 220">
+  <style>
+    .wm { font: 600 128px system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+          letter-spacing: -0.02em; fill: #0F172A; }
+    @media (prefers-color-scheme: dark) { .wm { fill: #F1F5F9; } }
+  </style>
+  <g transform="translate(0,10) scale(0.4)">
+    <path d="M100 0H450L0 450V100A100 100 0 0 1 100 0Z" fill="#34E89E"/>
+    <path d="M500 50V400A100 100 0 0 1 400 500H50L500 50Z" fill="#00BCF2"/>
+    <polygon points="0,500 50,500 500,50 500,0" fill="#fff"/>
+  </g>
+  <text class="wm" x="252" y="155">Privasys AI</text>
+</svg>

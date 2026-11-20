@@ -50,13 +50,18 @@ case "${BRAND_PLATFORM}:${PRIVASYS_APP_ID:-}" in
     PV_ATTEST_BASE="https://api.developer.privasys.org"
     PV_API_BASE="https://api.privasys.org"
     ;;
-  *:be129fce-28d7-40bf-85d0-44a94a78ed43)  # harness (production)
+  *:be129fce-28d7-40bf-85d0-44a94a78ed43)  # harness (production): Privasys AI
     export HARNESS_PUBLIC_HOST="harness.apps.privasys.org"
+    # Its pages live on its direct domain; a page load on the platform
+    # hostname redirects there (proxy uiorigin.go).
+    export HARNESS_UI_ORIGIN="https://ai.privasys.org"
     PV_ATTEST_BASE="https://api.developer.privasys.org"
     PV_API_BASE="https://api.privasys.org"
     ;;
-  *:205429bb-e5ed-499c-8f32-9f38bce4202a)  # privasystant (production)
+  *:205429bb-e5ed-499c-8f32-9f38bce4202a)  # privasystant (production), retiring
     export HARNESS_PUBLIC_HOST="privasystant.apps.privasys.org"
+    # Its visitors are sent to the product, Privasys AI.
+    export HARNESS_UI_ORIGIN="https://ai.privasys.org"
     PV_ATTEST_BASE="https://api.developer.privasys.org"
     PV_API_BASE="https://api.privasys.org"
     ;;

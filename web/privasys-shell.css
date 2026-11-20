@@ -188,6 +188,7 @@
 @keyframes pv-spin { to { transform: rotate(360deg); } }
 
 .pv-btn {
+    font-family: inherit;
     margin-top: 6px;
     padding: 9px 18px;
     border-radius: 8px;
@@ -215,3 +216,75 @@
         --pv-muted: #5a6474;
     }
 }
+
+/* --- landing page (signed-out visitors) ---
+   The gate switches from a centred card to a scrolling page. The SDK's
+   ceremony still covers it when the visitor chooses to sign in. */
+.pv-gate.pv-gate-landing {
+    display: block;
+    align-items: initial;
+    justify-content: initial;
+}
+.pv-landing {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 0 16px 48px;
+    line-height: 1.5;
+}
+.pv-landing a { color: inherit; }
+.pv-landing-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 18px 0;
+}
+.pv-landing-logo { height: 32px; width: auto; display: block; }
+.pv-landing-hero { padding: 56px 0 40px; max-width: 720px; }
+.pv-landing-hero h1 {
+    margin: 0 0 16px;
+    font-size: clamp(30px, 5vw, 48px);
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+}
+.pv-landing-lead { margin: 0 0 28px; font-size: 18px; color: var(--pv-muted); }
+.pv-landing-cta { display: flex; flex-wrap: wrap; gap: 12px; }
+.pv-btn-lg { padding: 12px 22px; font-size: 15px; }
+a.pv-btn { display: inline-block; text-decoration: none; }
+.pv-landing-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 16px;
+    padding: 24px 0 48px;
+}
+.pv-landing-card {
+    padding: 20px;
+    border: 1px solid var(--pv-border);
+    border-radius: 12px;
+    background: var(--pv-surface);
+}
+.pv-landing-card h2 { margin: 0 0 8px; font-size: 16px; }
+.pv-landing-card p { margin: 0; font-size: 14px; color: var(--pv-muted); }
+.pv-landing-how { padding: 8px 0 40px; }
+.pv-landing-how h2 { margin: 0 0 16px; font-size: 22px; }
+.pv-landing-how ol {
+    margin: 0 0 20px;
+    padding-left: 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.pv-landing-how li strong { display: block; }
+.pv-landing-how li span { color: var(--pv-muted); font-size: 14px; }
+.pv-landing-stores { display: flex; flex-wrap: wrap; gap: 10px; }
+.pv-landing-foot {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+    padding-top: 24px;
+    border-top: 1px solid var(--pv-border);
+    font-size: 13px;
+    color: var(--pv-muted);
+}
+.pv-landing-foot a { text-decoration: none; }
+.pv-landing-foot a:hover { color: var(--pv-text); }

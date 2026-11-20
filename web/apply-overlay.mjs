@@ -142,6 +142,15 @@ brandText('apps/web/index.html')
   console.log('[overlay] branded apps/web/public/manifest.webmanifest')
 }
 brandText('apps/web/public/privasys/privasys-shell.js')
+// The landing page links the brand's own legal pages.
+{
+  const path = join(dsh, 'apps/web/public/privasys/privasys-shell.js')
+  const src = readFileSync(path, 'utf8')
+  const legal = /const LANDING_LEGAL = \/\* privasys-legal \*\/ \{[^}]*\};/
+  if (!legal.test(src)) throw new Error('overlay: no legal links in privasys-shell.js to brand')
+  writeFileSync(path, src.replace(legal, 'const LANDING_LEGAL = /* privasys-legal */ ' +
+    JSON.stringify({ privacy: BRAND_LEGAL.privacy, terms: BRAND_LEGAL.terms }) + ';'))
+}
 // Rebrand at the SOURCE: FishLogo/BrandWordmark in ui-primitives carry every
 // brand surface (the sidebar mark, the wordmark, and the conversation hero's
 // animated fallback, which composes its own svg from FISH_LOGO_PATH) — so the

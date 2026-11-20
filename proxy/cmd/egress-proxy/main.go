@@ -600,6 +600,12 @@ func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp 
 	// reach the sealing manager frame-by-frame, not buffered into a burst.
 	rp.FlushInterval = -1
 	publicHost := os.Getenv("HARNESS_PUBLIC_HOST")
+	// Page loads on the platform hostname move to the direct domain, when
+	// this deployment has one (uiorigin.go).
+	ui := loadUIOrigin(log.Printf)
+	if ui.origin != "" {
+		log.Printf("[ingress] pages on the platform hostname redirect to %s", ui.origin)
+	}
 	baseDirector := rp.Director
 	rp.Director = func(req *http.Request) {
 		baseDirector(req)
@@ -795,6 +801,9 @@ func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp 
 			}
 			// Only this process adds the worker token dsh checks.
 			r.Header.Del("X-Privasys-Ingress-Token")
+			if ui.redirect(w, r) {
+				return
+			}
 			sub := r.Header.Get("X-Privasys-Sub")
 			var worker *Worker
 			if sub == "" {
@@ -834,7 +843,12 @@ func serveIngress(cfg config, deps *attested.DepSet, store *policy.Store, stamp 
 		}
 		return
 	}
-	mux.Handle("/", rp)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if ui.redirect(w, r) {
+			return
+		}
+		rp.ServeHTTP(w, r)
+	})
 	log.Printf("[ingress] listening on %s -> %s", listen, upstream)
 	if err := http.ListenAndServe(listen, mux); err != nil {
 		log.Fatalf("[ingress] listen: %v", err)
