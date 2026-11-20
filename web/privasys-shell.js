@@ -221,7 +221,7 @@ async function run() {
 // session. Its sign-in buttons start the same wallet ceremony as before.
 const PRODUCT_NAME = 'Privasys Harness';
 const WALLET_STORES = [
-    ['App Store', 'https://apps.apple.com/app/privasys-wallet/id6761209489'],
+    ['the App Store', 'https://apps.apple.com/app/privasys-wallet/id6761209489'],
     ['Google Play', 'https://play.google.com/store/apps/details?id=org.privasys.wallet']
 ];
 const LANDING_FEATURES = [
@@ -255,43 +255,55 @@ const LANDING_STEPS = [
 
 function showLanding() {
     const signIn = (label, cls) =>
-        el('button', { class: 'pv-btn ' + cls, onclick: () => void run() }, label);
+        el('button', { class: 'pv-pill ' + cls, onclick: () => void run() }, label);
+    const ext = (href, label, cls) =>
+        el('a', { class: cls || null, href, target: '_blank', rel: 'noopener noreferrer' }, label);
     const page = el('div', { class: 'pv-landing' },
-        el('header', { class: 'pv-landing-bar' },
-            el('img', {
-                class: 'pv-landing-logo',
-                src: location.origin + '/privasys/privasys-harness-logo.svg',
-                alt: PRODUCT_NAME
-            }),
-            signIn('Sign in', 'pv-btn-primary')),
-        el('section', { class: 'pv-landing-hero' },
-            el('h1', null, 'Your AI assistant, private by design.'),
-            el('p', { class: 'pv-landing-lead' },
-                PRODUCT_NAME + ' runs the assistant, the model and every tool inside ' +
-                'hardware-protected enclaves. Your conversations, mail and files stay ' +
-                'sealed, and you can check that for yourself.'),
-            el('div', { class: 'pv-landing-cta' },
-                signIn('Sign in with the Privasys Wallet', 'pv-btn-primary pv-btn-lg'),
-                el('a', { class: 'pv-btn pv-btn-lg', href: '#how' }, 'How it works'))),
-        el('section', { class: 'pv-landing-grid' },
-            ...LANDING_FEATURES.map(([title, body]) =>
-                el('div', { class: 'pv-landing-card' },
-                    el('h2', null, title),
-                    el('p', null, body)))),
-        el('section', { class: 'pv-landing-how', id: 'how' },
-            el('h2', null, 'How it works'),
-            el('ol', null,
-                ...LANDING_STEPS.map(([title, body]) =>
-                    el('li', null, el('strong', null, title), el('span', null, body)))),
-            el('div', { class: 'pv-landing-stores' },
-                ...WALLET_STORES.map(([name, href]) =>
-                    el('a', { class: 'pv-btn', href, target: '_blank', rel: 'noopener noreferrer' },
-                        'Get the wallet on ' + name)))),
+        el('header', { class: 'pv-landing-nav' },
+            el('div', { class: 'pv-landing-nav-inner' },
+                el('span', { class: 'pv-landing-brand' },
+                    el('img', {
+                        src: location.origin + '/privasys/privasys-logo.mini.svg',
+                        alt: '',
+                        width: '22',
+                        height: '22'
+                    }),
+                    PRODUCT_NAME),
+                el('nav', { class: 'pv-landing-links' },
+                    ext('https://docs.privasys.org/solutions/ai/chat-and-agents', 'Docs'),
+                    signIn('Sign in', 'pv-pill-sm')))),
+        el('main', { class: 'pv-landing-main' },
+            el('section', { class: 'pv-landing-hero' },
+                el('p', { class: 'pv-landing-eyebrow' }, 'Confidential AI assistant'),
+                el('h1', null, 'Your AI assistant,', el('br'), 'private by design.'),
+                el('p', { class: 'pv-landing-intro' },
+                    PRODUCT_NAME + ' runs the assistant, the model and every tool inside ' +
+                    'hardware-protected enclaves. Your conversations, mail and files stay ' +
+                    'sealed, and you can check that for yourself.'),
+                el('div', { class: 'pv-landing-cta' },
+                    signIn('Sign in with the Privasys Wallet', 'pv-pill-solid'),
+                    el('a', { class: 'pv-pill pv-pill-outline', href: '#how' }, 'How it works'))),
+            el('section', { class: 'pv-landing-section' },
+                el('h2', null, 'What every session gives you.'),
+                el('div', { class: 'pv-landing-cols' },
+                    ...LANDING_FEATURES.map(([title, body]) =>
+                        el('div', null, el('h3', null, title), el('p', null, body))))),
+            el('section', { class: 'pv-landing-section', id: 'how' },
+                el('h2', null, 'How it works.'),
+                el('ol', { class: 'pv-landing-cols pv-landing-steps' },
+                    ...LANDING_STEPS.map(([title, body]) =>
+                        el('li', null, el('h3', null, title), el('p', null, body)))),
+                el('div', { class: 'pv-landing-cta' },
+                    ...WALLET_STORES.map(([name, href]) =>
+                        ext(href, 'Get the wallet on ' + name, 'pv-pill pv-pill-outline'))))),
         el('footer', { class: 'pv-landing-foot' },
-            el('a', { href: 'https://docs.privasys.org/solutions/ai/chat-and-agents', target: '_blank', rel: 'noopener noreferrer' }, 'Documentation'),
-            el('a', { href: LANDING_LEGAL.privacy, target: '_blank', rel: 'noopener noreferrer' }, 'Privacy'),
-            el('a', { href: LANDING_LEGAL.terms, target: '_blank', rel: 'noopener noreferrer' }, 'Terms'),
-            el('a', { href: 'https://privasys.org', target: '_blank', rel: 'noopener noreferrer' }, 'Privasys')));
+            el('div', { class: 'pv-landing-foot-inner' },
+                el('span', null, '© Privasys'),
+                el('nav', null,
+                    ext('https://docs.privasys.org/solutions/ai/chat-and-agents', 'Documentation'),
+                    ext(LANDING_LEGAL.privacy, 'Privacy'),
+                    ext(LANDING_LEGAL.terms, 'Terms'),
+                    ext('https://privasys.org', 'privasys.org')))));
     gate.classList.add('pv-gate-landing');
     setGate(page);
 }
