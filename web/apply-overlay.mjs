@@ -945,17 +945,21 @@ for (const preset of ['standard', 'ptc']) {
 // 0.2.3-alpha.1 enables cordis_inspect in the standard preset: a tool for
 // writing and configuring dsh plugins against the running composition, which
 // is Creator mode's business, and Creator mode is off here.
-edit('packages/bundle/web-app/presets/standard.patch.yml', [
-  [
-    'standard preset: cordis_inspect off',
-    `          - id: tool-cordis\n` +
-      `            name: '@deepseek-ai/dsh-tool-cordis'\n`,
-    `          # Privasys: plugin development is off in this deployment.\n` +
+// The Creator-mode preset carries the same row; that preset is off, and the
+// row is held off on its own too, as its plugin installer is.
+for (const preset of ['standard', 'cordis']) {
+  edit(`packages/bundle/web-app/presets/${preset}.patch.yml`, [
+    [
+      `${preset} preset: cordis_inspect off`,
       `          - id: tool-cordis\n` +
-      `            name: '@deepseek-ai/dsh-tool-cordis'\n` +
-      `            disabled: true\n`,
-  ],
-])
+        `            name: '@deepseek-ai/dsh-tool-cordis'\n`,
+      `          # Privasys: plugin development is off in this deployment.\n` +
+        `          - id: tool-cordis\n` +
+        `            name: '@deepseek-ai/dsh-tool-cordis'\n` +
+        `            disabled: true\n`,
+    ],
+  ])
+}
 
 // dsh 0.2.2 ships six more interface languages and picks one from the browser.
 // Their packs carry DeepSeek's own wording, and nothing here rewrites them: this
