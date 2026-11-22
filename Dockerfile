@@ -146,7 +146,21 @@ FROM node:24-bookworm AS dsh-builder
 # deployment patch: mcp-manager, a browser-configurable MCP fleet with stdio
 # servers, and ui-account-notifications. deepseek-account-platform is now
 # deepseek-account, same service and still without egress here.
-ARG DSH_PIN=ddac96760b6edf8fa0fe17cbdcf0b512f4c12b2c
+#
+# dsh-v0.2.3-alpha.2 (2026-11-22), 2367 commits on, through rc.3 to rc.5 and
+# alpha.1. Needs Node ^24.22.3, which node:24 resolves to. Cordis Core moved
+# to 4.0.0-rc.12 and credentials became plugins: browser sign-in is a provider
+# in a registry (connection.authentication), so the attested-ingress rule moves
+# to the two fenced places that consult it, and every DeepSeek consumer reads
+# its key through deepseekAuth, where the worker token keeps winning. Twelve
+# anchors moved; the Plugins inventory patch is gone with the page. Off in the
+# deployment patch and asserted: connector accounts (OAuth tokens kept in the
+# worker's home), remote sign-in, personalised recommendations (six rows) and
+# the session messaging tool; cordis_inspect and the ptc preset's plugin
+# installer are off in their presets. Left out of the bundle: cli-account and
+# upstream-skills, which only DeepSeek's optional vendor connectors use. The
+# working_directory tool is gone upstream; sessions move only through the Host.
+ARG DSH_PIN=4b399c39a6d1479cd84ca591b4d7c88e24d38a96
 RUN corepack enable \
  && git clone https://github.com/deepseek-ai/deepseek-harness /dsh \
  && git -C /dsh checkout "${DSH_PIN}"

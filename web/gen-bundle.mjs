@@ -38,6 +38,10 @@ const DROP = new Set([
   'plugin-manager', 'tool-plugin-manager',
   // Windows-only shell surface: dead weight in a Linux enclave.
   'tool-pwsh', 'pwsh-sandbox',
+  // Vendor CLI accounts and the upstream skill downloader (dsh 0.2.3-alpha.1):
+  // only DeepSeek's optional connector plugins register with them, none is
+  // composed here, and a connector's credential belongs in the wallet.
+  'cli-account', 'upstream-skills',
 ])
 
 const lines = readFileSync(src, 'utf8').split('\n')

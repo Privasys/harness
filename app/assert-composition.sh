@@ -128,10 +128,15 @@ done
 # drops the host plugin manager, but every preset carries the tool row.
 # mcp-manager (dsh 0.2.2-rc.2) is the browser-configurable MCP fleet, stdio
 # servers included: the deployment's connectors are the attested ones only.
+# dsh 0.2.3-alpha.1: cordis_inspect is plugin development; connector accounts
+# keep OAuth tokens in the worker's home, where a connector credential never
+# lives; remote sign-in is a second way in beside the attested ingress; the
+# recommendation rows offer plugins nothing can install; session_send_message
+# (off upstream) lets an agent write into the holder's other sessions.
 for row in desktop-product-telemetry product-analytics session-telemetry-otel otel harness-dev-context \
            tool-plugin-market tool-plugin-manager preset-cordis entry-customization \
            cordis-host-runner cordis-inspect-providers cordis-client-runner ui-cordis \
-           mcp-manager ui-account-notifications; do
+           mcp-manager ui-account-notifications \n           tool-cordis mcp-account ui-connector-account remote-connection tool-session-control \n           action-cards client-ui-action-cards creation-recommendations client-ui-creation-recommendations \n           plugin-recommendations client-ui-plugin-recommendations; do
 	# Print each enabled declaration whole, so a failure says what composed.
 	enabled=$(awk -v row="$row" '
 		function indent(s) { match(s, /^ */); return RLENGTH }

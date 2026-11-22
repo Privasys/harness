@@ -136,6 +136,11 @@
         desktopPlatform: !!js "ctx.get('profileContext')?.name === 'desktop' && ['darwin', 'win32'].includes(process.platform) ? process.platform : null"
 
 
+    # DeepSeek model routes and web providers ask this service for the API key or the account sign-in of each request.
+    - id: deepseek-auth
+      name: '@deepseek-ai/dsh-deepseek-auth'
+
+
     - id: credentials
       name: '@deepseek-ai/dsh-credentials-local'
 
@@ -173,10 +178,6 @@
     # loud without it; web layers reuse this same mount for list rows.
     - id: working-directory
       name: '@deepseek-ai/dsh-working-directory'
-
-
-    - id: tool-working-directory
-      name: '@deepseek-ai/dsh-tool-working-directory'
 
 
     - id: session-projection
@@ -345,7 +346,7 @@
 
               Explore first. Use non-mutating reads, searches, static analysis, and checks to ground the plan in the actual repository. Do not edit or write files, change configuration, run formatters or code generation that rewrites tracked files, commit, or otherwise carry out the plan. Prefer existing functions and patterns over new machinery.
 
-              The tool catalog stays the same across modes for request-cache stability. These plan-mode rules override any later tool description or guidance that suggests using mutation tools; those tools remain listed only to keep the request shape stable. Do not use todo_write to track this planning phase: it tracks implementation after an approved plan, while the plan itself belongs in exit_plan_mode.
+              The tool catalog stays the same across modes for request-cache stability. These plan-mode rules override any later tool description or guidance that suggests using mutation tools; those tools remain listed to keep the tool catalog unchanged. Do not use todo_write to track this planning phase: it tracks implementation after an approved plan, while the plan itself belongs in exit_plan_mode.
 
               Resolve discoverable facts by inspection. Use ask_user_question only for user-owned choices or material ambiguity that inspection cannot answer. Do not ask the user where code lives or how current behavior works when you can find out.
 

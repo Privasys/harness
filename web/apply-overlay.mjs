@@ -207,29 +207,33 @@ edit('packages/api/gateway/src/stream-server.ts', [
 //         per-process launch-token cookie. So a request that clears the
 //         trusted-host fence is authenticated. (browserAuth still owns
 //         authenticatedUrl + the token/cookie machinery for direct use.)
+// dsh 0.2.3-alpha.1 moved credentials into a provider registry
+// (connection.authentication) that both fenced entry points consult: admit()
+// for the API and the 'webserver/authorize' hook for every route, the index
+// among them. Only the "no provider accepted" refusal (401) changes, in those
+// two places and nowhere else: a provider that accepts keeps its identity, a
+// provider failure (503) still refuses, and the registry itself is untouched,
+// so a caller that consults it directly without the fence (the remote
+// sign-in plugin) gains nothing from this rule.
 edit('packages/client/connection/src/rpc-host.ts', [
   [
-    'admit launch-token deferral',
-    // 0.2.1-alpha.3 centralised trust in admit(): fence, disposal, browser
-    // auth, API-peer auth, then 401. Only that last refusal changes; a request
-    // that authenticates as an API peer keeps its own identity.
-    `    return record === undefined ? { rejection: 401 } : { peer: record.peer }\n`,
-    `    // Privasys: trusted Host == attested ingress == authenticated (see note\n` +
-      `    // above): a request that passed the fence without a launch token or an\n` +
-      `    // API peer credential is the browser peer, never refused.\n` +
-      `    return record === undefined ? { peer: this.browserPeer } : { peer: record.peer }\n`,
+    'authorize hook launch-token deferral',
+    `      return 'rejection' in admission\n` +
+      `        ? { kind: 'deny', status: admission.rejection }\n`,
+    `      // Privasys: past the fence above, no credential means the attested\n` +
+      `      // ingress (see note): the browser peer, never refused.\n` +
+      `      if ('rejection' in admission && admission.rejection === 401) return { kind: 'allow', peer: this.browserPeer }\n` +
+      `      return 'rejection' in admission\n` +
+      `        ? { kind: 'deny', status: admission.rejection }\n`,
   ],
   [
-    'authorizeIndex launch-token deferral',
-    // The trust check is upstream's own fence, called the way requestRejection
-    // calls it, so the index and the API admit exactly the same requests.
-    `    return this.browserAuth.authorizeIndex(request, response, this.ctx.get('webServer')?.protocol === 'https:')\n`,
-    `    // Privasys: a trusted-host index request came through the measured\n` +
-      `    // ingress, so serve the SPA without the launch-token cookie the sealed\n` +
-      `    // relay cannot carry (ConnectionIndexRequest extends ConnectionTrustRequest).\n` +
-      `    const carrier = this.ctx.get('webServer')\n` +
-      `    if (isTrustedApiRequest(request, this.trustedHosts, carrier?.host, carrier?.protocol ?? 'http:')) return true\n` +
-      `    return this.browserAuth.authorizeIndex(request, response, this.ctx.get('webServer')?.protocol === 'https:')\n`,
+    'admit launch-token deferral',
+    `    if (this.disposed) return { rejection: 401 }\n` +
+      `    return this.authentication.authenticate(request)\n`,
+    `    if (this.disposed) return { rejection: 401 }\n` +
+      `    // Privasys: past the fence, no credential means the attested ingress.\n` +
+      `    const admission = this.authentication.authenticate(request)\n` +
+      `    return 'rejection' in admission && admission.rejection === 401 ? { peer: this.browserPeer } : admission\n`,
   ],
 ])
 
@@ -424,19 +428,9 @@ for (const preset of ['standard', 'ptc', 'cordis']) {
   ])
 }
 
-// The mcp-client rows all share one module name, so the Plugins inventory
-// would render identical "mcp-client" cards — show the row's entry id (the
-// tool identity) instead.
-edit('packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx', [
-  [
-    'mcp-client card title by entry id',
-    `          <strong className={css.cardTitle} title={moduleName}>{title}</strong>`,
-    `          <strong className={css.cardTitle} title={moduleName}>{\n` +
-      `            /* Privasys: mcp-client rows are distinguished by entry id (tool identity). */\n` +
-      `            moduleName === '@deepseek-ai/dsh-mcp-client' && entryId !== null ? entryId : title\n` +
-      `          }</strong>`,
-  ],
-])
+// dsh 0.2.3-alpha.1 replaced the Plugins inventory, whose mcp-client cards
+// all read "mcp-client", with a page per package that lists each row by its
+// id, so the patch that titled those cards by entry id is gone.
 
 // --- 2d. cache_salt: partition the confidential backend's prefix cache ------
 // vLLM behind Confidential AI supports a per-request `cache_salt`; dsh's
@@ -754,7 +748,8 @@ put('apps/web/public/privasys/privasys-attestation.css', 'vendor/privasys-attest
 edit('packages/client/ui-settings-models/src/client/index.ts', [
   [
     'onboarding dialogs removal',
-    `  if (!('dshDesktop' in globalThis)) ctx.slots.inject('settings.onboarding', () => ctx.slots.register({\n` +
+    // 0.2.3-alpha.1 names the desktop test nativeShell.
+    `  if (!nativeShell) ctx.slots.inject('settings.onboarding', () => ctx.slots.register({\n` +
       `    name: 'settings.onboarding',\n` +
       `    id: 'welcome-notice',\n` +
       `    order: -100,\n` +
@@ -821,38 +816,34 @@ edit('packages/sandbox/sandbox-policy/src/index.ts', [
 edit('packages/llm/llm-deepseek-api-key/src/index.ts', [
   [
     'provider card rebrand',
-    `    { provider: PROVIDER, displayName: 'DeepSeek', settingsNs: ctx.fiber.entry?.options.id ?? name, settingsPath: [] },`,
+    // 0.2.3-alpha.1 labels this route "DeepSeek API" and reads the settings
+    // namespace once, above.
+    `    { provider: PROVIDER, displayName: 'DeepSeek API', settingsNs, settingsPath: [] },`,
     `    // Privasys: the settings card names the attested model behind this route.\n` +
-      `    { provider: PROVIDER, displayName: 'Privasys Qwen 3.6', settingsNs: ctx.fiber.entry?.options.id ?? name, settingsPath: [] },`,
+      `    { provider: PROVIDER, displayName: 'Privasys Qwen 3.6', settingsNs, settingsPath: [] },`,
   ],
   [
     'provider heading',
-    // rc.3 moved providerName onto its own line; anchored on that line alone.
-    `    providerName: 'DeepSeek',`,
+    `    providerName: 'DeepSeek API',`,
     `    providerName: 'Privasys',`,
   ],
-  [
-    // rc.2 dropped this import when the resolution moved into
-    // resolveDeepSeekApiKey; the environment-first branch below needs it.
-    'worker key: validator import',
-    `import { APP_IDENTITY, LlmError } from '@deepseek-ai/dsh-llm'\n`,
-    `import { APP_IDENTITY, assertUsableApiKey, LlmError } from '@deepseek-ai/dsh-llm'\n`,
-  ],
+])
+
+// The worker's own token wins over a saved key. The launch environment
+// carries it, and it is how the egress proxy knows whose call this is (it
+// strips the token before the call leaves). dsh lets a key saved in
+// $DSH_HOME/.credentials.yaml win over the environment, so a key a user once
+// saved on the Models page would replace the worker token and every model
+// turn would go out naming nobody. 0.2.3-alpha.1 moved the key lookup for
+// every DeepSeek consumer into the deepseekAuth service, so the rule lives
+// there, at the one line that reads the key.
+edit('packages/account/deepseek-auth/src/index.ts', [
   [
     'worker key wins over a saved key',
-    // rc.2 moved the lookup into the shared resolveDeepSeekApiKey (store
-    // authoritative, environment only without a store); anchored on the
-    // single line that calls it.
-    `    const key = await resolveDeepSeekApiKey(ctx, ref)\n`,
-    `    // Privasys: the launch environment carries the worker's own token, which\n` +
-      `    // is how the egress proxy knows whose call this is (it strips the token\n` +
-      `    // before the call leaves). dsh 0.2.1-alpha.3 lets a key saved in\n` +
-      `    // $DSH_HOME/.credentials.yaml win over the environment, so a key a user\n` +
-      `    // once saved on the Models page would replace the worker token and every\n` +
-      `    // model turn would go out naming nobody. Here the environment wins.\n` +
-      `    const launched = launchEnvironmentOf(ctx).get(ref)\n` +
-      `    if (launched !== undefined && launched.value.length > 0) return assertUsableApiKey(launched.value, 'llm-deepseek', ref)\n` +
-      `    const key = await resolveDeepSeekApiKey(ctx, ref)\n`,
+    `        const raw = await resolveCredentialRef(ctx, reference)\n`,
+    `        // Privasys: the launch environment (the worker's token) wins.\n` +
+      `        const launched = launchEnvironmentOf(ctx).get(reference)?.value\n` +
+      `        const raw = launched !== undefined && launched.length > 0 ? launched : await resolveCredentialRef(ctx, reference)\n`,
   ],
 ])
 
@@ -860,10 +851,6 @@ edit('packages/llm/llm-deepseek-api-key/src/index.ts', [
 // .agents/skills and are found through cwd-anchored default roots. Scope
 // every preset to a directory the deployment owns (includeDefaultRoots:false
 // is the load-bearing key — customSkillDirs alone would ADD, not replace).
-const SKILL_ROW_STOCK =
-  `- id: skill-filesystem\n` +
-  `  name: '@deepseek-ai/dsh-skill-filesystem'\n` +
-  `- id: tool-skill\n`
 const SKILL_ROW_PRIVASYS =
   `- id: skill-filesystem\n` +
   `  name: '@deepseek-ai/dsh-skill-filesystem'\n` +
@@ -892,7 +879,8 @@ const SKILL_ROW_STOCK_STANDARD =
   `    customSkillDirs:\n` +
   `      - !!js process.getBuiltinModule('node:path').join(process.getBuiltinModule('node:path').dirname(process.getBuiltinModule('node:module').createRequire(baseUrl).resolve('@deepseek-ai/dsh-agent-preset/package.json')), 'skills')\n` +
   `- id: tool-skill\n`
-for (const [preset, stock] of [['standard', SKILL_ROW_STOCK_STANDARD], ['ptc', SKILL_ROW_STOCK]]) {
+// 0.2.3-alpha.1 gave the ptc preset the same directory.
+for (const [preset, stock] of [['standard', SKILL_ROW_STOCK_STANDARD], ['ptc', SKILL_ROW_STOCK_STANDARD]]) {
   edit(`packages/bundle/web-app/presets/${preset}.patch.yml`, [
     [`preset ${preset} skill scoping`, indent(stock), indent(SKILL_ROW_PRIVASYS)],
   ])
@@ -935,19 +923,36 @@ edit('packages/bundle/web-app/presets/cordis.patch.yml', [
   ],
 ])
 
+// dsh 0.2.2 enables the installer tool in the standard preset whenever a
+// profile context exists, as Cordis already did, and 0.2.3-alpha.1 does the
+// same in the ptc preset. The same reasoning applies.
+for (const preset of ['standard', 'ptc']) {
+  edit(`packages/bundle/web-app/presets/${preset}.patch.yml`, [
+    [
+      `${preset} preset: plugin install tool off`,
+      `          - id: tool-plugin-manager\n` +
+        `            name: '@deepseek-ai/dsh-plugin-manager/tools'\n` +
+        `            disabled: !!js "!ctx.get('profileContext')"\n`,
+      `          # Privasys: nothing installs into this composition after the build;\n` +
+        `          # it is the measured identity. Upstream enables this whenever a\n` +
+        `          # profile context exists, which this deployment always has.\n` +
+        `          - id: tool-plugin-manager\n` +
+        `            name: '@deepseek-ai/dsh-plugin-manager/tools'\n` +
+        `            disabled: true\n`,
+    ],
+  ])
+}
+// 0.2.3-alpha.1 enables cordis_inspect in the standard preset: a tool for
+// writing and configuring dsh plugins against the running composition, which
+// is Creator mode's business, and Creator mode is off here.
 edit('packages/bundle/web-app/presets/standard.patch.yml', [
   [
-    'standard preset: plugin install tool off',
-    // dsh 0.2.2 enables the installer tool in this preset whenever a profile
-    // context exists, as Cordis already did. The same reasoning applies.
-    `          - id: tool-plugin-manager\n` +
-      `            name: '@deepseek-ai/dsh-plugin-manager/tools'\n` +
-      `            disabled: !!js "!ctx.get('profileContext')"\n`,
-    `          # Privasys: nothing installs into this composition after the build;\n` +
-      `          # it is the measured identity. Upstream enables this whenever a\n` +
-      `          # profile context exists, which this deployment always has.\n` +
-      `          - id: tool-plugin-manager\n` +
-      `            name: '@deepseek-ai/dsh-plugin-manager/tools'\n` +
+    'standard preset: cordis_inspect off',
+    `          - id: tool-cordis\n` +
+      `            name: '@deepseek-ai/dsh-tool-cordis'\n`,
+    `          # Privasys: plugin development is off in this deployment.\n` +
+      `          - id: tool-cordis\n` +
+      `            name: '@deepseek-ai/dsh-tool-cordis'\n` +
       `            disabled: true\n`,
   ],
 ])
@@ -1986,14 +1991,14 @@ edit('packages/client/ui-workspace/src/client/locales.ts', [
 edit('packages/mcp/mcp-client/src/tools.ts', [
   [
     'session in _meta',
-    // rc.2 wrapped the call in a try (error redaction); anchored on the
-    // call and its first argument only.
-    `          const result = await client.callTool(\n` +
+    // rc.2 wrapped the call in a try (error redaction), 0.2.3-alpha.1 hoisted
+    // the result; anchored on the call and its first argument only.
+    `          result = await client.callTool(\n` +
       `            { name: tool.name, arguments: args },\n`,
     `          // Privasys: the calling session rides the request's _meta so the egress\n` +
       `          // proxy can apply the workspace's Drive-knowledge setting. Never part of\n` +
       `          // the arguments, so the model's view and the replay digest are untouched.\n` +
-      `          const result = await client.callTool(\n` +
+      `          result = await client.callTool(\n` +
       `            { name: tool.name, arguments: args, ...(execution.agent === undefined ? {} : { _meta: { privasysSession: execution.agent.session.id } }) },\n`,
   ],
 ])
@@ -2316,11 +2321,12 @@ edit('packages/client/ui-conversation/src/client/conversation/assembly.ts', [
   ],
   [
     'assembly: no release fires after dispose',
-    `  dispose(): void {\n` +
+    // 0.2.3-alpha.1 stops following and drops retained state first.
+    `    this.disposeRetained()\n` +
       `    this.cancelFrame()\n` +
       `    this.disposeFeed()\n` +
       `  }\n`,
-    `  dispose(): void {\n` +
+    `    this.disposeRetained()\n` +
       `    this.cancelFrame()\n` +
       `    this.disposeFeed()\n` +
       `    for (const pending of this.targetReleases.values()) clearTimeout(pending)\n` +
@@ -2490,8 +2496,9 @@ edit('packages/client/ui-settings-general/src/client/index.ts', [
 edit('packages/client/ui-settings-general/src/client/SettingsRoot.tsx', [
   [
     'settings: storage nav icon import',
-    `  IconPersonalizationOutlineMedium, IconSettingsOutlineMedium, IconUserOutlineMedium,\n`,
-    `  IconPersonalizationOutlineMedium, IconSettingsOutlineMedium, IconUserOutlineMedium, IconFolderOpenOutlineMedium,\n`,
+    // 0.2.3-alpha.1 imports a remote-connection icon between these two lines.
+    `IconSettingsOutlineMedium, IconUserOutlineMedium,\n`,
+    `IconSettingsOutlineMedium, IconUserOutlineMedium, IconFolderOpenOutlineMedium,\n`,
   ],
   [
     'settings: storage nav icon',

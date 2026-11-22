@@ -121,14 +121,41 @@
 # (web/gen-bundle.mjs), and the page that would drive them is not mounted.
 - id: ui-plugin-manager
   disabled: true
-# The Settings pages that list the composition as if it were a setting
-# ("Built-in plugins", "Plugins"). Nothing in it can be changed from the
-# browser: the composition is the measured image. The Attestation panel lists
-# it instead, as "What this deployment runs", beside the evidence that it is
-# measured (composition.go, PrivasysComposition.tsx).
-- id: ui-settings-plugin-inventory
+# dsh 0.2.3-alpha.1 folded the Settings pages that listed the composition
+# ("Built-in plugins", "Plugins") into the plugin manager page above, which
+# stays off. The Attestation panel lists the composition instead, as "What
+# this deployment runs", beside the evidence that it is measured
+# (composition.go, PrivasysComposition.tsx).
+#
+# dsh 0.2.3-alpha.1 adds connector accounts: MCP OAuth sign-ins and CLI
+# accounts managed from the Plugins page, their tokens kept and refreshed in
+# the worker's dsh home. A connector's credential belongs in the holder's
+# wallet, and this deployment's connectors are the attested ones the proxy
+# composes, so both halves are off.
+- id: mcp-account
   disabled: true
-- id: ui-settings-plugins
+- id: ui-connector-account
+  disabled: true
+# Remote sign-in for the Web connection (a sign-in link or device pairing)
+# authenticates a browser by a credential of its own. Here the sealed session
+# through the attested ingress is the only sign-in, so it is off.
+- id: remote-connection
+  disabled: true
+# Personalised recommendations: a card under an answer offering a new
+# personalised page or an official plugin, from rows that add guidance to the
+# model's context. Plugins cannot be installed into this composition and the
+# wording is DeepSeek's, so all six rows are off.
+- id: action-cards
+  disabled: true
+- id: client-ui-action-cards
+  disabled: true
+- id: creation-recommendations
+  disabled: true
+- id: client-ui-creation-recommendations
+  disabled: true
+- id: plugin-recommendations
+  disabled: true
+- id: client-ui-plugin-recommendations
   disabled: true
 # dsh 0.2.2-rc.2 mounts a host-wide MCP server fleet whose servers are added
 # from Settings or by installed plugins, stdio ones included (a command the
