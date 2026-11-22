@@ -1185,6 +1185,26 @@ edit('packages/llm/llm-deepseek/src/translate.ts', [
   ],
 ])
 
+// The model leg asks for thinking as {"type":"adaptive"} where dsh writes
+// {"type":"enabled"}. Confidential AI serves vLLM's Anthropic schema, where
+// "enabled" requires budget_tokens (at least 1024, below max_tokens) and is
+// refused without one, while "adaptive" lets the model size its own thinking,
+// which is what dsh means. Effort still travels in output_config.
+edit('packages/llm/llm-deepseek/src/serialize.ts', [
+  [
+    'thinking: adaptive',
+    `    thinking: { type: effort === 'off' ? 'disabled' : 'enabled' },\n`,
+    `    thinking: { type: effort === 'off' ? 'disabled' : 'adaptive' },\n`,
+  ],
+])
+edit('packages/llm/llm-deepseek/src/wire-types.ts', [
+  [
+    'thinking: adaptive type',
+    `  thinking: { type: 'enabled' | 'disabled' }\n`,
+    `  thinking: { type: 'enabled' | 'adaptive' | 'disabled' }\n`,
+  ],
+])
+
 // The two client occupants live in ui-chat, which already depends on
 // everything they need (sessions, the conversation slots, the stat-dialog
 // skin, ui-primitives): a reproducibility action in the turn tail's
