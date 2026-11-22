@@ -160,7 +160,7 @@ async function run() {
         return;
     }
     gate.classList.remove('pv-gate-landing');
-    useSharedStyles(false);
+    useLandingStyles(null);
 
     // One container; the SDK's `page` presentation fills it with the ENTIRE
     // branded surface when an interactive ceremony is needed. But during
@@ -254,20 +254,28 @@ const LANDING_STEPS = [
     ['Start a conversation', 'Ask a question, connect your tools or set up an agent.']
 ];
 
-// The shared header and footer stylesheet is attached only while the home
-// page shows: it carries page-wide rules (an svg transition among them) that
-// must not reach the app after sign-in.
-function useSharedStyles(on) {
-    const id = 'privasys-ui-css';
+// A brand may bring its own home page (brands/<name>/landing.js and
+// landing.css): the overlay points this at the module, which exports
+// renderLanding({ signIn, el }) and returns the page element.
+const BRAND_LANDING = /* privasys-brand-landing */ null;
+
+// The home page's stylesheet (the shared header and footer styles, or the
+// brand's own) is attached only while the home page shows: it carries
+// page-wide rules (an svg transition among them) that must not reach the app
+// after sign-in. Pass null to detach it.
+function useLandingStyles(href) {
+    const id = 'privasys-landing-css';
     const link = document.getElementById(id);
-    if (on && !link) {
-        document.head.appendChild(el('link', { id, rel: 'stylesheet', href: '/privasys/privasys-ui.css' }));
-    } else if (!on && link) {
-        link.remove();
-    }
+    if (link && link.getAttribute('href') === href) return;
+    if (link) link.remove();
+    if (href) document.head.appendChild(el('link', { id, rel: 'stylesheet', href }));
 }
 
 function showLanding() {
+    if (BRAND_LANDING) {
+        void showBrandLanding(BRAND_LANDING);
+        return;
+    }
     const signIn = (label, cls) =>
         el('button', { class: 'pv-pill ' + cls, onclick: () => void run() }, label);
     const ext = (href, label, cls) =>
@@ -326,9 +334,25 @@ function showLanding() {
                     ext(LANDING_LEGAL.privacy, 'Privacy', 'pui-footer-link'),
                     ext(LANDING_LEGAL.terms, 'Terms', 'pui-footer-link'),
                     ext('https://privasys.org', 'privasys.org', 'pui-footer-link')))));
-    useSharedStyles(true);
+    useLandingStyles('/privasys/privasys-ui.css');
     gate.classList.add('pv-gate-landing');
     setGate(page);
+}
+
+// The brand's own home page. Its module ships in this image, so it is
+// measured like the rest of the shell. If it fails to load, the visitor goes
+// straight to sign-in rather than to another brand's page.
+async function showBrandLanding(src) {
+    try {
+        const mod = await import(src);
+        const page = mod.renderLanding({ signIn: () => void run(), el });
+        useLandingStyles(src.replace(/\.js$/, '.css'));
+        gate.classList.add('pv-gate-landing');
+        setGate(page);
+    } catch (err) {
+        console.error('[privasys-shell] brand home page failed:', err);
+        await run();
+    }
 }
 
 // One AuthFrame for the page, created on first use: the landing page asks it

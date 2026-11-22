@@ -81,7 +81,8 @@ function write(rel, content) {
 // One main, several brands: HARNESS_BRAND names a directory under brands/
 // whose brand.json carries the product name, and whose optional files replace
 // the Privasys defaults (FishLogo.tsx, BrandWordmark.tsx, favicon.svg, which
-// is also the gate's app icon, and lockup.svg, the gate's pitch logo). A
+// is also the gate's app icon, lockup.svg, the gate's pitch logo, and
+// landing.js with landing.css, the signed-out home page). A
 // brand is an argument rather than a fork, so a dsh re-pin is done once.
 const BRAND = process.env.HARNESS_BRAND || 'privasys'
 if (!/^[a-z][a-z0-9-]{0,62}$/.test(BRAND)) throw new Error(`overlay: bad HARNESS_BRAND "${BRAND}"`)
@@ -156,6 +157,17 @@ brandText('apps/web/public/privasys/privasys-shell.js')
   if (!legal.test(src)) throw new Error('overlay: no legal links in privasys-shell.js to brand')
   writeFileSync(path, src.replace(legal, 'const LANDING_LEGAL = /* privasys-legal */ ' +
     JSON.stringify({ privacy: BRAND_LEGAL.privacy, terms: BRAND_LEGAL.terms }) + ';'))
+}
+// A brand with its own home page (landing.js and landing.css) shows it to
+// signed-out visitors in place of the Privasys one.
+if (existsSync(join(brandDir, 'landing.js'))) {
+  if (!existsSync(join(brandDir, 'landing.css'))) throw new Error(`overlay: brands/${BRAND}/landing.js needs a landing.css`)
+  put('apps/web/public/privasys/brand-landing.js', join('..', 'brands', BRAND, 'landing.js'))
+  put('apps/web/public/privasys/brand-landing.css', join('..', 'brands', BRAND, 'landing.css'))
+  edit('apps/web/public/privasys/privasys-shell.js', [
+    ['brand home page', 'const BRAND_LANDING = /* privasys-brand-landing */ null;',
+      "const BRAND_LANDING = /* privasys-brand-landing */ '/privasys/brand-landing.js';"],
+  ])
 }
 // Rebrand at the SOURCE: FishLogo/BrandWordmark in ui-primitives carry every
 // brand surface (the sidebar mark, the wordmark, and the conversation hero's
