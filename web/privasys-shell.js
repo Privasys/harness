@@ -36,7 +36,7 @@
 const CFG = Object.assign(
     {
         // Management-service API base (session-relay metadata, attribute billing).
-        apiBase: 'https://api-test.privasys.org',
+        apiBase: 'https://api.developer.test.privasys.org',
         // Hosted auth iframe origin (privasys.id OIDC PKCE + wallet broker).
         authOrigin: 'https://privasys.id',
         // OIDC relying-party id (the IdP), NOT the app.
@@ -364,6 +364,10 @@ function ensureFrame() {
         authOrigin: CFG.authOrigin,
         rpId: CFG.rpId,
         clientId: CFG.clientId,
+        // The platform audience the sign-in token is for. Unset keeps the
+        // identity provider's default (production); a deployment on another
+        // control plane names its own through window.__PRIVASYS_CFG__.
+        ...(CFG.audience ? { audience: CFG.audience } : {}),
         appName: CFG.appName,
         brokerUrl: CFG.brokerUrl,
         // Data minimisation: the harness needs the user's Display Name (the

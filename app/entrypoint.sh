@@ -29,6 +29,14 @@ if [[ -z "${PORT:-}" ]]; then
   exit 1
 fi
 
+# The platform audience the browser shell asks the identity provider for, and
+# the OIDC client it signs in with. Empty keeps the shell's defaults, which are
+# production's; the dev control plane has its own of each (set below), so dev
+# and production never share a sign-in, and a token for one is refused by the
+# other.
+PV_AUDIENCE=""
+PV_CLIENT_ID=""
+
 # --- environment by app identity -------------------------------------------
 # ONE measured image serves both control planes. The launcher injects
 # PRIVASYS_APP_ID; this baked (measured) map selects the public host and the
@@ -48,7 +56,7 @@ case "${BRAND_PLATFORM}:${PRIVASYS_APP_ID:-}" in
     fi
     export HARNESS_PUBLIC_HOST="${PRIVASYS_CONTAINER_NAME}.apps.privasys.org"
     PV_ATTEST_BASE="https://api.developer.privasys.org"
-    PV_API_BASE="https://api.privasys.org"
+    PV_API_BASE="https://api.developer.privasys.org"
     ;;
   *:be129fce-28d7-40bf-85d0-44a94a78ed43)  # harness (production): Privasys AI
     export HARNESS_PUBLIC_HOST="harness.apps.privasys.org"
@@ -56,14 +64,14 @@ case "${BRAND_PLATFORM}:${PRIVASYS_APP_ID:-}" in
     # hostname redirects there (proxy uiorigin.go).
     export HARNESS_UI_ORIGIN="https://ai.privasys.org"
     PV_ATTEST_BASE="https://api.developer.privasys.org"
-    PV_API_BASE="https://api.privasys.org"
+    PV_API_BASE="https://api.developer.privasys.org"
     ;;
   *:205429bb-e5ed-499c-8f32-9f38bce4202a)  # privasystant (production), retiring
     export HARNESS_PUBLIC_HOST="privasystant.apps.privasys.org"
     # Its visitors are sent to the product, Privasys AI.
     export HARNESS_UI_ORIGIN="https://ai.privasys.org"
     PV_ATTEST_BASE="https://api.developer.privasys.org"
-    PV_API_BASE="https://api.privasys.org"
+    PV_API_BASE="https://api.developer.privasys.org"
     ;;
   *)                                     # dev harness apps, and the default
     # The public host is THIS app's own name on the dev apps domain, derived
@@ -80,7 +88,9 @@ case "${BRAND_PLATFORM}:${PRIVASYS_APP_ID:-}" in
       export HARNESS_PUBLIC_HOST="${HARNESS_PUBLIC_HOST:-attested-harness.apps.test.privasys.org}"
     fi
     PV_ATTEST_BASE="https://api.developer.test.privasys.org"
-    PV_API_BASE="https://api-test.privasys.org"
+    PV_API_BASE="https://api.developer.test.privasys.org"
+    PV_AUDIENCE="privasys-platform-test"
+    PV_CLIENT_ID="privasys-platform-test"
     # STORAGE goes to the DEV Drive, not production. The image's baked tool
     # topology points at the prod fleet, which is right for the read-only tools
     # (one Brave, one Lightpanda, and dev has no copy of either) but wrong the
@@ -219,7 +229,7 @@ elif ! grep -q "window.__PRIVASYS_CFG__=" "$DIST_INDEX"; then
   # name-only test saw it, skipped the injection, and left production
   # serving the shell with its dev defaults (dev control plane, dev
   # harness host, dev Drive) — found 2026-09-09.
-  CFG_TAG="<script>window.__PRIVASYS_CFG__={appId:\"${HARNESS_APP_ID}\",appHost:\"${HARNESS_PUBLIC_HOST}\",attestBase:\"${PV_ATTEST_BASE}\",apiBase:\"${PV_API_BASE}\"};</script>"
+  CFG_TAG="<script>window.__PRIVASYS_CFG__={appId:\"${HARNESS_APP_ID}\",appHost:\"${HARNESS_PUBLIC_HOST}\",attestBase:\"${PV_ATTEST_BASE}\",apiBase:\"${PV_API_BASE}\"${PV_AUDIENCE:+,audience:\"${PV_AUDIENCE}\"}${PV_CLIENT_ID:+,clientId:\"${PV_CLIENT_ID}\"}};</script>"
   sed -i "s|<head>|<head>${CFG_TAG}|" "$DIST_INDEX"
   grep -q "window.__PRIVASYS_CFG__=" "$DIST_INDEX" || echo "[harness] WARNING: __PRIVASYS_CFG__ injection failed" >&2
   echo "[harness] browser shell configured for ${HARNESS_PUBLIC_HOST} (api ${PV_API_BASE})"
